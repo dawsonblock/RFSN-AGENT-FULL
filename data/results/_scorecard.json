@@ -1,0 +1,60 @@
+{
+  "total": 5,
+  "pass": 0,
+  "fail": 0,
+  "abort": 5,
+  "resolve_rate": 0.0,
+  "per_repo": {
+    "sympy/sympy": {
+      "total": 5,
+      "pass": 0
+    }
+  },
+  "per_task": [
+    {
+      "task_id": "sympy__sympy-11400",
+      "repo": "sympy/sympy",
+      "status": "ABORT",
+      "iters": 0,
+      "risk": "?",
+      "patch_lines": 0,
+      "test_duration_sec": 0
+    },
+    {
+      "task_id": "sympy__sympy-11870",
+      "repo": "sympy/sympy",
+      "status": "ABORT",
+      "iters": 0,
+      "risk": "?",
+      "patch_lines": 0,
+      "test_duration_sec": 0
+    },
+    {
+      "task_id": "sympy__sympy-11897",
+      "repo": "sympy/sympy",
+      "status": "ABORT",
+      "iters": 0,
+      "risk": "?",
+      "patch_lines": 0,
+      "test_duration_sec": 0
+    },
+    {
+      "task_id": "sympy__sympy-12171",
+      "repo": "sympy/sympy",
+      "status": "ABORT",
+      "iters": 0,
+      "risk": "?",
+      "patch_lines": 0,
+      "test_duration_sec": 0
+    },
+    {
+      "task_id": "sympy__sympy-12236",
+      "repo": "sympy/sympy",
+      "status": "ABORT",
+      "iters": 0,
+      "risk": "?",
+      "patch_lines": 0,
+      "test_duration_sec": 0
+    }
+  ]
+}

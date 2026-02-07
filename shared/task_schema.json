@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "task_id",
+    "repo_url",
+    "workdir",
+    "issue_text"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "repo_url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repo_ref": {
+      "type": "string"
+    },
+    "workdir": {
+      "type": "string",
+      "minLength": 1
+    },
+    "issue_text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "hints": {
+      "type": "object",
+      "properties": {
+        "failing_tests": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "focus_files": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "test_patch": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "commands": {
+      "type": "object",
+      "properties": {
+        "setup": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "test_quick": {
+          "type": "string"
+        },
+        "test_full": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "max_iters": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "max_patch_bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_files_touched": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_new_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_runtime_sec": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

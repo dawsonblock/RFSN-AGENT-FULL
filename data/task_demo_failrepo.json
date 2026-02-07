@@ -1,0 +1,23 @@
+{
+  "task_id": "demo_failrepo",
+  "repo_url": "/tmp/demo_failrepo_source",
+  "repo_ref": "master",
+  "workdir": "/tmp/bench_demo_failrepo",
+  "issue_text": "The add() function in src/demo.py returns incorrect results. test_add() asserts add(1,2)==3 but it fails. Fix the bug with a minimal diff.",
+  "hints": {
+    "failing_tests": ["tests/test_demo.py::test_add"],
+    "focus_files": ["src/demo.py"]
+  },
+  "commands": {
+    "setup": ["pip install pytest"],
+    "test_quick": "PYTHONPATH=. pytest tests/test_demo.py::test_add -q",
+    "test_full": "PYTHONPATH=. pytest -q"
+  },
+  "limits": {
+    "max_iters": 3,
+    "max_patch_bytes": 50000,
+    "max_files_touched": 3,
+    "max_new_files": 0,
+    "max_runtime_sec": 300
+  }
+}

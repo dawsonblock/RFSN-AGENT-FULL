@@ -1,0 +1,104 @@
+services:
+  orchestrator:
+    build: ./services/orchestrator
+    ports: ["8000:8000"]
+    volumes:
+      - ./policies:/policies:ro
+      - ./shared:/shared:ro
+      - ./data:/data
+    environment:
+      LLM_URL: http://llm_service:8001
+      TOOL_GATEWAY_URL: http://tool_gateway:8002
+      RFSN_SEED: ${RFSN_SEED:-1}
+      LEDGER_FIXED_TS: ${LEDGER_FIXED_TS:-1.0}
+      RFSN_SERVICE_TOKEN: ${RFSN_SERVICE_TOKEN:-}
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '1'
+
+  llm_service:
+    build: ./services/llm_service
+    # NOT exposed to host — only reachable via orchestrator (internal network)
+    expose: ["8001"]
+    volumes:
+      - ./policies:/policies:ro
+      - ./data:/data
+      - ./shared:/shared:ro
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-reasoner}
+      RFSN_SERVICE_TOKEN: ${RFSN_SERVICE_TOKEN:-}
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '1'
+
+  tool_gateway:
+    build: ./services/tool_gateway
+    # NOT exposed to host — only reachable via orchestrator (internal network)
+    expose: ["8002"]
+    volumes:
+      - ./policies:/policies:ro
+      - ./shared:/shared:ro
+    environment:
+      EXECUTOR_URL: http://executor:8003
+      RFSN_SERVICE_TOKEN: ${RFSN_SERVICE_TOKEN:-}
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '1'
+
+  executor:
+    build: ./services/executor
+    # NOT exposed to host — only reachable via tool_gateway (internal network)
+    expose: ["8003"]
+    volumes:
+      - ./data:/data
+      - ./policies:/policies:ro
+      - ./shared:/shared:ro
+      # Docker socket mounted read-only; in production use a remote Docker API
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      BLESSED_IMAGE: ${BLESSED_IMAGE:-rfsn-blessed:0.2}
+      HOST_DATA_DIR: ${HOST_DATA_DIR:-${PWD}/data}
+      RFSN_SERVICE_TOKEN: ${RFSN_SERVICE_TOKEN:-}
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: '2'
+
+  # Blessed sandbox image — build once:
+  #   docker compose --profile build-blessed build blessed
+  # or directly:
+  #   docker build -t rfsn-blessed:0.2 -f blessed.Dockerfile .
+  blessed:
+    build:
+      context: .
+      dockerfile: blessed.Dockerfile
+    image: rfsn-blessed:0.2
+    profiles: ["build-blessed"]
+    entrypoint: ["echo", "blessed image built"]
+
+  # SWE-bench runner — opt-in via: docker compose --profile bench run rfsn_swebench
+  rfsn_swebench:
+    build:
+      context: .
+      dockerfile: rfsn_swebench/Dockerfile
+    profiles: ["bench"]
+    volumes:
+      - ./data:/data
+      - ./policies:/policies:ro
+      - ./shared:/shared:ro
+    environment:
+      ORCHESTRATOR_URL: http://orchestrator:8000
+    depends_on:
+      - orchestrator
+      - llm_service
+      - tool_gateway
+      - executor

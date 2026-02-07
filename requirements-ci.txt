@@ -1,0 +1,8 @@
+pytest==8.3.4
+pyyaml==6.0.2
+jsonschema==4.23.0
+requests==2.32.3
+hypothesis==6.108.8
+coverage==7.6.10
+diff-cover==8.0.3
+bandit==1.7.9

@@ -1,0 +1,9 @@
+{
+  "yaml.schemas": {},
+  "yaml.schemaStore.enable": false,
+  "yaml.validate": true,
+  "yaml.customTags": [],
+  "[yaml]": {
+    "editor.tabSize": 2
+  }
+}

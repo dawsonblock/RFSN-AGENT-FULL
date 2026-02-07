@@ -1,0 +1,8 @@
+enabled: true
+mode: "pip_require_hashes"
+manifest: "requirements.txt"
+require_hashes: true
+only_binary: true
+max_install_seconds: 420
+pip_cache_dir: "/work/wheels"
+require_manifest: true

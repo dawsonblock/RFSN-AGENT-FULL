@@ -1,0 +1,5 @@
+{
+  "task_id": "sympy__sympy-11870",
+  "status": "ABORT",
+  "error": "[Errno 2] No such file or directory: '/tmp/swebench_work/sympy__sympy-11870/replays/sympy__sympy-11870_1770443098677/events.jsonl'"
+}

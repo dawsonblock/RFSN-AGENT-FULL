@@ -1,0 +1,94 @@
+{
+  "type": "object",
+  "required": [
+    "intent",
+    "bundle_id",
+    "steps",
+    "acceptance"
+  ],
+  "properties": {
+    "intent": {
+      "type": "string",
+      "minLength": 1
+    },
+    "bundle_id": {
+      "type": "string",
+      "minLength": 3
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "type"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "line_start": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "line_end": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "patch": {
+            "type": "string"
+          },
+          "template_id": {
+            "type": "string"
+          },
+          "template_params": {
+            "type": "object"
+          },
+          "manifest": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "timeout_s": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": true
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "required": [
+        "tests_green",
+        "no_new_failures"
+      ],
+      "properties": {
+        "tests_green": {
+          "type": "boolean"
+        },
+        "no_new_failures": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

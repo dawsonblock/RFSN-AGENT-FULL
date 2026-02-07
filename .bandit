@@ -1,0 +1,3 @@
+[bandit]
+exclude: tests,fixtures,data,.venv,.venv-tools
+skips: B101

@@ -1,0 +1,25 @@
+{
+  "task_id": "demo_refactorbait",
+  "status": "PASS",
+  "iters": 1,
+  "final_patch_unified_diff": "diff --git a/src/calc.py b/src/calc.py\nindex e286479..7a1b504 100644\n--- a/src/calc.py\n+++ b/src/calc.py\n@@ -1,2 +1,9 @@\n def divide(a:int,b:int)->float:\n-    return a/b\n+    if b == 0:\n+        if a > 0:\n+            return float('inf')\n+        elif a < 0:\n+            return float('-inf')\n+        else:\n+            return float('nan')\n+    return a / b\n",
+  "tests": {
+    "quick": {
+      "exit_code": 0,
+      "stdout_tail": ".                                                                        [100%]\n1 passed in 0.15s\n",
+      "stderr_tail": "",
+      "duration_sec": 1.874
+    },
+    "full": {
+      "exit_code": 0,
+      "stdout_tail": "..                                                                       [100%]\n2 passed in 0.14s\n",
+      "stderr_tail": "",
+      "duration_sec": 0.455
+    }
+  },
+  "risk": {
+    "decision": "ALLOW",
+    "reasons": []
+  },
+  "replay_dir": "/tmp/bench_replays/replays/demo_refactorbait_1770435742646"
+}

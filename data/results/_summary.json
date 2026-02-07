@@ -1,0 +1,45 @@
+{
+  "total": 5,
+  "pass": 0,
+  "fail": 0,
+  "abort": 0,
+  "error": 5,
+  "results": [
+    {
+      "task_id": "sympy__sympy-11400",
+      "status": "ERROR",
+      "exit_code": 1,
+      "stderr_tail": "ain\n    res = bench_run(\n  File \"/Users/dawsonblock/Downloads/new builds/rfsn-agent/rfsn_swebench/runner.py\", line 247, in bench_run\n    log_event(replay_dir, {\"type\": \"iter_start\", \"iter\": i})\n  File \"/Users/dawsonblock/Downloads/new builds/rfsn-agent/rfsn_swebench/replay.py\", line 69, in log_event\n    with open(path, \"a\", encoding=\"utf-8\") as f:\nFileNotFoundError: [Errno 2] No such file or directory: '/tmp/swebench_work/sympy__sympy-11400/replays/sympy__sympy-11400_1770443058580/events.jsonl'\n",
+      "duration_sec": 45.1
+    },
+    {
+      "task_id": "sympy__sympy-11870",
+      "status": "ERROR",
+      "exit_code": 1,
+      "stderr_tail": "ain\n    res = bench_run(\n  File \"/Users/dawsonblock/Downloads/new builds/rfsn-agent/rfsn_swebench/runner.py\", line 247, in bench_run\n    log_event(replay_dir, {\"type\": \"iter_start\", \"iter\": i})\n  File \"/Users/dawsonblock/Downloads/new builds/rfsn-agent/rfsn_swebench/replay.py\", line 69, in log_event\n    with open(path, \"a\", encoding=\"utf-8\") as f:\nFileNotFoundError: [Errno 2] No such file or directory: '/tmp/swebench_work/sympy__sympy-11870/replays/sympy__sympy-11870_1770443098677/events.jsonl'\n",
+      "duration_sec": 32.6
+    },
+    {
+      "task_id": "sympy__sympy-11897",
+      "status": "ERROR",
+      "exit_code": 1,
+      "stderr_tail": "ain\n    res = bench_run(\n  File \"/Users/dawsonblock/Downloads/new builds/rfsn-agent/rfsn_swebench/runner.py\", line 247, in bench_run\n    log_event(replay_dir, {\"type\": \"iter_start\", \"iter\": i})\n  File \"/Users/dawsonblock/Downloads/new builds/rfsn-agent/rfsn_swebench/replay.py\", line 69, in log_event\n    with open(path, \"a\", encoding=\"utf-8\") as f:\nFileNotFoundError: [Errno 2] No such file or directory: '/tmp/swebench_work/sympy__sympy-11897/replays/sympy__sympy-11897_1770443131614/events.jsonl'\n",
+      "duration_sec": 31.8
+    },
+    {
+      "task_id": "sympy__sympy-12171",
+      "status": "ERROR",
+      "exit_code": 1,
+      "stderr_tail": "ain\n    res = bench_run(\n  File \"/Users/dawsonblock/Downloads/new builds/rfsn-agent/rfsn_swebench/runner.py\", line 247, in bench_run\n    log_event(replay_dir, {\"type\": \"iter_start\", \"iter\": i})\n  File \"/Users/dawsonblock/Downloads/new builds/rfsn-agent/rfsn_swebench/replay.py\", line 69, in log_event\n    with open(path, \"a\", encoding=\"utf-8\") as f:\nFileNotFoundError: [Errno 2] No such file or directory: '/tmp/swebench_work/sympy__sympy-12171/replays/sympy__sympy-12171_1770443164430/events.jsonl'\n",
+      "duration_sec": 33.5
+    },
+    {
+      "task_id": "sympy__sympy-12236",
+      "status": "ERROR",
+      "exit_code": 1,
+      "stderr_tail": "ain\n    res = bench_run(\n  File \"/Users/dawsonblock/Downloads/new builds/rfsn-agent/rfsn_swebench/runner.py\", line 247, in bench_run\n    log_event(replay_dir, {\"type\": \"iter_start\", \"iter\": i})\n  File \"/Users/dawsonblock/Downloads/new builds/rfsn-agent/rfsn_swebench/replay.py\", line 69, in log_event\n    with open(path, \"a\", encoding=\"utf-8\") as f:\nFileNotFoundError: [Errno 2] No such file or directory: '/tmp/swebench_work/sympy__sympy-12236/replays/sympy__sympy-12236_1770443197821/events.jsonl'\n",
+      "duration_sec": 33.7
+    }
+  ],
+  "total_duration_sec": 176.7
+}

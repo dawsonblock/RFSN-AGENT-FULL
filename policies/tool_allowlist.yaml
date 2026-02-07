@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=
+allowed_step_types:
+  - repo_search
+  - repo_read_range
+  - apply_patch
+  - ensure_deps
+  - run_tests
+
+repo_root_required: true
+
+max_patch_bytes: 200000
+max_read_bytes: 200000
+
+max_read_steps_per_iter: 6
+max_search_steps_per_iter: 4
+max_bytes_returned_per_iter: 250000
+
+allowed_paths:
+  - "repo/**"
+
+blocked_globs:
+  - "**/.git/**"
+  - "**/.env"
+  - "**/.env.*"
+  - "**/id_rsa"
+  - "**/*.pem"
+  - "**/*.key"
+  - "**/*.p12"
+  - "**/*.pfx"
+  - "**/*.jks"
+  - "**/.pypirc"
+  - "**/.npmrc"
+  - "**/.netrc"
+  - "**/*_history"
+  - "**/secrets.*"
+  - "**/*token*"
+  - "**/*credential*"
+  - "**/Dockerfile*"
+  - "**/docker-compose*"
+  - "**/.github/**"
+  - "**/.circleci/**"
+  - "**/Jenkinsfile"

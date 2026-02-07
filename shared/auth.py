@@ -1,0 +1,75 @@
+"""Shared bearer-token authentication for inter-service calls.
+
+Every service loads RFSN_SERVICE_TOKEN from env.  The middleware rejects any
+request without a matching ``Authorization: Bearer <token>`` header.  The
+/health endpoint is exempt so that Docker health-checks still work.
+
+This ensures that the executor is ONLY reachable via the tool_gateway, making
+the gateway the true final authority on what runs.
+"""
+from __future__ import annotations
+
+import os
+
+from fastapi import Request  # type: ignore[import-not-found]
+from fastapi.responses import JSONResponse  # type: ignore[import-not-found]
+from starlette.middleware.base import (  # type: ignore[import-not-found]
+    BaseHTTPMiddleware,
+    RequestResponseEndpoint,
+)
+from starlette.types import ASGIApp  # type: ignore[import-not-found]
+
+# All services share the same token.  If unset, generate a random one
+# (safe default for development; in production set RFSN_SERVICE_TOKEN).
+RFSN_SERVICE_TOKEN: str = os.getenv("RFSN_SERVICE_TOKEN", "")
+
+# Paths that bypass auth (health checks, readiness probes)
+_PUBLIC_PATHS = frozenset({
+    "/health", "/healthz", "/ready",
+    "/docs", "/openapi.json",
+})
+
+
+def get_service_token() -> str:
+    """Return the token, raising if unset in production."""
+    return RFSN_SERVICE_TOKEN
+
+
+class ServiceAuthMiddleware(BaseHTTPMiddleware):
+    """Reject requests without a valid Bearer token.
+
+    /health is always public so Docker/k8s probes work.
+    """
+
+    def __init__(self, app: ASGIApp, *, token: str | None = None):
+        super().__init__(app)
+        self.token = token or RFSN_SERVICE_TOKEN
+
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ):
+        if request.url.path in _PUBLIC_PATHS:
+            return await call_next(request)
+
+        if not self.token:
+            # No token configured → open (development mode)
+            return await call_next(request)
+
+        auth = request.headers.get("authorization", "")
+        if auth == f"Bearer {self.token}":
+            return await call_next(request)
+
+        return JSONResponse(
+            status_code=401,
+            content={
+                "error": "unauthorized",
+                "detail": "missing or invalid service token",
+            },
+        )
+
+
+def auth_headers() -> dict[str, str]:
+    """Return headers dict to attach to outgoing inter-service HTTP calls."""
+    if RFSN_SERVICE_TOKEN:
+        return {"Authorization": f"Bearer {RFSN_SERVICE_TOKEN}"}
+    return {}

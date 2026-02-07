@@ -1,0 +1,20 @@
+templates:
+  pytest_targeted:
+    cmd: ["bash", "-lc", "cd repo && source /work/venv/bin/activate && pytest -q {target} --maxfail=1 --disable-warnings --junitxml /work/artifacts/junit.xml"]
+    allowed_target_regex: "^[A-Za-z0-9_./:-]+$"
+    max_seconds: 240
+
+  pytest_suite:
+    cmd: ["bash", "-lc", "cd repo && source /work/venv/bin/activate && pytest -q --disable-warnings --junitxml /work/artifacts/junit.xml"]
+    allowed_target_regex: "^$"
+    max_seconds: 900
+
+  ruff_check:
+    cmd: ["bash", "-lc", "cd repo && source /work/venv/bin/activate && ruff check ."]
+    allowed_target_regex: "^$"
+    max_seconds: 180
+
+  mypy_check:
+    cmd: ["bash", "-lc", "cd repo && source /work/venv/bin/activate && mypy ."]
+    allowed_target_regex: "^$"
+    max_seconds: 300

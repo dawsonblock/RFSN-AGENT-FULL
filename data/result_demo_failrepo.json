@@ -1,0 +1,25 @@
+{
+  "task_id": "demo_failrepo",
+  "status": "PASS",
+  "iters": 1,
+  "final_patch_unified_diff": "diff --git a/src/demo.py b/src/demo.py\nindex 603a6b2..9745e03 100644\n--- a/src/demo.py\n+++ b/src/demo.py\n@@ -1,2 +1,2 @@\n def add(a:int,b:int)->int:\n-    return a+b+1\n+    return a+b\n",
+  "tests": {
+    "quick": {
+      "exit_code": 0,
+      "stdout_tail": ".                                                                        [100%]\n1 passed in 0.30s\n",
+      "stderr_tail": "",
+      "duration_sec": 1.532
+    },
+    "full": {
+      "exit_code": 0,
+      "stdout_tail": ".                                                                        [100%]\n1 passed in 0.11s\n",
+      "stderr_tail": "",
+      "duration_sec": 0.434
+    }
+  },
+  "risk": {
+    "decision": "ALLOW",
+    "reasons": []
+  },
+  "replay_dir": "/tmp/bench_replays/replays/demo_failrepo_1770435519302"
+}

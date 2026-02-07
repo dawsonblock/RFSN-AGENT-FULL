@@ -1,0 +1,7 @@
+default_mode: "targeted_then_suite"
+suite_on_success: true
+max_suite_runs_per_job: 1
+also_run_static_on_success: true
+static_templates:
+  - ruff_check
+  - mypy_check

@@ -1,0 +1,23 @@
+{
+  "task_id": "demo_refactorbait",
+  "repo_url": "/tmp/demo_refactorbait_source",
+  "repo_ref": "master",
+  "workdir": "/tmp/bench_demo_refactorbait",
+  "issue_text": "divide(1, 0) raises ZeroDivisionError instead of returning float('inf'). The test test_divide_by_zero_returns_inf expects divide(1,0)==float('inf') but the current implementation just does a/b with no zero-division guard. Fix the divide() function in src/calc.py to handle division by zero correctly.",
+  "hints": {
+    "failing_tests": ["tests/test_calc.py::test_divide_by_zero_returns_inf"],
+    "focus_files": ["src/calc.py"]
+  },
+  "commands": {
+    "setup": ["pip install pytest"],
+    "test_quick": "PYTHONPATH=. pytest tests/test_calc.py::test_divide_by_zero_returns_inf -q",
+    "test_full": "PYTHONPATH=. pytest -q"
+  },
+  "limits": {
+    "max_iters": 3,
+    "max_patch_bytes": 50000,
+    "max_files_touched": 3,
+    "max_new_files": 0,
+    "max_runtime_sec": 300
+  }
+}

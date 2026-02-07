@@ -1,0 +1,9 @@
+mode: "replay"     # record | replay | off
+strict: true
+max_records: 500
+
+use_run_scope: true
+use_call_index: true
+
+path_template: "/data/cassettes/{repo_id}/{scenario}.jsonl"
+default_scenario: "golden"

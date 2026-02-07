@@ -1,0 +1,14 @@
+[run]
+branch = True
+source =
+    services
+omit =
+    */__init__.py
+    fixtures/*
+    data/*
+    tests/*
+
+[report]
+show_missing = True
+skip_empty = True
+fail_under = 65

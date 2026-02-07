@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+data/venv/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Hypothesis test database
+.hypothesis/
+
+# Temporary work dirs (large cloned repos)
+/tmp/
+
+# Wheels cache
+data/wheels/
+
+# Cassette recordings (may contain API responses)
+data/cassettes/
+
+# Ledger (runtime artifact)
+data/ledger.jsonl
+
+# Nohup output
+nohup.out

@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=
+max_changed_files: 3
+max_added_lines: 40
+max_deleted_lines: 40
+
+blocked_dependency_files:
+  - "requirements.txt"
+  - "requirements-dev.txt"
+  - "requirements-ci.txt"
+  - "constraints.txt"
+  - "setup.py"
+  - "setup.cfg"
+  - "pyproject.toml"
+  - "Pipfile"
+  - "Pipfile.lock"
+  - "poetry.lock"
+  - "package.json"
+  - "package-lock.json"
+  - "yarn.lock"
+  - "Gemfile"
+  - "Gemfile.lock"
