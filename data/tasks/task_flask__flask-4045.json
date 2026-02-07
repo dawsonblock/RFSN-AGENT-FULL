@@ -1,0 +1,30 @@
+{
+  "task_id": "flask__flask-4045",
+  "repo_url": "https://github.com/pallets/flask.git",
+  "repo_ref": "462d4897c0e8e05e8a2e257bef4660f3ba41eee6",
+  "workdir": "/tmp/swebench_work/flask__flask-4045",
+  "issue_text": "Raise error when blueprint name contains a dot\n\nSince Flask 2.0, blueprints can be nested, and every dot in endpoint names is significant as a separator between blueprint names. If a blueprint is created with a dot in its name (e.g., Blueprint('my.bp', __name__)), it causes silent breakage:\n\n- Error handlers registered on the blueprint are not called\n- Endpoint resolution becomes ambiguous\n- url_for() may produce incorrect results\n\nAn error was already added for endpoint names containing dots in Flask 1.0, but the same validation was missing for blueprint names.\n\nExpected behavior: Blueprint('my.bp', __name__) should raise a ValueError immediately, telling the user that blueprint names may not contain dots.",
+  "hints": {
+    "failing_tests": [
+      "tests/test_blueprints.py::test_blueprint_name_dot"
+    ],
+    "focus_files": [
+      "src/flask/blueprints.py"
+    ],
+    "test_patch": "diff --git a/tests/test_blueprints.py b/tests/test_blueprints.py\n--- a/tests/test_blueprints.py\n+++ b/tests/test_blueprints.py\n@@ -1,5 +1,7 @@\n+import pytest\n from flask import Blueprint\n \n+def test_blueprint_name_dot():\n+    with pytest.raises(ValueError):\n+        Blueprint('my.bp', __name__)\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e . && pip install pytest"
+    ],
+    "test_quick": "python -m pytest -x -q tests/test_blueprints.py::test_blueprint_name_dot",
+    "test_full": "python -m pytest -x -q tests/test_blueprints.py"
+  },
+  "limits": {
+    "max_iters": 5,
+    "max_patch_bytes": 100000,
+    "max_files_touched": 10,
+    "max_new_files": 3,
+    "max_runtime_sec": 1800
+  }
+}

@@ -2,12 +2,23 @@
   "dataset": "princeton-nlp/SWE-bench_Lite",
   "filters": {
     "repo": null,
-    "instance": "django__django-11049",
+    "instance": null,
     "limit": null,
     "max_difficulty": null
   },
-  "count": 1,
+  "count": 12,
   "task_ids": [
-    "django__django-11049"
+    "demo_failrepo",
+    "demo_refactorbait",
+    "django__django-11049",
+    "flask__flask-4045",
+    "matplotlib__matplotlib-23476",
+    "requests__requests-3362",
+    "scikit-learn__scikit-learn-10297",
+    "sympy__sympy-11400",
+    "sympy__sympy-11870",
+    "sympy__sympy-11897",
+    "sympy__sympy-12171",
+    "sympy__sympy-12236"
   ]
 }

@@ -1,0 +1,30 @@
+{
+  "task_id": "matplotlib__matplotlib-23476",
+  "repo_url": "https://github.com/matplotlib/matplotlib.git",
+  "repo_ref": "73909bcb408886a22e2b84581d6b9e6d9907c813",
+  "workdir": "/tmp/swebench_work/matplotlib__matplotlib-23476",
+  "issue_text": "[Bug]: DPI of a figure is doubled after unpickling on M1 Mac\n\nBug summary: When a figure is unpickled, its DPI is doubled. This behaviour happens every time and if done in a loop it can cause an OverflowError.\n\nCode for reproduction:\n```python\nimport numpy as np\nimport matplotlib.pyplot as plt\nimport pickle\n\ndef dump_load_get_dpi(fig):\n    with open('sinus.pickle','wb') as file:\n        pickle.dump(fig, file)\n    with open('sinus.pickle', 'rb') as blob:\n        fig2 = pickle.load(blob)\n    return fig2, fig2.dpi\n\ndef run():\n    fig = plt.figure()\n    for i in range(32):\n        print(f'{i}: {fig.dpi}')\n        fig, dpi = dump_load_get_dpi(fig)\n\nif __name__ == '__main__':\n    run()\n```\n\nActual outcome: DPI doubles each iteration (200 -> 400 -> 800 -> ...) until OverflowError.\nExpected outcome: DPI should remain constant across pickle/unpickle cycles.\n\nThis happens because the canvas's HiDPI scaling modifies the figure's DPI, and this modified value is what gets serialized. On deserialization, the canvas doubles it again.",
+  "hints": {
+    "failing_tests": [
+      "lib/matplotlib/tests/test_figure.py::test_figure_dpi_pickle_round_trip"
+    ],
+    "focus_files": [
+      "lib/matplotlib/figure.py"
+    ],
+    "test_patch": "diff --git a/lib/matplotlib/tests/test_figure.py b/lib/matplotlib/tests/test_figure.py\n--- a/lib/matplotlib/tests/test_figure.py\n+++ b/lib/matplotlib/tests/test_figure.py\n@@ -1,6 +1,7 @@\n import copy\n from datetime import datetime\n import io\n+import pickle\n import platform\n from threading import Timer\n from unittest.mock import patch\n@@ -31,6 +32,15 @@\n from matplotlib.testing.decorators import check_figures_equal, image_comparison\n \n \n+def test_figure_dpi_pickle_round_trip():\n+    fig = plt.figure(dpi=100)\n+    buf = io.BytesIO()\n+    pickle.dump(fig, buf)\n+    buf.seek(0)\n+    fig2 = pickle.load(buf)\n+    assert fig2.dpi == 100\n+\n+\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q lib/matplotlib/tests/test_figure.py::test_figure_dpi_pickle_round_trip",
+    "test_full": "python -m pytest -x -q lib/matplotlib/tests/test_figure.py"
+  },
+  "limits": {
+    "max_iters": 5,
+    "max_patch_bytes": 100000,
+    "max_files_touched": 10,
+    "max_new_files": 3,
+    "max_runtime_sec": 1800
+  }
+}

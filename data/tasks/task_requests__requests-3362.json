@@ -1,0 +1,30 @@
+{
+  "task_id": "requests__requests-3362",
+  "repo_url": "https://github.com/psf/requests.git",
+  "repo_ref": "49b69c4751689df7aca4435ef1223a58871a64e2",
+  "workdir": "/tmp/swebench_work/requests__requests-3362",
+  "issue_text": "Uncertain about content/text vs iter_content(decode_unicode=True/False)\n\nWhen requesting an application/json document, `next(r.iter_content(16*1024, decode_unicode=True))` returns bytes, whereas `r.text` returns unicode. My understanding was that both should return a unicode object.\n\nThe key difference is that decode_unicode=True doesn't fall back to apparent_encoding, which means if response.encoding is None it is a no-op that yields bytes. That behaviour seems genuinely bad — it should have the same logic as in text for this.\n\nUsing python 3.5.1 and requests 2.10.0.",
+  "hints": {
+    "failing_tests": [
+      "tests/test_utils.py::test_stream_decode_response_unicode_none_encoding"
+    ],
+    "focus_files": [
+      "requests/utils.py"
+    ],
+    "test_patch": "diff --git a/tests/test_utils.py b/tests/test_utils.py\n--- a/tests/test_utils.py\n+++ b/tests/test_utils.py\n@@ -1,5 +1,23 @@\n+import pytest\n+from requests.utils import stream_decode_response_unicode\n+\n+def test_stream_decode_response_unicode_none_encoding():\n+    class FakeResponse:\n+        encoding = None\n+        headers = {'content-type': 'application/json'}\n+        content = b'{\"key\": \"value\"}'\n+        @property\n+        def apparent_encoding(self):\n+            return 'utf-8'\n+    class FakeIterator:\n+        def __iter__(self):\n+            yield b'{\"key\": \"value\"}'\n+    r = FakeResponse()\n+    chunks = list(stream_decode_response_unicode(FakeIterator(), r))\n+    assert all(isinstance(c, str) for c in chunks)\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q tests/test_utils.py -k stream_decode_response_unicode",
+    "test_full": "python -m pytest -x -q tests/test_utils.py"
+  },
+  "limits": {
+    "max_iters": 5,
+    "max_patch_bytes": 100000,
+    "max_files_touched": 10,
+    "max_new_files": 3,
+    "max_runtime_sec": 1800
+  }
+}

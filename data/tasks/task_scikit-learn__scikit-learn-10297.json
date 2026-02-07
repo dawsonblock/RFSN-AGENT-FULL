@@ -1,0 +1,30 @@
+{
+  "task_id": "scikit-learn__scikit-learn-10297",
+  "repo_url": "https://github.com/scikit-learn/scikit-learn.git",
+  "repo_ref": "e68b31b498ff8396ef9c02d032dfb1f29df0cbf6",
+  "workdir": "/tmp/swebench_work/scikit-learn__scikit-learn-10297",
+  "issue_text": "linear_model.RidgeClassifierCV's Parameter store_cv_values issue\n\nParameter store_cv_values is not implemented for RidgeClassifierCV, unlike RidgeCV which has this parameter. If you set store_cv_values=True on RidgeClassifierCV, it silently does nothing. The cv_values_ attribute is not available after fitting.\n\nExpected behavior: RidgeClassifierCV should support the store_cv_values parameter like RidgeCV does, storing cross-validation values in the cv_values_ attribute when enabled.",
+  "hints": {
+    "failing_tests": [
+      "sklearn/linear_model/tests/test_ridge.py::test_ridge_classifier_cv_store_cv_values"
+    ],
+    "focus_files": [
+      "sklearn/linear_model/ridge.py"
+    ],
+    "test_patch": "diff --git a/sklearn/linear_model/tests/test_ridge.py b/sklearn/linear_model/tests/test_ridge.py\n--- a/sklearn/linear_model/tests/test_ridge.py\n+++ b/sklearn/linear_model/tests/test_ridge.py\n@@ -600,6 +600,28 @@\n+def test_ridge_classifier_cv_store_cv_values():\n+    x = np.array([[-1.0, -1.0], [-1.0, 0], [-.8, -1.0],\n+                   [1.0, 1.0], [1.0, 0.0]])\n+    y = np.array([1, 1, 1, -1, -1])\n+\n+    n_samples = x.shape[0]\n+    alphas = [1e-1, 1, 1e1]\n+    n_alphas = len(alphas)\n+\n+    r = RidgeClassifierCV(alphas=alphas, store_cv_values=True)\n+\n+    # with len(y.shape) == 1\n+    n_targets = 1\n+    r.fit(x, y)\n+    assert r.cv_values_.shape == (n_samples, n_targets, n_alphas)\n+\n+    # with len(y.shape) == 2\n+    y = np.array([[1, 1, 1, -1, -1],\n+                  [1, -1, 1, -1, 1]]).transpose()\n+    n_targets = y.shape[1]\n+    r.fit(x, y)\n+    assert r.cv_values_.shape == (n_samples, n_targets, n_alphas)\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q sklearn/linear_model/tests/test_ridge.py::test_ridge_classifier_cv_store_cv_values",
+    "test_full": "python -m pytest -x -q sklearn/linear_model/tests/test_ridge.py -k ridge_classifier_cv"
+  },
+  "limits": {
+    "max_iters": 5,
+    "max_patch_bytes": 100000,
+    "max_files_touched": 10,
+    "max_new_files": 3,
+    "max_runtime_sec": 1800
+  }
+}

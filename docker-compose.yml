@@ -18,6 +18,19 @@ services:
         limits:
           memory: 512m
           cpus: '1'
+    depends_on:
+      llm_service:
+        condition: service_healthy
+      tool_gateway:
+        condition: service_healthy
+      learner_service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   llm_service:
     build: ./services/llm_service
@@ -37,6 +50,12 @@ services:
         limits:
           memory: 512m
           cpus: '1'
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 8s
 
   tool_gateway:
     build: ./services/tool_gateway
@@ -53,6 +72,15 @@ services:
         limits:
           memory: 512m
           cpus: '1'
+    depends_on:
+      executor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 8s
 
   executor:
     build: ./services/executor
@@ -73,6 +101,12 @@ services:
         limits:
           memory: 1g
           cpus: '2'
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 8s
 
   learner_service:
     build: ./services/learner_service
@@ -88,6 +122,12 @@ services:
         limits:
           memory: 512m
           cpus: '1'
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8004/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 8s
 
   # Blessed sandbox image — build once:
   #   docker compose --profile build-blessed build blessed
