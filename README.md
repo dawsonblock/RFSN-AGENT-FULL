@@ -1,242 +1,287 @@
-# RFSN Agent (Kernel + Microservices) — Combined Build
+<p align="center">
+  <strong>RFSN Agent</strong><br>
+  <em>Deterministic, policy-gated coding agent with upstream learning</em>
+</p>
 
-This repo is a **deterministic, policy-gated coding agent** built as microservices:
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python 3.9+">
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License">
+  <img src="https://img.shields.io/badge/LLM-DeepSeek%20R1-orange" alt="DeepSeek R1">
+  <img src="https://img.shields.io/badge/gate-deterministic-red" alt="Deterministic Gate">
+</p>
 
-- `orchestrator` (kernel gate + loop + ledger)
-- `tool_gateway` (policy enforcement + budgets + step router)
-- `executor` (sandboxed runner; deps stage may allow network; run stage defaults network-off)
-- `llm_service` (DeepSeek v3 + cassette record/replay)
+---
 
-## Quick start
+## What is RFSN Agent?
 
-```bash
-export DEEPSEEK_API_KEY="..."
-docker compose up --build
+A **microservice-based coding agent** that fixes bugs autonomously. It separates
+*proposing* code changes (LLM) from *validating* them (deterministic kernel gate)
+and *executing* them (sandboxed container), with an upstream **Thompson-sampling
+learner** that improves strategy selection over time.
+
+```
+┌──────────┐     ┌───────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────┐
+│  Learner │────▶│    LLM    │────▶│ Kernel Gate  │────▶│ Tool Gateway │────▶│ Executor │
+│ (advise) │     │ (propose) │     │  (validate)  │     │  (enforce)   │     │  (run)   │
+└──────────┘     └───────────┘     └──────────────┘     └──────────────┘     └──────────┘
+     ▲                                    │                                       │
+     └────────────── outcome ─────────────┴───────────────────────────────────────┘
 ```
 
-Health endpoints:
+**Key properties:**
+- 🔒 **Deterministic gate** — every step is validated against hard policy before execution
+- 🧠 **Context-aware learner** — derives repo fingerprint (language, framework, failure class) for per-context strategy selection
+- 🎯 **Multi-proposal search** — generates N candidate patches per iteration, picks lowest-risk valid plan
+- 📒 **Hash-chained ledger** — every decision is SHA-256 chained for replay auditing
+- 🐳 **Sandboxed execution** — patches applied and tests run in isolated Docker containers
 
-- Orchestrator: `http://localhost:8000/health`
-- LLM service: `http://localhost:8001/health`
-- Tool gateway: `http://localhost:8002/health`
-- Executor: `http://localhost:8003/health`
+---
 
-Run:
+## Architecture
+
+### Services (5)
+
+| Service | Port | Role |
+|---------|------|------|
+| **Orchestrator** | 8000 | Run loop: learner → LLM → gate → execute → ledger |
+| **LLM Service** | 8001 | DeepSeek R1 chat endpoint with cassette record/replay |
+| **Tool Gateway** | 8002 | Policy enforcement, per-iteration budgets, diff-guard |
+| **Executor** | 8003 | Sandboxed step runner (Docker, non-root, network-off) |
+| **Learner** | 8004 | Thompson-sampling strategy selector (DuckDB-backed) |
+
+### Execution Model (per iteration)
+
+1. **Learner suggests** strategy + constraints (context-aware: language, framework, failure class)
+2. **LLM proposes** N candidate bundles of steps (multi-proposal search)
+3. **Kernel gate validates** each candidate:
+   - Schema validation, step-type allowlist, content bans
+   - Patch size/file budgets, CI/test/dep edit forbids
+   - Per-step-type budgets (counts, timeouts, read line caps)
+   - Read path safety (traversal, blocked prefixes/suffixes)
+   - Risk scoring → reject if ≥ threshold
+   - Test enforcement + ordering (targeted before suite)
+4. **Lowest-risk valid plan** is selected and executed
+5. **Executor** runs approved steps in sandboxed container
+6. **Learner ingests** outcome with deterministic failure signature
+
+### Policy Files
+
+| File | Purpose |
+|------|---------|
+| `policies/gate_policy.yaml` | **Single source of truth**: patch budgets, step budgets, risk threshold, read blocklists, test enforcement |
+| `policies/tool_allowlist.yaml` | Allowed step types, path globs, byte limits |
+| `policies/diff_guard.yaml` | Diff-level guards (blocked dep files, max changed files/lines) |
+| `policies/deps_policy.yaml` | Dependency installation policy |
+| `policies/test_policy.yaml` | Test execution policy (static analysis templates) |
+
+---
+
+## Quick Start
+
+### Standalone (no Docker, no services)
+
+Run the bench harness directly with DeepSeek R1:
 
 ```bash
+export DEEPSEEK_API_KEY="sk-..."
+
+# Run on a demo fixture (off-by-one bug fix)
+python -m rfsn_swebench.cli \
+    --task data/tasks/task_demo_failrepo.json \
+    --out data/results/result_demo_failrepo.json \
+    --proposer direct \
+    --model deepseek-reasoner
+```
+
+### Full Microservice Stack
+
+```bash
+# 1. Build the blessed sandbox image
+docker build -t rfsn-blessed:0.2 -f blessed.Dockerfile .
+
+# 2. Start all services
+export DEEPSEEK_API_KEY="sk-..."
+docker compose up --build -d
+
+# 3. Health check
+curl -s http://localhost:8000/health | python3 -m json.tool
+
+# 4. Run a task
 curl -s http://localhost:8000/run \
   -H 'Content-Type: application/json' \
-  -d '{"repo_id":"demo1","task":"Fix failing pytest. Minimal diff. Do not change deps.","max_iters":3,"scenario":"one_fail_one_fix"}'
+  -d '{
+    "repo_id": "demo_failrepo",
+    "task": "Fix the failing test. Minimal diff only.",
+    "max_iters": 3,
+    "scenario": "smoke"
+  }'
 ```
 
-## Determinism
+### SWE-bench Mode
 
-Set:
+```bash
+# Direct proposer (standalone)
+python -m rfsn_swebench.cli \
+    --task data/tasks/task_sympy__sympy-11400.json \
+    --out data/results/result_sympy__sympy-11400.json \
+    --proposer direct \
+    --model deepseek-reasoner
+
+# Via full orchestrator stack
+python -m rfsn_swebench.cli \
+    --task data/tasks/task_sympy__sympy-11400.json \
+    --out result.json \
+    --proposer orchestrator \
+    --orchestrator-url http://localhost:8000
+
+# Docker Compose bench profile
+docker compose --profile bench run rfsn_swebench \
+    --task /data/tasks/task_sympy__sympy-11400.json \
+    --out /data/results/result.json
+```
+
+---
+
+## Demo Fixtures
+
+| Fixture | Bug | What the agent does |
+|---------|-----|---------------------|
+| `demo_failrepo` | `add(a, b)` returns `a + b + 1` (off-by-one) | Removes the `+ 1` → PASS iter 1 |
+| `demo_refactorbait` | `divide(a, b)` raises `ZeroDivisionError` | Adds `if b == 0: return float('inf')` guard → PASS iter 1 |
+
+Both pass in **1 iteration, 0 retries** with DeepSeek R1.
+
+---
+
+## Determinism
 
 ```bash
 export RFSN_SEED=1
 export LEDGER_FIXED_TS=1.0
 ```
 
-Use cassette replay (recommended for CI) via `policies/llm_cassette.yaml`.
-
-## Full Stack Wiring
-
-### Prerequisites
-
-1. **Build the blessed sandbox image** (required by the executor):
-
-```bash
-docker build -t rfsn-blessed:0.2 -f blessed.Dockerfile .
-# or via compose profile:
-docker compose --profile build-blessed build blessed
-```
-
-1. **Prepare a fixture repo** into `data/repos/<repo_id>/`:
-
-```bash
-./scripts/setup_fixture.sh demo_failrepo
-```
-
-1. **Start the stack**:
-
-```bash
-export DEEPSEEK_API_KEY="..."
-docker compose up --build -d
-```
-
-1. **Smoke test**:
-
-```bash
-./scripts/smoke_test.sh demo_failrepo
-```
-
-### Service Endpoints
-
-| Service | Port | Endpoints |
-| --------- | ------ | ----------- |
-| Orchestrator | 8000 | `GET /health`, `POST /run` |
-| LLM Service | 8001 | `GET /health`, `POST /chat` |
-| Tool Gateway | 8002 | `GET /health`, `POST /run_step` |
-| Executor | 8003 | `GET /health`, `POST /run` |
-
-### Orchestrator `POST /run`
-
-```json
-{
-  "repo_id": "demo_failrepo",
-  "task": "Fix the failing test. Minimal diff only.",
-  "max_iters": 3,
-  "scenario": "smoke_test"
-}
-```
-
-### Tool Gateway `POST /run_step`
-
-Routes through policy enforcement (step type allowlist, path validation,
-per-iteration budgets, diff-guard) before forwarding to the executor.
-
-```json
-{
-  "repo_id": "demo_failrepo",
-  "iter": 1,
-  "step": {
-    "id": "step_001",
-    "type": "run_tests",
-    "template_id": "pytest_targeted",
-    "template_params": {"target": "tests/test_demo.py::test_add"},
-    "timeout_s": 120
-  }
-}
-```
-
-**Step types**: `ensure_deps`, `repo_search`, `repo_read_range`, `apply_patch`, `run_tests`
-
-### Data Directory Layout
-
-```text
-data/
-├── repos/<repo_id>/       # Repo snapshots (git init'd)
-├── venv/<repo_id>/        # Per-repo virtualenvs (created by ensure_deps)
-├── wheels/<repo_id>/      # Pip cache for --require-hashes
-├── artifacts/<repo_id>/   # Step outputs
-└── cassettes/             # LLM cassette JSONL files
-```
-
-### Cassette Replay
-
-Set `policies/llm_cassette.yaml` mode to `replay` for deterministic CI.
-Cassettes are keyed by SHA-256 of the canonical request payload and stored
-per-repo per-scenario as JSONL in `data/cassettes/`.
-
-## Notes
-
-- This build is a coherent, runnable skeleton with policy gates, determinism hooks, tests, CI, and fixtures.
-- You still need to wire your own repo snapshotting logic and any additional step types you want.
+The ledger hash-chains every event with SHA-256 (prev_hash + entry_hash → chain_hash).
+Gate decisions, step results, and learner suggestions are all recorded for replay auditing.
+Use cassette replay mode for fully deterministic CI.
 
 ---
 
-## SWE-bench Bench Runner (`rfsn_swebench`)
+## Project Structure
 
-A standalone, deterministic **patch → test → iterate** harness that produces
-SWE-bench-compatible outputs (unified diff + test logs + verdict).  It can run
-independently or delegate to the full RFSN microservice stack.
-
-### Quick start (bench runner)
-
-```bash
-# 1. Create a task definition
-cat > task.json <<'EOF'
-{
-  "task_id": "demo-001",
-  "repo_url": "https://github.com/org/repo.git",
-  "repo_ref": "main",
-  "workdir": "/tmp/bench_demo",
-  "issue_text": "The add() function returns wrong results",
-  "hints": {
-    "failing_tests": ["tests/test_demo.py::test_add"]
-  },
-  "commands": {
-    "setup": ["pip install -e ."],
-    "test_quick": "pytest -q",
-    "test_full": "pytest -q"
-  },
-  "limits": {
-    "max_iters": 8,
-    "max_patch_bytes": 250000,
-    "max_files_touched": 25,
-    "max_new_files": 5,
-    "max_runtime_sec": 1800
-  }
-}
-EOF
-
-# 2. Run with direct DeepSeek proposer (standalone, no services needed)
-export DEEPSEEK_API_KEY="..."
-python -m rfsn_swebench.cli \
-    --task task.json \
-    --out result.json \
-    --proposer direct
-
-# 3. Or run via the full RFSN Orchestrator stack
-docker compose up -d
-python -m rfsn_swebench.cli \
-    --task task.json \
-    --out result.json \
-    --proposer orchestrator \
-    --orchestrator-url http://localhost:8000
-
-# 4. Or run as a Docker Compose profile
-docker compose --profile bench run rfsn_swebench \
-    --task /data/task.json --out /data/result.json
+```
+├── services/
+│   ├── orchestrator/         # Run loop, kernel gate, learner integration
+│   │   ├── app.py            # FastAPI orchestrator (multi-proposal, context-aware)
+│   │   ├── kernel.py         # Deterministic gate (final authority)
+│   │   ├── context_fingerprint.py  # Repo + failure fingerprinting
+│   │   ├── ledger.py         # Hash-chained event ledger
+│   │   └── prompts.py        # LLM prompt templates
+│   ├── llm_service/          # DeepSeek API wrapper + cassette system
+│   ├── tool_gateway/         # Policy enforcement + budget tracking
+│   ├── executor/             # Docker-sandboxed step runner
+│   └── learner_service/      # Thompson-sampling strategy selector (DuckDB)
+├── rfsn_swebench/            # Standalone SWE-bench bench runner
+│   ├── cli.py                # CLI entry point (3 proposer modes)
+│   ├── runner.py             # Core propose → apply → gate → test loop
+│   ├── contracts.py          # Data contracts (BenchTask, BenchResult, etc.)
+│   ├── gate.py               # Standalone patch risk gate
+│   ├── patcher.py            # Unified diff applicator
+│   ├── repo.py               # Git operations (clone, checkout, diff, reset)
+│   ├── replay.py             # Replay artifact management
+│   └── testsel.py            # Test selection heuristics
+├── policies/                 # All policy YAML files
+├── fixtures/                 # Demo repos for testing
+├── data/
+│   ├── tasks/                # SWE-bench task definitions
+│   └── results/              # Run results
+├── shared/                   # JSON schemas
+├── tests/                    # Property-based fuzz tests
+├── scripts/                  # Bootstrap and CI scripts
+└── docker-compose.yml        # Full stack orchestration
 ```
 
-### Proposer modes
+---
 
-| Flag | Description |
-| ------ | ------------- |
-| `--proposer direct` | Calls DeepSeek API directly (requires `DEEPSEEK_API_KEY`). Standalone, no services needed. |
-| `--proposer orchestrator` | Delegates to the RFSN Orchestrator `/run` endpoint. Requires the full stack. |
-| `--proposer placeholder` | Aborts immediately. Useful for testing the harness itself. |
-| *(auto-detect)* | If `--orchestrator-url` is set → orchestrator. If `DEEPSEEK_API_KEY` is set → direct. Otherwise → placeholder. |
+## Gate Policy (what gets enforced)
 
-### Executor bridge
+The kernel gate at `services/orchestrator/kernel.py` is the **final authority** over
+every step that executes. No step bypasses it.
 
-By default, tests run locally via `subprocess`.  Pass `--executor-url` to
-route test execution through the RFSN Executor service (Docker-sandboxed,
-venv-managed, network-disabled).  Add `--gateway-url` to route through the
-Tool Gateway for full policy enforcement:
+| Check | Detail |
+|-------|--------|
+| **Schema** | JSON Schema validation against `shared/bundle_schema.json` |
+| **Step type** | Must be in `tool_allowlist.yaml` |
+| **Content bans** | `pytest.skip`, `xfail`, `eval(`, `exec(`, `subprocess.`, `os.system(` in added lines |
+| **Patch size** | Max 6 files, max 300 total lines |
+| **Forbidden edits** | CI configs, test files, dependency manifests |
+| **Step budgets** | Per-type caps: search ≤4, read ≤6, patch ≤2, deps ≤1, tests ≤4 |
+| **Read paths** | Blocks traversal (`..`), `.git/`, `.github/workflows/`, `.pem`, `.key`, `.env` |
+| **Read range** | Max 300 lines per read |
+| **Timeout clamp** | Per-type max (search 30s, read 15s, patch 60s, deps 420s, tests 900s) |
+| **Bundle size** | Max 15 steps total |
+| **Risk score** | Additive scoring → reject if ≥ 60 |
+| **Test ordering** | Enforces targeted tests before suite when patch exists |
+
+---
+
+## Learner
+
+The learner service (`services/learner_service/`) uses **Thompson sampling** over
+5 strategy arms:
+
+| Strategy | Approach |
+|----------|----------|
+| S1 | Search → narrow reads → minimal patch |
+| S2 | Patch immediately, targeted tests first |
+| S3 | Error-signature driven (stacktrace → code) |
+| S4 | Dependency/install first, then patch |
+| S5 | Forbid refactor, surgical fix only |
+
+**Context-aware**: derives `lang|framework|tests|failure_class` from repo files
+and failure text, so it learns per-context preferences (e.g., Django ImportErrors
+get different strategy weights than SymPy AssertionErrors).
+
+Backed by DuckDB at `/data/learner.duckdb` with `strategy_stats` and `episodes`
+tables.
+
+---
+
+## Proposer Modes
+
+| Mode | Flag | Description |
+|------|------|-------------|
+| **Direct** | `--proposer direct` | Calls DeepSeek API directly. Standalone, no services. |
+| **Orchestrator** | `--proposer orchestrator` | Full RFSN stack via `/run` endpoint. |
+| **Placeholder** | `--proposer placeholder` | Aborts immediately (harness testing). |
+| **Auto-detect** | *(default)* | Orchestrator if URL set, direct if API key set. |
+
+---
+
+## Outputs
+
+- **Result JSON** — SWE-bench compatible: `PASS` / `FAIL` / `ABORT` + patch + test logs
+- **Replay directory** — `events.jsonl` (structured log) + `blobs/` (content-addressed patches, stdout/stderr)
+- **Ledger** — Hash-chained JSONL at `/data/ledger.jsonl`
+- **DuckDB** — Learner statistics at `/data/learner.duckdb`
+
+---
+
+## Development
 
 ```bash
-# Direct to executor (no policy enforcement)
-python -m rfsn_swebench.cli \
-    --task task.json --out result.json \
-    --proposer direct \
-    --executor-url http://localhost:8003
+# Install dev dependencies
+pip install -r requirements-ci.txt
 
-# Through tool gateway (recommended — gets budgets + diff-guard)
-python -m rfsn_swebench.cli \
-    --task task.json --out result.json \
-    --proposer direct \
-    --executor-url http://localhost:8003 \
-    --gateway-url http://localhost:8002
+# Run fuzz tests
+python -m pytest tests/ -v
+
+# Lint
+flake8 --max-line-length 79
+pyright
 ```
 
-### Outputs
+---
 
-- **`result.json`** — SWE-bench-compatible verdict (`PASS` / `FAIL` / `ABORT`).
-- **Replay directory** — `<replay-base>/replays/<task_id>_<timestamp>/`
-  - `events.jsonl` — structured event log (task start, proposals, test results, risk decisions).
-  - `blobs/` — content-addressed patches, stdout/stderr tails per iteration.
+## License
 
-### Risk gating
-
-Patches are evaluated by `rfsn_swebench.gate.patch_risk_gate()` which blocks:
-
-- Oversized patches (bytes, files, new files, added/deleted lines)
-- Edits to CI/CD configs or dependency manifests
-- Banned code patterns (`pytest.skip`, `xfail`, `@skip`, etc.)
-- Large test deletions (>50 lines)
-
-Limits are loaded from `policies/diff_guard.yaml` and `policies/tool_allowlist.yaml`
-when available, falling back to sensible defaults.
+MIT

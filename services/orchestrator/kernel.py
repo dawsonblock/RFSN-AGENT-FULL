@@ -592,42 +592,56 @@ class Kernel:
                 budget_usage=budget_usage,
             )
 
-        # 4. Test enforcement
+        # 4. Test enforcement + ordering
         enforced: List[dict] = []
         has_patch = any(
             s.get("type") == "apply_patch"
             for s in steps
         )
-        has_tests = any(
-            s.get("type") == "run_tests"
-            for s in steps
-        )
+        test_steps = [
+            s for s in steps
+            if s.get("type") == "run_tests"
+        ]
 
-        if (
-            has_patch
-            and bool(
-                self.policy.get(
-                    "enforce_tests", True,
-                ),
-            )
-            and not has_tests
+        if has_patch and bool(
+            self.policy.get(
+                "enforce_tests", True,
+            ),
         ):
-            enforced.append({
-                "id": "gate-t1",
-                "type": "run_tests",
-                "template_id": "pytest_targeted",
-                "template_params": {
-                    "target": "tests",
-                },
-                "timeout_s": 240,
-            })
-            enforced.append({
-                "id": "gate-t2",
-                "type": "run_tests",
-                "template_id": "pytest_suite",
-                "template_params": {"target": ""},
-                "timeout_s": 900,
-            })
+            targeted = [
+                s for s in test_steps
+                if s.get("template_id")
+                == "pytest_targeted"
+            ]
+            suite = [
+                s for s in test_steps
+                if s.get("template_id")
+                == "pytest_suite"
+            ]
+            if not targeted:
+                enforced.append({
+                    "id": "gate-t1",
+                    "type": "run_tests",
+                    "template_id": (
+                        "pytest_targeted"
+                    ),
+                    "template_params": {
+                        "target": "tests",
+                    },
+                    "timeout_s": 240,
+                })
+            if not suite:
+                enforced.append({
+                    "id": "gate-t2",
+                    "type": "run_tests",
+                    "template_id": (
+                        "pytest_suite"
+                    ),
+                    "template_params": {
+                        "target": "",
+                    },
+                    "timeout_s": 900,
+                })
 
         # 5. Risk threshold
         reject_thr = int(
@@ -651,6 +665,30 @@ class Kernel:
             )
 
         approved = steps + enforced
+
+        # Enforce ordering: non-test steps first,
+        # then targeted tests, then suite tests.
+        if has_patch:
+            non_test = [
+                s for s in approved
+                if s.get("type") != "run_tests"
+            ]
+            targeted_s = [
+                s for s in approved
+                if s.get("type") == "run_tests"
+                and s.get("template_id")
+                == "pytest_targeted"
+            ]
+            suite_s = [
+                s for s in approved
+                if s.get("type") == "run_tests"
+                and s.get("template_id")
+                != "pytest_targeted"
+            ]
+            approved = (
+                non_test + targeted_s + suite_s
+            )
+
         return GateDecision(
             ok=True,
             approved_steps=approved,

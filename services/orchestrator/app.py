@@ -8,6 +8,7 @@ from pydantic import BaseModel  # type: ignore[import-not-found]
 import requests  # type: ignore[import-untyped]
 import yaml  # type: ignore[import-untyped]
 
+from context_fingerprint import build_context  # type: ignore[import-not-found]
 from kernel import Kernel  # type: ignore[import-not-found]
 from ledger import Ledger  # type: ignore[import-not-found]
 from prompts import SYSTEM, USER_TEMPLATE  # type: ignore[import-not-found]
@@ -148,16 +149,17 @@ def failure_signature(text: str) -> str:
 
 
 def learner_suggest(
-    repo_id: str, task: str,
+    repo_id: str,
+    task: str,
+    last_fail: str,
 ) -> dict:
+    repo_path = f"/data/repos/{repo_id}"
+    ctx = build_context(repo_path, last_fail)
+
     payload = {
         "repo_id": repo_id,
         "task": task,
-        "meta": {
-            "lang": "py",
-            "tests": "pytest",
-            "framework": "unknown",
-        },
+        "meta": ctx,
     }
     try:
         r = requests.post(
@@ -171,13 +173,18 @@ def learner_suggest(
     except Exception:
         pass
     # Learner is advisory; fail open.
+    ck = (
+        f"{ctx['lang']}|{ctx['tests']}"
+        f"|{ctx['framework']}"
+    )
     return {
-        "context_key": "py|pytest|unknown",
+        "context_key": ck,
         "strategy_id": (
             "S1_search_then_patch_small"
         ),
         "prompt_addendum": (
-            "Strategy: search first, narrow reads,"
+            "Strategy: search first,"
+            " narrow reads,"
             " patch minimal. No refactor."
         ),
         "constraints": {
@@ -193,15 +200,17 @@ def learner_ingest(
     strategy_id: str,
     success: bool,
     fail_sig: str,
+    repo_id: str = "",
+    last_fail: str = "",
 ) -> None:
+    repo_path = f"/data/repos/{repo_id}"
+    ctx = build_context(
+        repo_path, last_fail,
+    )
     payload = {
         "run_id": run_id,
         "strategy_id": strategy_id,
-        "meta": {
-            "lang": "py",
-            "tests": "pytest",
-            "framework": "unknown",
-        },
+        "meta": ctx,
         "success": bool(success),
         "failure_signature": fail_sig or "",
     }
@@ -339,7 +348,7 @@ def run(req: RunReq):
         )
 
         sug = learner_suggest(
-            req.repo_id, req.task,
+            req.repo_id, req.task, last_fail,
         )
         last_strategy = sug.get("strategy_id")
         constraints = (
@@ -380,23 +389,41 @@ def run(req: RunReq):
             {"role": "user", "content": prompt},
         ]
 
-        call_index += 1
-        ledger.append({
-            "type": "LLM_CALL",
-            "run_id": run_id,
-            "call_index": call_index,
-            "iter": it,
-        })
-        llm = llm_chat(
-            messages, run_id, call_index,
-            req.repo_id, scenario,
-        )
-        content = llm.get("content", "")
-        try:
-            bundle = json.loads(content)
-        except Exception as e:
+        # Multi-proposal: request N candidates,
+        # gate-validate all, pick lowest risk.
+        n_candidates = 3
+        candidates: list = []
+        for ci in range(n_candidates):
+            call_index += 1
+            ledger.append({
+                "type": "LLM_CALL",
+                "run_id": run_id,
+                "call_index": call_index,
+                "iter": it,
+            })
+            try:
+                llm = llm_chat(
+                    messages, run_id,
+                    call_index,
+                    req.repo_id, scenario,
+                )
+            except Exception:
+                continue
+            content = llm.get("content", "")
+            try:
+                cand = json.loads(content)
+                if (
+                    isinstance(cand, dict)
+                    and "steps" in cand
+                ):
+                    candidates.append(cand)
+            except Exception:
+                continue
+
+        if not candidates:
             last_fail = (
-                f"LLM returned non-JSON: {e}"
+                "All LLM proposals"
+                " failed to parse"
             )
             ledger.append({
                 "type": "BUNDLE_PARSE_FAIL",
@@ -405,58 +432,94 @@ def run(req: RunReq):
             })
             continue
 
-        if "bundle_id" not in bundle:
-            bundle["bundle_id"] = stable_id(
-                "b", SEED, req.repo_id,
-                req.task, str(it), scenario,
-                n=8,
-            )
-        # normalize missing step ids
-        for i, s in enumerate(bundle.get("steps", [])):
-            if not s.get("id"):
-                s["id"] = f"s{i+1}"
+        # Pick lowest-risk valid candidate.
+        bundle = candidates[0]
+        best_risk = 10**9
+        best_dec = None
+        for cand in candidates:
+            # Normalize before gate check
+            if "bundle_id" not in cand:
+                cand["bundle_id"] = stable_id(
+                    "b", SEED, req.repo_id,
+                    req.task, str(it),
+                    scenario, n=8,
+                )
+            for idx, st in enumerate(
+                cand.get("steps", []),
+            ):
+                if not st.get("id"):
+                    st["id"] = f"s{idx+1}"
 
-        # Inject auto-deps BEFORE gate so it
-        # is validated as part of the bundle.
-        bundle_steps = bundle.get("steps", [])
-        needs_tests = any(
-            s.get("type") == "run_tests"
-            for s in bundle_steps
-        )
-        needs_deps = (
-            needs_tests
-            and DEPS_POLICY.get("enabled", True)
-            and not venv_exists(req.repo_id)
-        )
-        if needs_deps:
-            dep_step = {
-                "id": "auto-deps",
-                "type": "ensure_deps",
-                "manifest": DEPS_POLICY.get(
-                    "manifest",
-                    "requirements.txt",
-                ),
-                "timeout_s": int(
-                    DEPS_POLICY.get(
-                        "max_install_seconds",
-                        420,
-                    )
-                ),
-            }
-            bundle["steps"] = (
-                [dep_step] + bundle_steps
+            # Inject auto-deps per candidate
+            cand_steps = cand.get("steps", [])
+            c_needs_tests = any(
+                s.get("type") == "run_tests"
+                for s in cand_steps
             )
+            c_needs_deps = (
+                c_needs_tests
+                and DEPS_POLICY.get(
+                    "enabled", True,
+                )
+                and not venv_exists(
+                    req.repo_id,
+                )
+            )
+            if c_needs_deps and not any(
+                s.get("type") == "ensure_deps"
+                for s in cand_steps
+            ):
+                dep_step = {
+                    "id": "auto-deps",
+                    "type": "ensure_deps",
+                    "manifest": DEPS_POLICY.get(
+                        "manifest",
+                        "requirements.txt",
+                    ),
+                    "timeout_s": int(
+                        DEPS_POLICY.get(
+                            "max_install_seconds",
+                            420,
+                        )
+                    ),
+                }
+                cand["steps"] = (
+                    [dep_step] + cand_steps
+                )
+
+            d = kernel.validate_and_plan(cand)
+            if (
+                d["ok"]
+                and d.get(
+                    "risk_score", 0,
+                ) < best_risk
+            ):
+                best_risk = d.get(
+                    "risk_score", 0,
+                )
+                best_dec = d
+                bundle = cand
 
         ledger.append({
             "type": "BUNDLE_PROPOSED",
             "run_id": run_id,
             "iter": it,
             "bundle": bundle,
+            "candidates_count": len(
+                candidates,
+            ),
         })
 
-        decision = kernel.validate_and_plan(
-            bundle,
-        )
+        if best_dec is not None:
+            decision = best_dec
+        else:
+            # All rejected; re-validate first
+            # candidate to get error details.
+            decision = (
+                kernel.validate_and_plan(
+                    bundle,
+                )
+            )
         ledger.append({
             "type": "KERNEL_DECISION",
             "run_id": run_id,
@@ -472,6 +535,8 @@ def run(req: RunReq):
                 last_strategy or "unknown",
                 False,
                 failure_signature(last_fail),
+                repo_id=req.repo_id,
+                last_fail=last_fail,
             )
             continue
 
@@ -517,6 +582,8 @@ def run(req: RunReq):
                     last_strategy or "unknown",
                     False,
                     failure_signature(last_fail),
+                    repo_id=req.repo_id,
+                    last_fail=last_fail,
                 )
                 break
 
@@ -616,6 +683,7 @@ def run(req: RunReq):
                 last_strategy or "unknown",
                 True,
                 "",
+                repo_id=req.repo_id,
             )
             return {
                 "run_id": run_id,
@@ -633,6 +701,8 @@ def run(req: RunReq):
         last_strategy or "unknown",
         False,
         failure_signature(last_fail),
+        repo_id=req.repo_id,
+        last_fail=last_fail,
     )
     return {
         "run_id": run_id,

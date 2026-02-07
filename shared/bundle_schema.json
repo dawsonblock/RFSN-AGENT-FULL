@@ -18,7 +18,7 @@
     "steps": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 12,
+      "maxItems": 20,
       "items": {
         "type": "object",
         "required": [
@@ -75,10 +75,6 @@
     },
     "acceptance": {
       "type": "object",
-      "required": [
-        "tests_green",
-        "no_new_failures"
-      ],
       "properties": {
         "tests_green": {
           "type": "boolean"

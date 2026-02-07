@@ -46,6 +46,12 @@ def _load_yaml(path: str) -> dict:
 ALLOW = _load_yaml("/policies/tool_allowlist.yaml")
 DIFF_GUARD = _load_yaml("/policies/diff_guard.yaml")
 
+# Load kernel gate policy for unified budget
+# enforcement (single source of truth).
+GATE_POLICY = _load_yaml(
+    "/policies/gate_policy.yaml",
+)
+
 ALLOWED_TYPES = set(ALLOW.get("allowed_step_types", []))
 ALLOWED_PATHS = ALLOW.get("allowed_paths", ["repo/**"])
 BLOCKED_GLOBS = ALLOW.get("blocked_globs", [])
@@ -251,6 +257,17 @@ def run_step(req: RunStepReq):
                 "diff guard: too many deleted lines"
                 f" ({deleted_lines} > {max_deleted})",
             )
+
+    # Enforce per-step budgets from kernel
+    # gate policy (unified source of truth).
+    budgets = GATE_POLICY.get(
+        "step_budgets", {},
+    )
+    bt = budgets.get(s["type"])
+    if bt and "timeout_s" in bt:
+        max_t = int(bt["timeout_s"])
+        cur = int(s.get("timeout_s") or max_t)
+        s["timeout_s"] = min(cur, max_t)
 
     out = _executor(s, req.repo_id, req.iter)
 
