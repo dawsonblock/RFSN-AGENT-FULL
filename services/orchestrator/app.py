@@ -416,6 +416,37 @@ def run(req: RunReq):
             if not s.get("id"):
                 s["id"] = f"s{i+1}"
 
+        # Inject auto-deps BEFORE gate so it
+        # is validated as part of the bundle.
+        bundle_steps = bundle.get("steps", [])
+        needs_tests = any(
+            s.get("type") == "run_tests"
+            for s in bundle_steps
+        )
+        needs_deps = (
+            needs_tests
+            and DEPS_POLICY.get("enabled", True)
+            and not venv_exists(req.repo_id)
+        )
+        if needs_deps:
+            dep_step = {
+                "id": "auto-deps",
+                "type": "ensure_deps",
+                "manifest": DEPS_POLICY.get(
+                    "manifest",
+                    "requirements.txt",
+                ),
+                "timeout_s": int(
+                    DEPS_POLICY.get(
+                        "max_install_seconds",
+                        420,
+                    )
+                ),
+            }
+            bundle["steps"] = (
+                [dep_step] + bundle_steps
+            )
+
         ledger.append({
             "type": "BUNDLE_PROPOSED",
             "run_id": run_id,
@@ -423,7 +454,9 @@ def run(req: RunReq):
             "bundle": bundle,
         })
 
-        decision = kernel.validate_and_plan(bundle)
+        decision = kernel.validate_and_plan(
+            bundle,
+        )
         ledger.append({
             "type": "KERNEL_DECISION",
             "run_id": run_id,
@@ -442,32 +475,9 @@ def run(req: RunReq):
             )
             continue
 
-        # Optionally insert deps if tests exist and venv missing
-        approved = list(decision["approved_steps"])
-        needs_tests = any(
-            s.get("type") == "run_tests"
-            for s in approved
+        approved = list(
+            decision["approved_steps"],
         )
-        needs_deps = (
-            needs_tests
-            and DEPS_POLICY.get("enabled", True)
-            and not venv_exists(req.repo_id)
-        )
-        if needs_deps:
-            dep_step = {
-                "id": "auto-deps",
-                "type": "ensure_deps",
-                "manifest": DEPS_POLICY.get(
-                    "manifest",
-                    "requirements.txt",
-                ),
-                "timeout_s": int(
-                    DEPS_POLICY.get(
-                        "max_install_seconds", 420
-                    )
-                ),
-            }
-            approved = [dep_step] + approved
 
         results = []
         ok = True
@@ -532,14 +542,16 @@ def run(req: RunReq):
                         " returned non-zero"
                     )
                     ok = False
-            # Run static analysis if test_policy says so
+            # Run static analysis if test_policy
+            # says so — gate-validated first.
             if ok and TEST_POLICY.get(
                 "suite_on_success", False
             ):
+                sa_steps = []
                 for sa_tmpl in TEST_POLICY.get(
                     "static_templates", []
                 ):
-                    sa_step = {
+                    sa_steps.append({
                         "id": f"auto-{sa_tmpl}",
                         "type": "run_tests",
                         "template_id": sa_tmpl,
@@ -547,22 +559,51 @@ def run(req: RunReq):
                             "target": "",
                         },
                         "timeout_s": 300,
+                    })
+                if sa_steps:
+                    sa_bundle = {
+                        "intent": "static analysis",
+                        "bundle_id": stable_id(
+                            "sa", run_id,
+                            str(it), n=8,
+                        ),
+                        "steps": sa_steps,
+                        "acceptance": {},
                     }
-                    sa_out = run_step(
-                        req.repo_id, it, sa_step,
+                    sa_dec = (
+                        kernel.validate_and_plan(
+                            sa_bundle,
+                        )
                     )
                     ledger.append({
-                        "type": "STEP_RESULT",
+                        "type": "KERNEL_DECISION",
                         "run_id": run_id,
                         "iter": it,
-                        "step": sa_step,
-                        "out": sa_out,
+                        "decision": sa_dec,
                     })
-                    results.append({
-                        "step": sa_step,
-                        "out": sa_out,
-                    })
-                    # Static analysis: non-blocking
+                    if sa_dec["ok"]:
+                        for sa_s in sa_dec[
+                            "approved_steps"
+                        ]:
+                            sa_out = run_step(
+                                req.repo_id,
+                                it,
+                                sa_s,
+                            )
+                            ledger.append({
+                                "type": (
+                                    "STEP_RESULT"
+                                ),
+                                "run_id": run_id,
+                                "iter": it,
+                                "step": sa_s,
+                                "out": sa_out,
+                            })
+                            results.append({
+                                "step": sa_s,
+                                "out": sa_out,
+                            })
+                            # Static: non-blocking
 
         if ok:
             ledger.append({
