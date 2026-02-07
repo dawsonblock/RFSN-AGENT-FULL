@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import time
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException  # type: ignore[import-not-found]
@@ -100,7 +101,48 @@ class RunReq(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"ok": True}
+    """Deep health: check all downstream deps."""
+    deps = {}
+    for name, url in [
+        ("llm_service", LLM_URL),
+        ("tool_gateway", TOOL_GATEWAY_URL),
+        ("learner_service", LEARNER_URL),
+    ]:
+        try:
+            r = requests.get(
+                f"{url}/health",
+                timeout=3,
+            )
+            deps[name] = r.status_code == 200
+        except Exception:
+            deps[name] = False
+    all_ok = all(deps.values())
+    return {
+        "ok": all_ok,
+        "deps": deps,
+        "kernel_loaded": kernel is not None,
+        "policies": {
+            "deps": bool(DEPS_POLICY),
+            "test": bool(TEST_POLICY),
+        },
+    }
+
+
+# ── Run metrics (in-memory, per-process) ─────
+_METRICS: dict = {
+    "runs_total": 0,
+    "runs_ok": 0,
+    "runs_fail": 0,
+    "llm_calls": 0,
+    "llm_retries": 0,
+    "gate_rejections": 0,
+    "steps_executed": 0,
+}
+
+
+@app.get("/metrics")
+def metrics():
+    return _METRICS
 
 
 def run_step(repo_id: str, it: int, step: dict):
@@ -119,6 +161,8 @@ def llm_chat(
     messages: list, run_id: str,
     call_index: int, repo_id: str,
     scenario: str,
+    *,
+    max_retries: int = 3,
 ):
     payload = {
         "messages": messages,
@@ -129,15 +173,44 @@ def llm_chat(
         "repo_id": repo_id,
         "scenario": scenario,
     }
-    r = requests.post(
-        f"{LLM_URL}/chat",
-        json=payload,
-        headers=auth_headers(),
-        timeout=120,
+    last_exc: Exception = RuntimeError("no attempt")
+    for attempt in range(max_retries):
+        try:
+            _METRICS["llm_calls"] += 1
+            r = requests.post(
+                f"{LLM_URL}/chat",
+                json=payload,
+                headers=auth_headers(),
+                timeout=120,
+            )
+            if r.status_code == 429:
+                # Rate-limited — back off
+                _METRICS["llm_retries"] += 1
+                wait = 2 ** attempt
+                time.sleep(wait)
+                continue
+            if r.status_code != 200:
+                raise HTTPException(
+                    r.status_code, r.text,
+                )
+            return r.json()
+        except requests.exceptions.Timeout:
+            _METRICS["llm_retries"] += 1
+            last_exc = requests.exceptions.Timeout(
+                f"attempt {attempt + 1}",
+            )
+            time.sleep(2 ** attempt)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            last_exc = exc
+            _METRICS["llm_retries"] += 1
+            time.sleep(2 ** attempt)
+    raise HTTPException(
+        502,
+        f"LLM unreachable after {max_retries}"
+        f" retries: {last_exc}",
     )
-    if r.status_code != 200:
-        raise HTTPException(r.status_code, r.text)
-    return r.json()
 
 
 def failure_signature(text: str) -> str:
@@ -227,6 +300,7 @@ def learner_ingest(
 
 @app.post("/run")
 def run(req: RunReq):
+    _METRICS["runs_total"] += 1
     scenario = req.scenario or "golden"
     run_id = stable_id(
         "run", SEED, req.repo_id, req.task,
@@ -306,6 +380,7 @@ def run(req: RunReq):
 
         results = []
         for s in decision["approved_steps"]:
+            _METRICS["steps_executed"] += 1
             out = run_step(req.repo_id, it, s)
             ledger.append({
                 "type": "STEP_RESULT",
@@ -331,6 +406,7 @@ def run(req: RunReq):
             "run_id": run_id,
             "status": "ok",
         })
+        _METRICS["runs_ok"] += 1
         return {
             "run_id": run_id,
             "status": "ok",
@@ -527,6 +603,7 @@ def run(req: RunReq):
             "decision": decision,
         })
         if not decision["ok"]:
+            _METRICS["gate_rejections"] += 1
             last_fail = json.dumps(
                 decision["errors"],
             )
@@ -547,6 +624,7 @@ def run(req: RunReq):
         results = []
         ok = True
         for s in approved:
+            _METRICS["steps_executed"] += 1
             out = run_step(req.repo_id, it, s)
             ledger.append({
                 "type": "STEP_RESULT",
@@ -685,6 +763,7 @@ def run(req: RunReq):
                 "",
                 repo_id=req.repo_id,
             )
+            _METRICS["runs_ok"] += 1
             return {
                 "run_id": run_id,
                 "status": "ok",
@@ -704,6 +783,7 @@ def run(req: RunReq):
         repo_id=req.repo_id,
         last_fail=last_fail,
     )
+    _METRICS["runs_fail"] += 1
     return {
         "run_id": run_id,
         "status": "fail",

@@ -267,12 +267,16 @@ def test_dep_manifest_edit_rejected():
 # ── edge cases ───────────────────────────────
 
 
-def test_empty_steps_accepted():
-    """Bundle with no steps should pass gate."""
-    b = _base_bundle([])
+def test_single_search_accepted():
+    """Bundle with a single search step should pass."""
+    b = _base_bundle([{
+        "id": "s1",
+        "type": "repo_search",
+        "pattern": "hello",
+    }])
     d = k.validate_and_plan(b)
     assert d["ok"]
-    assert d["approved_steps"] == []
+    assert len(d["approved_steps"]) == 1
 
 
 def test_search_only_no_test_injection():

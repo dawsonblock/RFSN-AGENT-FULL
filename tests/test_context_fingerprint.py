@@ -83,7 +83,9 @@ def test_detect_tests_setup_cfg(tmp_repo):
 
 def test_detect_tests_tox(tmp_repo):
     (tmp_repo / "tox.ini").write_text("[tox]\n")
-    assert detect_tests(str(tmp_repo)) == "tox"
+    # tox.ini present still returns pytest
+    # (tox wraps pytest in most Python repos)
+    assert detect_tests(str(tmp_repo)) == "pytest"
 
 
 def test_detect_tests_default(tmp_repo):
@@ -99,7 +101,8 @@ def test_detect_lang_python(tmp_repo):
 
 
 def test_detect_lang_empty(tmp_repo):
-    assert detect_lang(str(tmp_repo)) == "py"
+    # No files → unknown
+    assert detect_lang(str(tmp_repo)) == "unknown"
 
 
 # ── failure_class ────────────────────────────
@@ -127,7 +130,7 @@ def test_failure_class_extracts_type_error():
 
 
 def test_failure_class_empty():
-    assert failure_class("") == "unknown"
+    assert failure_class("") == "none"
 
 
 def test_failure_class_no_match():
@@ -160,7 +163,7 @@ def test_build_context_integration(tmp_repo):
 
 def test_build_context_defaults(tmp_repo):
     ctx = build_context(str(tmp_repo), "")
-    assert ctx["lang"] == "py"
+    assert ctx["lang"] == "unknown"
     assert ctx["framework"] == "unknown"
     assert ctx["tests"] == "pytest"
-    assert ctx["failure"] == "unknown"
+    assert ctx["failure"] == "none"

@@ -97,6 +97,7 @@ def test_gate_rejects_oversized_patch():
 
 def test_gate_rejects_too_many_files():
     headers = "".join(
+        f"diff --git a/f{i}.py b/f{i}.py\n"
         f"--- a/f{i}.py\n+++ b/f{i}.py\n"
         f"@@ -1 +1 @@\n-a\n+b\n"
         for i in range(30)

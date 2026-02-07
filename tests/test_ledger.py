@@ -24,8 +24,9 @@ def test_ledger_writes_jsonl(tmp_path):
             json.loads(l) for l in f if l.strip()
         ]
     assert len(lines) == 2
-    assert lines[0]["type"] == "TEST"
-    assert lines[1]["val"] == 2
+    # event is nested: rec["event"]["type"]
+    assert lines[0]["event"]["type"] == "TEST"
+    assert lines[1]["event"]["val"] == 2
 
 
 def test_ledger_has_timestamp(tmp_path):
@@ -34,7 +35,8 @@ def test_ledger_has_timestamp(tmp_path):
     lg.append({"type": "X"})
     with open(path, "r") as f:
         rec = json.loads(f.readline())
-    assert "ts" in rec or "timestamp" in rec or "type" in rec
+    assert "ts" in rec
+    assert "chain_hash" in rec
 
 
 def test_ledger_hash_chain(tmp_path):
@@ -48,18 +50,12 @@ def test_ledger_hash_chain(tmp_path):
         lines = [
             json.loads(l) for l in f if l.strip()
         ]
-    # Check that prev_hash chains
-    for i, rec in enumerate(lines):
-        if "prev_hash" in rec:
-            if i == 0:
-                assert (
-                    rec["prev_hash"] is None
-                    or rec["prev_hash"] == ""
-                    or rec["prev_hash"]
-                    == "0" * 64
-                )
-            else:
-                assert rec["prev_hash"] != ""
+    # chain_hash[i] feeds into prev_chain_hash[i+1]
+    for i in range(1, len(lines)):
+        assert (
+            lines[i]["prev_chain_hash"]
+            == lines[i - 1]["chain_hash"]
+        )
 
 
 def test_ledger_creates_file(tmp_path):
