@@ -1,0 +1,12 @@
+{
+  "task_id": "requests__requests-3362",
+  "status": "FAIL",
+  "iters": 5,
+  "final_patch_unified_diff": "",
+  "tests": {},
+  "risk": {
+    "decision": "ALLOW",
+    "reasons": []
+  },
+  "replay_dir": "/tmp/swebench_work/requests__requests-3362/replays/requests__requests-3362_1770503767212"
+}
