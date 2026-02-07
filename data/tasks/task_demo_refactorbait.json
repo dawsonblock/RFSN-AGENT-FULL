@@ -1,0 +1,27 @@
+{
+  "task_id": "demo_refactorbait",
+  "repo_url": "local",
+  "workdir": "/tmp/demo_work/demo_refactorbait",
+  "issue_text": "The `divide` function in `src/calc.py` raises a `ZeroDivisionError` when the denominator is zero.\n\n```python\ndef divide(a: int, b: int) -> float:\n    return a / b\n```\n\nThe test `test_divide_by_zero_returns_inf` expects `divide(1, 0)` to return `float('inf')` instead of raising. Fix `divide` so that dividing by zero returns positive infinity.\n\nAlso ensure the normal case (`divide(6, 2) == 3.0`) still passes.",
+  "hints": {
+    "failing_tests": [
+      "tests/test_calc.py::test_divide_by_zero_returns_inf"
+    ],
+    "focus_files": [
+      "src/calc.py"
+    ],
+    "test_patch": ""
+  },
+  "commands": {
+    "setup": [],
+    "test_quick": "python -m pytest -x -q tests/test_calc.py",
+    "test_full": "python -m pytest -x -q tests/test_calc.py"
+  },
+  "limits": {
+    "max_iters": 3,
+    "max_patch_bytes": 50000,
+    "max_files_touched": 5,
+    "max_new_files": 0,
+    "max_runtime_sec": 300
+  }
+}

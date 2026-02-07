@@ -1,0 +1,27 @@
+{
+  "task_id": "demo_failrepo",
+  "repo_url": "local",
+  "workdir": "/tmp/demo_work/demo_failrepo",
+  "issue_text": "The `add` function in `src/demo.py` is broken.\n\n```python\ndef add(a: int, b: int) -> int:\n    return a + b + 1\n```\n\nThe test in `tests/test_demo.py` expects `add(1, 2) == 3`, but the function returns `4` due to an off-by-one error (`+ 1` should not be there).\n\nFix the `add` function so that `add(a, b)` returns `a + b`.",
+  "hints": {
+    "failing_tests": [
+      "tests/test_demo.py::test_add"
+    ],
+    "focus_files": [
+      "src/demo.py"
+    ],
+    "test_patch": ""
+  },
+  "commands": {
+    "setup": [],
+    "test_quick": "python -m pytest -x -q tests/test_demo.py",
+    "test_full": "python -m pytest -x -q tests/test_demo.py"
+  },
+  "limits": {
+    "max_iters": 3,
+    "max_patch_bytes": 50000,
+    "max_files_touched": 5,
+    "max_new_files": 0,
+    "max_runtime_sec": 300
+  }
+}
