@@ -19,10 +19,6 @@ Thumbs.db
 # Hypothesis test database
 .hypothesis/
 
-# Type checker / test caches
-.mypy_cache/
-.pytest_cache/
-
 # Temporary work dirs (large cloned repos)
 /tmp/
 
