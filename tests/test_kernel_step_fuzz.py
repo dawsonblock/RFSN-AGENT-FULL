@@ -11,6 +11,7 @@ from services.orchestrator.kernel import (
 k = Kernel(
     "shared/bundle_schema.json",
     "policies/tool_allowlist.yaml",
+    "policies/gate_policy.yaml",
 )
 STEP_TYPE = st.text(
     st.characters(
@@ -33,7 +34,7 @@ def test_kernel_rejects_non_allowlisted_step_types(step_type):
         "steps": [{"id": "s1", "type": step_type}],
         "acceptance": {"tests_green": True, "no_new_failures": True},
     }
-    errs = k.validate_bundle(bundle)
+    errs = k.validate_and_plan(bundle)["errors"]
     allow = {
         "repo_search", "repo_read_range",
         "apply_patch", "ensure_deps",

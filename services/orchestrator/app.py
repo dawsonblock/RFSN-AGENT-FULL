@@ -32,6 +32,7 @@ if _HAS_AUTH:
 
 LLM_URL = os.getenv("LLM_URL", "http://llm_service:8001")
 TOOL_GATEWAY_URL = os.getenv("TOOL_GATEWAY_URL", "http://tool_gateway:8002")
+LEARNER_URL = os.getenv("LEARNER_URL", "http://learner_service:8004")
 SEED = os.getenv("RFSN_SEED", "1")
 
 
@@ -51,7 +52,11 @@ def _load_yaml(path: str) -> dict:
 DEPS_POLICY = _load_yaml("/policies/deps_policy.yaml")
 TEST_POLICY = _load_yaml("/policies/test_policy.yaml")
 
-kernel = Kernel("/shared/bundle_schema.json", "/policies/tool_allowlist.yaml")
+kernel = Kernel(
+    "/shared/bundle_schema.json",
+    "/policies/tool_allowlist.yaml",
+    "/policies/gate_policy.yaml",
+)
 ledger = Ledger("/data/ledger.jsonl")
 
 
@@ -132,6 +137,83 @@ def llm_chat(
     if r.status_code != 200:
         raise HTTPException(r.status_code, r.text)
     return r.json()
+
+
+def failure_signature(text: str) -> str:
+    """Deterministic signature for learner bucketing."""
+    blob = (text or "").encode(
+        "utf-8", errors="ignore",
+    )[:20000]
+    return hashlib.sha256(blob).hexdigest()[:16]
+
+
+def learner_suggest(
+    repo_id: str, task: str,
+) -> dict:
+    payload = {
+        "repo_id": repo_id,
+        "task": task,
+        "meta": {
+            "lang": "py",
+            "tests": "pytest",
+            "framework": "unknown",
+        },
+    }
+    try:
+        r = requests.post(
+            f"{LEARNER_URL}/suggest",
+            json=payload,
+            headers=auth_headers(),
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    # Learner is advisory; fail open.
+    return {
+        "context_key": "py|pytest|unknown",
+        "strategy_id": (
+            "S1_search_then_patch_small"
+        ),
+        "prompt_addendum": (
+            "Strategy: search first, narrow reads,"
+            " patch minimal. No refactor."
+        ),
+        "constraints": {
+            "max_patch_files": 6,
+            "max_patch_total_lines": 300,
+            "forbid_test_edits": True,
+        },
+    }
+
+
+def learner_ingest(
+    run_id: str,
+    strategy_id: str,
+    success: bool,
+    fail_sig: str,
+) -> None:
+    payload = {
+        "run_id": run_id,
+        "strategy_id": strategy_id,
+        "meta": {
+            "lang": "py",
+            "tests": "pytest",
+            "framework": "unknown",
+        },
+        "success": bool(success),
+        "failure_signature": fail_sig or "",
+    }
+    try:
+        requests.post(
+            f"{LEARNER_URL}/ingest",
+            json=payload,
+            headers=auth_headers(),
+            timeout=10,
+        )
+    except Exception:
+        return
 
 
 @app.post("/run")
@@ -249,14 +331,49 @@ def run(req: RunReq):
     # LLM loop
     call_index = 0
     last_fail = ""
+    last_strategy = None
     for it in range(1, req.max_iters + 1):
         fail_ctx = (
             "\n\nLast failure:\n" + last_fail
             if last_fail else ""
         )
+
+        sug = learner_suggest(
+            req.repo_id, req.task,
+        )
+        last_strategy = sug.get("strategy_id")
+        constraints = (
+            sug.get("constraints") or {}
+        )
+
+        ledger.append({
+            "type": "LEARNER_SUGGESTED",
+            "run_id": run_id,
+            "iter": it,
+            "strategy_id": sug.get(
+                "strategy_id",
+            ),
+            "context_key": sug.get(
+                "context_key",
+            ),
+            "constraints": constraints,
+        })
+
         prompt = USER_TEMPLATE.format(
             repo_id=req.repo_id,
             task=req.task + fail_ctx,
+            learner_addendum=sug.get(
+                "prompt_addendum", "",
+            ),
+            max_patch_files=constraints.get(
+                "max_patch_files", 6,
+            ),
+            max_patch_total_lines=constraints.get(
+                "max_patch_total_lines", 300,
+            ),
+            forbid_test_edits=constraints.get(
+                "forbid_test_edits", True,
+            ),
         )
         messages = [
             {"role": "system", "content": SYSTEM},
@@ -314,7 +431,15 @@ def run(req: RunReq):
             "decision": decision,
         })
         if not decision["ok"]:
-            last_fail = json.dumps(decision["errors"])
+            last_fail = json.dumps(
+                decision["errors"],
+            )
+            learner_ingest(
+                run_id,
+                last_strategy or "unknown",
+                False,
+                failure_signature(last_fail),
+            )
             continue
 
         # Optionally insert deps if tests exist and venv missing
@@ -374,7 +499,15 @@ def run(req: RunReq):
 
             if out.get("status", 0) != 0:
                 ok = False
-                last_fail = out.get("logs", "")[:5000]
+                last_fail = (
+                    out.get("logs", "")[:5000]
+                )
+                learner_ingest(
+                    run_id,
+                    last_strategy or "unknown",
+                    False,
+                    failure_signature(last_fail),
+                )
                 break
 
         if ok:
@@ -437,6 +570,12 @@ def run(req: RunReq):
                 "run_id": run_id,
                 "status": "ok",
             })
+            learner_ingest(
+                run_id,
+                last_strategy or "unknown",
+                True,
+                "",
+            )
             return {
                 "run_id": run_id,
                 "status": "ok",
@@ -448,6 +587,12 @@ def run(req: RunReq):
         "run_id": run_id,
         "status": "fail",
     })
+    learner_ingest(
+        run_id,
+        last_strategy or "unknown",
+        False,
+        failure_signature(last_fail),
+    )
     return {
         "run_id": run_id,
         "status": "fail",

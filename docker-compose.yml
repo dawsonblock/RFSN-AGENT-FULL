@@ -9,6 +9,7 @@ services:
     environment:
       LLM_URL: http://llm_service:8001
       TOOL_GATEWAY_URL: http://tool_gateway:8002
+      LEARNER_URL: http://learner_service:8004
       RFSN_SEED: ${RFSN_SEED:-1}
       LEDGER_FIXED_TS: ${LEDGER_FIXED_TS:-1.0}
       RFSN_SERVICE_TOKEN: ${RFSN_SERVICE_TOKEN:-}
@@ -73,6 +74,21 @@ services:
           memory: 1g
           cpus: '2'
 
+  learner_service:
+    build: ./services/learner_service
+    expose: ["8004"]
+    volumes:
+      - ./data:/data
+      - ./shared:/shared:ro
+    environment:
+      LEARNER_DB: /data/learner.duckdb
+      RFSN_SERVICE_TOKEN: ${RFSN_SERVICE_TOKEN:-}
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: '1'
+
   # Blessed sandbox image — build once:
   #   docker compose --profile build-blessed build blessed
   # or directly:
@@ -100,5 +116,6 @@ services:
     depends_on:
       - orchestrator
       - llm_service
+      - learner_service
       - tool_gateway
       - executor

@@ -1,0 +1,16 @@
+# Deterministic kernel gate policy (final authority)
+max_patch_files: 6
+max_patch_total_lines: 300
+
+# Default safety posture: don't let the agent mutate
+# tests/CI/deps without explicit intent.
+forbid_test_edits: true
+forbid_ci_edits: true
+forbid_dep_manifest_edits: true
+
+# When a patch exists, enforce that tests are present
+# (targeted then suite).
+enforce_tests: true
+
+# Risk scoring thresholds
+reject_risk_score: 60
