@@ -16,7 +16,8 @@
   "commands": {
     "setup": [
       "python3 -m venv .venv",
-      ". .venv/bin/activate && pip install numpy pytest && pip install -e ."
+      "printf '[libs]\\nsystem_freetype = True\\n' > mplsetup.cfg",
+      ". .venv/bin/activate && pip install 'numpy<2' pytest setuptools-scm contourpy cycler fonttools kiwisolver pillow pyparsing python-dateutil && pip install --no-build-isolation -e ."
     ],
     "test_quick": ". .venv/bin/activate && python -m pytest -x -q lib/matplotlib/tests/test_figure.py::test_unpickle_with_device_pixel_ratio",
     "test_full": ". .venv/bin/activate && python -m pytest -x -q lib/matplotlib/tests/test_figure.py"
