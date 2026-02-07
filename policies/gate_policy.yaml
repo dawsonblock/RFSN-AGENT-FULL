@@ -14,3 +14,42 @@ enforce_tests: true
 
 # Risk scoring thresholds
 reject_risk_score: 60
+
+# ── Per-step-type budgets (per iteration) ────────
+# Hard caps enforced deterministically by the gate.
+# Exceeding any count → BUDGET_EXCEEDED rejection.
+step_budgets:
+  repo_search:
+    max_per_iter: 4
+    timeout_s: 30
+  repo_read_range:
+    max_per_iter: 6
+    max_lines_per_read: 300
+    timeout_s: 15
+  apply_patch:
+    max_per_iter: 2
+    timeout_s: 60
+  ensure_deps:
+    max_per_iter: 1
+    timeout_s: 420
+  run_tests:
+    max_per_iter: 4
+    timeout_s: 900
+
+# Total steps allowed in a single bundle.
+max_steps_per_bundle: 15
+
+# repo_read_range path policy: block traversal and
+# sensitive paths inside the repo.
+blocked_read_prefixes:
+  - ".git/"
+  - ".github/workflows/"
+  - "ci/"
+  - "scripts/"
+blocked_read_suffixes:
+  - ".pem"
+  - ".key"
+  - ".p12"
+  - ".env"
+  - ".pypirc"
+  - ".netrc"
