@@ -1,0 +1,5 @@
+{
+  "task_id": "flask__flask-4045",
+  "status": "ABORT",
+  "error": "git apply failed:\nerror: tests/test_basic.py: No such file or directory\nerror: tests/test_blueprints.py: No such file or directory\n\n"
+}
