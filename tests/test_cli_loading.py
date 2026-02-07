@@ -10,7 +10,7 @@ sys.path.insert(
     os.path.join(os.path.dirname(__file__), ".."),
 )
 
-from rfsn_swebench.cli import load_task
+from rfsn_swebench.cli import load_task  # noqa: E402
 
 
 # ── task loading ─────────────────────────────

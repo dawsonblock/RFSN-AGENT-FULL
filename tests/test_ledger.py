@@ -1,7 +1,6 @@
 """Tests for the orchestrator ledger hash-chain."""
 import json
 import os
-import tempfile
 import sys
 
 sys.path.insert(
@@ -11,7 +10,7 @@ sys.path.insert(
         "..", "services", "orchestrator",
     ),
 )
-from ledger import Ledger  # type: ignore[import-not-found]
+from ledger import Ledger  # noqa: E402  # type: ignore[import-not-found]
 
 
 def test_ledger_writes_jsonl(tmp_path):
@@ -21,7 +20,8 @@ def test_ledger_writes_jsonl(tmp_path):
     lg.append({"type": "TEST", "val": 2})
     with open(path, "r") as f:
         lines = [
-            json.loads(l) for l in f if l.strip()
+            json.loads(line) for line in f
+            if line.strip()
         ]
     assert len(lines) == 2
     # event is nested: rec["event"]["type"]
@@ -48,7 +48,8 @@ def test_ledger_hash_chain(tmp_path):
     lg.append({"type": "C"})
     with open(path, "r") as f:
         lines = [
-            json.loads(l) for l in f if l.strip()
+            json.loads(line) for line in f
+            if line.strip()
         ]
     # chain_hash[i] feeds into prev_chain_hash[i+1]
     for i in range(1, len(lines)):

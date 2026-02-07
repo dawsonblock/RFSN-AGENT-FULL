@@ -1,7 +1,5 @@
 """Tests for services/orchestrator/context_fingerprint.py."""
 import os
-import tempfile
-import shutil
 
 import pytest
 
@@ -14,7 +12,7 @@ sys.path.insert(
         "..", "services", "orchestrator",
     ),
 )
-from context_fingerprint import (  # type: ignore[import-not-found]
+from context_fingerprint import (  # noqa: E402  # type: ignore[import-not-found]
     detect_framework,
     detect_tests,
     detect_lang,

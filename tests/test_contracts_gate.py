@@ -2,24 +2,21 @@
 import os
 import sys
 
-import pytest
-
 # Ensure rfsn_swebench package is importable
 sys.path.insert(
     0,
     os.path.join(os.path.dirname(__file__), ".."),
 )
 
-from rfsn_swebench.contracts import (
+from rfsn_swebench.contracts import (  # noqa: E402
     BenchTask,
     BenchResult,
     TaskLimits,
-    TaskCommands,
     TaskHints,
     TestRun,
     RiskReport,
 )
-from rfsn_swebench.gate import patch_risk_gate
+from rfsn_swebench.gate import patch_risk_gate  # noqa: E402
 
 
 # ── contracts ────────────────────────────────

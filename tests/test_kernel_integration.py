@@ -4,8 +4,6 @@ Tests cover: multi-proposal selection logic,
 test ordering enforcement, patch content bans,
 risk scoring, and edge-case bundles.
 """
-import copy
-import json
 import os
 import sys
 
@@ -18,7 +16,7 @@ sys.path.insert(
         "..", "services", "orchestrator",
     ),
 )
-from kernel import (  # type: ignore[import-not-found]
+from kernel import (  # noqa: E402  # type: ignore[import-not-found]
     Kernel,
     _extract_touched_files,
     _count_diff_lines,
