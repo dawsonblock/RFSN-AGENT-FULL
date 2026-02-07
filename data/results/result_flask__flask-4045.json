@@ -1,0 +1,19 @@
+{
+  "task_id": "flask__flask-4045",
+  "status": "ABORT",
+  "iters": 0,
+  "final_patch_unified_diff": "",
+  "tests": {
+    "setup": {
+      "exit_code": 2,
+      "stdout_tail": "",
+      "stderr_tail": "usage: venv [-h] [--system-site-packages] [--symlinks | --copies] [--clear]\n            [--upgrade] [--without-pip] [--prompt PROMPT] [--upgrade-deps]\n            ENV_DIR [ENV_DIR ...]\nvenv: error: unrecognized arguments: -e .[dev] && pip install pytest\n",
+      "duration_sec": 0.136
+    }
+  },
+  "risk": {
+    "decision": "ALLOW",
+    "reasons": []
+  },
+  "replay_dir": "/tmp/swebench_work/flask__flask-4045/replays/flask__flask-4045_1770500690358"
+}
