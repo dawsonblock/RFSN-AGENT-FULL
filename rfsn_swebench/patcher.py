@@ -30,7 +30,6 @@ def _reanchor_patch(patch_text: str, workdir: str) -> str:
     their true offset in the file, then rewrite the ``@@`` header.
     """
     lines = patch_text.splitlines(keepends=True)
-    # Collect file targets  ("+++ b/path")
     cur_file: str | None = None
     file_lines_cache: dict[str, list[str]] = {}
     result: list[str] = []
@@ -51,13 +50,11 @@ def _reanchor_patch(patch_text: str, workdir: str) -> str:
         if m and cur_file:
             # Collect context lines from this hunk
             ctx_lines: list[str] = []
-            hunk_body: list[str] = []
             idx = lines.index(line)
             for body_line in lines[idx + 1:]:
                 bs = body_line.rstrip("\n\r")
                 if _HUNK_RE.match(bs) or bs.startswith("diff --git") or bs.startswith("--- a/") or bs.startswith("+++ b/"):
                     break
-                hunk_body.append(body_line)
                 if bs.startswith(" "):
                     ctx_lines.append(bs[1:])  # strip leading space
 
@@ -72,13 +69,11 @@ def _reanchor_patch(patch_text: str, workdir: str) -> str:
                         file_lines_cache[cur_file] = []
 
                 real_file = file_lines_cache[cur_file]
-                # Search for the first context line in the real file
                 needle = ctx_lines[0].rstrip()
                 old_start = int(m.group(1))
                 found_at = None
                 for ri, rl in enumerate(real_file):
                     if rl.rstrip() == needle:
-                        # Verify next context lines match too
                         ok = True
                         for ci, cl in enumerate(ctx_lines[1:4], 1):
                             if ri + ci < len(real_file):
@@ -96,12 +91,10 @@ def _reanchor_patch(patch_text: str, workdir: str) -> str:
                     old_cnt = m.group(2) or "1"
                     new_cnt = m.group(4) or "1"
                     tail = m.group(5)
-                    new_start = found_at
-                    # Adjust new-side start by same delta
-                    delta = new_start - old_start
+                    delta = found_at - old_start
                     orig_new_start = int(m.group(3))
                     adj_new_start = orig_new_start + delta
-                    line = f"@@ -{new_start},{old_cnt} +{adj_new_start},{new_cnt} @@{tail}\n"
+                    line = f"@@ -{found_at},{old_cnt} +{adj_new_start},{new_cnt} @@{tail}\n"
 
         result.append(line)
 
@@ -127,7 +120,7 @@ def apply_unified_diff(
     3. ``git apply -C0`` (zero context required)
     4. ``git apply --3way`` (uses index for fuzzy matching)
     5. Re-anchor line numbers then retry ``git apply -C1``
-    6. ``patch -p1 --fuzz=3`` (Unix patch with fuzz)
+    6. ``patch -p1 -F3 --batch`` (Unix patch with fuzz)
 
     When *strict* is True (used for SWE-bench test_patch), uses strict
     mode only and fails immediately on error.
@@ -186,8 +179,12 @@ def apply_unified_diff(
                     run_cmd(["git", "checkout", "--", "."], cwd=workdir, timeout_sec=60)
 
             # Strategy 6: fall back to Unix `patch` with fuzz
+            # Use --batch to avoid interactive prompts, --force to apply
+            # even if previously applied, -F3 for fuzz factor of 3
+            import shlex
+            quoted_path = shlex.quote(tmp_path)
             code, out, err, _ = run_cmd(
-                f"patch -p1 --fuzz=3 --no-backup-if-mismatch < {tmp_path}",
+                f"patch -p1 -F3 --batch --force < {quoted_path}",
                 cwd=workdir, timeout_sec=120, shell=True,
             )
             if code == 0:

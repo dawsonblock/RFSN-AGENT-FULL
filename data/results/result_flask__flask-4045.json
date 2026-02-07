@@ -1,5 +1,19 @@
 {
   "task_id": "flask__flask-4045",
-  "status": "ABORT",
-  "error": "git apply failed:\nerror: tests/test_basic.py: No such file or directory\nerror: tests/test_blueprints.py: No such file or directory\n\n"
+  "status": "FAIL",
+  "iters": 5,
+  "final_patch_unified_diff": "diff --git a/src/flask/blueprints.py b/src/flask/blueprints.py\nindex 5fb84d86..e1c022b9 100644\n--- a/src/flask/blueprints.py\n+++ b/src/flask/blueprints.py\n@@ -188,6 +188,9 @@ class Blueprint(Scaffold):\n             template_folder=template_folder,\n             root_path=root_path,\n         )\n+        if \".\" in name:\n+            raise ValueError(\n+                \"Blueprint names may not contain dot '.' characters.\")\n         self.name = name\n         self.url_prefix = url_prefix\n         self.subdomain = subdomain\n",
+  "tests": {
+    "quick": {
+      "exit_code": 1,
+      "stdout_tail": ".F\n=================================== FAILURES ===================================\n________________ test_route_decorator_custom_endpoint_with_dots ________________\n\napp = <Flask 'flask_test'>, client = <FlaskClient <Flask 'flask_test'>>\n\n    def test_route_decorator_custom_endpoint_with_dots(app, client):\n        bp = flask.Blueprint(\"bp\", __name__)\n    \n        with pytest.raises(ValueError):\n>           bp.route(\"/\", endpoint=\"a.b\")(lambda: \"\")\n\ntests/test_blueprints.py:326: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \nsrc/flask/scaffold.py:433: in decorator\n    self.add_url_rule(rule, endpoint, f, **options)\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nself = <Blueprint 'bp'>, rule = '/', endpoint = 'a.b'\nview_func = <function test_route_decorator_custom_endpoint_with_dots.<locals>.<lambda> at 0x108b4fd30>\noptions = {}\n\n    def add_url_rule(\n        self,\n        rule: str,\n        endpoint: t.Optional[str] = None,\n        view_func: t.Optional[t.Callable] = None,\n        **options: t.Any,\n    ) -> None:\n        \"\"\"Like :meth:`Flask.add_url_rule` but for a blueprint.  The endpoint for\n        the :func:`url_for` function is prefixed with the name of the blueprint.\n        \"\"\"\n        if endpoint:\n>           assert \".\" not in endpoint, \"Blueprint endpoints should not contain dots\"\nE           AssertionError: Blueprint endpoints should not contain dots\n\nsrc/flask/blueprints.py:367: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_blueprints.py::test_route_decorator_custom_endpoint_with_dots\n!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!\n1 failed, 1 passed in 0.21s\n",
+      "stderr_tail": "",
+      "duration_sec": 0.641
+    }
+  },
+  "risk": {
+    "decision": "ALLOW",
+    "reasons": []
+  },
+  "replay_dir": "/tmp/swebench_work/flask__flask-4045/replays/flask__flask-4045_1770506055658"
 }
