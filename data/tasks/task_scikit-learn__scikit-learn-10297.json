@@ -16,10 +16,10 @@
   "commands": {
     "setup": [
       "python3 -m venv .venv",
-      "bash -c '. .venv/bin/activate && pip install numpy scipy cython pytest && pip install --no-build-isolation -e .'"
+      ". .venv/bin/activate && pip install numpy scipy cython pytest && pip install --no-build-isolation -e ."
     ],
-    "test_quick": "bash -c '. .venv/bin/activate && python -m pytest -x -q sklearn/linear_model/tests/test_ridge.py::test_ridge_classifier_cv_store_cv_values'",
-    "test_full": "bash -c '. .venv/bin/activate && python -m pytest -x -q sklearn/linear_model/tests/test_ridge.py'"
+    "test_quick": ". .venv/bin/activate && python -m pytest -x -q sklearn/linear_model/tests/test_ridge.py::test_ridge_classifier_cv_store_cv_values",
+    "test_full": ". .venv/bin/activate && python -m pytest -x -q sklearn/linear_model/tests/test_ridge.py"
   },
   "limits": {
     "max_iters": 5,

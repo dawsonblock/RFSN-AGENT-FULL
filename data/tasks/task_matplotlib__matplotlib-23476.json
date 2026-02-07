@@ -16,10 +16,10 @@
   "commands": {
     "setup": [
       "python3 -m venv .venv",
-      "bash -c '. .venv/bin/activate && pip install numpy pytest && pip install -e .'"
+      ". .venv/bin/activate && pip install numpy pytest && pip install -e ."
     ],
-    "test_quick": "bash -c '. .venv/bin/activate && python -m pytest -x -q lib/matplotlib/tests/test_figure.py::test_unpickle_with_device_pixel_ratio'",
-    "test_full": "bash -c '. .venv/bin/activate && python -m pytest -x -q lib/matplotlib/tests/test_figure.py'"
+    "test_quick": ". .venv/bin/activate && python -m pytest -x -q lib/matplotlib/tests/test_figure.py::test_unpickle_with_device_pixel_ratio",
+    "test_full": ". .venv/bin/activate && python -m pytest -x -q lib/matplotlib/tests/test_figure.py"
   },
   "limits": {
     "max_iters": 5,

@@ -16,10 +16,10 @@
   "commands": {
     "setup": [
       "python3 -m venv .venv",
-      "bash -c '. .venv/bin/activate && pip install -e . && pip install pytest'"
+      ". .venv/bin/activate && pip install -e . && pip install pytest"
     ],
-    "test_quick": "bash -c '. .venv/bin/activate && python -m pytest -x -q tests/test_requests.py::TestRequests::test_response_decode_unicode'",
-    "test_full": "bash -c '. .venv/bin/activate && python -m pytest -x -q tests/test_requests.py'"
+    "test_quick": ". .venv/bin/activate && python -m pytest -x -q tests/test_requests.py::TestRequests::test_response_decode_unicode",
+    "test_full": ". .venv/bin/activate && python -m pytest -x -q tests/test_requests.py"
   },
   "limits": {
     "max_iters": 5,

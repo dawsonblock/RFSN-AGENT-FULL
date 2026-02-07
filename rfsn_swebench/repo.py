@@ -76,7 +76,9 @@ def git_reset_hard(workdir: str) -> None:
     run_cmd(["git", "reset", "--hard"], cwd=workdir, timeout_sec=120)
     # Exclude replays/ — the replay event log lives inside the workdir
     # and must survive across iterations.
+    # Exclude .venv/ — setup commands may create a virtual-environment that
+    # must persist across propose/test iterations.
     run_cmd(
-        ["git", "clean", "-fd", "--exclude=replays"],
+        ["git", "clean", "-fd", "--exclude=replays", "--exclude=.venv"],
         cwd=workdir, timeout_sec=120,
     )
