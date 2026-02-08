@@ -1,11 +1,19 @@
+import hashlib
 import os
 import random
 import sys
+from typing import Optional
 
 from fastapi import FastAPI  # type: ignore[import-not-found]
 from pydantic import BaseModel  # type: ignore[import-not-found]
 
 from store_duckdb import DuckStore  # type: ignore[import-not-found]
+from playbooks import (  # type: ignore[import-not-found]
+    PLAYBOOKS,
+    PLAYBOOK_IDS,
+    PLAYBOOK_MAP,
+    FAILURE_PLAYBOOK_PRIORS,
+)
 
 sys.path.insert(0, "/shared")
 try:
@@ -27,48 +35,33 @@ LEARNER_DB = os.getenv(
 )
 store = DuckStore(LEARNER_DB)
 
-STRATEGIES = [
-    "S1_search_then_patch_small",
-    "S2_patch_small_targeted_first",
-    "S3_error_signature_driven",
-    "S4_dependency_first",
-    "S5_refactor_blocker",
-]
+# ── Strategy arms = Playbook IDs ──────────────
+# The bandit arms are now concrete playbooks from
+# the playbook catalog, not abstract strategy names.
+STRATEGIES = PLAYBOOK_IDS
 
+# Build addenda from playbooks.
 _ADDENDA = {
-    "S1_search_then_patch_small": (
-        "Strategy: search first, narrow reads,"
-        " patch minimal. No refactor."
-        " Keep diff small. Run pytest_targeted"
-        " first; suite only after green."
-    ),
-    "S2_patch_small_targeted_first": (
-        "Strategy: patch minimal immediately."
-        " No refactor. Run pytest_targeted"
-        " first; suite only after green."
-    ),
-    "S3_error_signature_driven": (
-        "Strategy: use failing stacktrace/error"
-        " signature to locate exact code."
-        " Patch minimal. Run pytest_targeted"
-        " first; suite only after green."
-    ),
-    "S4_dependency_first": (
-        "Strategy: if import/build errors, fix"
-        " deps/install first; then patch minimal."
-        " Run pytest_targeted first; suite only"
-        " after green."
-    ),
-    "S5_refactor_blocker": (
-        "Strategy: forbid refactor. Only surgical"
-        " fix. Diff must be tiny. Run"
-        " pytest_targeted first; suite only"
-        " after green."
-    ),
+    pb.playbook_id: pb.prompt_addendum
+    for pb in PLAYBOOKS
 }
+
+# ── Failure-class → playbook priors ───────────
+# When the bandit has zero data for a context,
+# use domain knowledge to pick the playbook
+# designed for that failure class.
+_FAILURE_STRATEGY_PRIORS: dict[str, str] = (
+    FAILURE_PLAYBOOK_PRIORS
+)
 
 
 def context_key(meta: dict) -> str:
+    """Build context key for Thompson sampling.
+
+    Includes failure_class and stage so the bandit
+    can learn different strategies for different
+    failure types at different pipeline stages.
+    """
     lang = (meta.get("lang") or "py").strip().lower()
     tests = (
         (meta.get("tests") or "pytest").strip().lower()
@@ -78,13 +71,32 @@ def context_key(meta: dict) -> str:
         .strip()
         .lower()
     )
-    return f"{lang}|{tests}|{fw}"
+    fail = (
+        (meta.get("failure") or "none")
+        .strip()
+        .lower()
+    )
+    stage = (
+        (meta.get("stage") or "unknown")
+        .strip()
+        .lower()
+    )
+    return f"{lang}|{tests}|{fw}|{fail}|{stage}"
+
+
+def _task_hash(repo_id: str, task: str) -> str:
+    """Deterministic hash for task dedup."""
+    blob = f"{repo_id}|{task}"
+    return hashlib.sha256(
+        blob.encode("utf-8"),
+    ).hexdigest()[:16]
 
 
 class SuggestReq(BaseModel):
     repo_id: str
     task: str
     meta: dict = {}
+    failure_signature_hash: Optional[str] = None
 
 
 class SuggestResp(BaseModel):
@@ -92,6 +104,10 @@ class SuggestResp(BaseModel):
     strategy_id: str
     prompt_addendum: str
     constraints: dict
+    failure_hint: Optional[str] = None
+    past_outcomes: Optional[list] = None
+    playbook_id: Optional[str] = None
+    playbook_guidance: Optional[str] = None
 
 
 class IngestReq(BaseModel):
@@ -100,6 +116,25 @@ class IngestReq(BaseModel):
     meta: dict = {}
     success: bool
     failure_signature: str = ""
+    # Extended fields for outcome mapping
+    repo_id: str = ""
+    task: str = ""
+    patch_hash: str = ""
+    patch_files: str = ""
+    patch_added: int = 0
+    patch_deleted: int = 0
+    test_exit_code: int = -1
+    tests_passed: int = 0
+    tests_failed: int = 0
+    tests_total: int = 0
+    failure_class: str = ""
+    dense_reward: float = 0.0
+    stage: str = ""
+    # Structured failure fields
+    failure_module: str = ""
+    failure_test: str = ""
+    failure_message: str = ""
+    failure_signature_hash: str = ""
 
 
 @app.get("/health")
@@ -115,7 +150,36 @@ def suggest(req: SuggestReq):
 
     post = store.get_posteriors(ck)
 
-    # Thompson sampling over Beta posteriors.
+    # ── Failure-signature-aware routing ───────
+    # If we've seen this failure before, bias
+    # toward the strategy that worked last time.
+    failure_hint: Optional[str] = None
+    sig_boost_sid: Optional[str] = None
+
+    if req.failure_signature_hash:
+        known = store.lookup_failure(
+            req.failure_signature_hash,
+        )
+        if known and known.get("best_strategy_id"):
+            sig_boost_sid = known["best_strategy_id"]
+            wr = known.get(
+                "best_strategy_win_rate", 0,
+            )
+            failure_hint = (
+                f"Known failure pattern"
+                f" (seen {known['occurrence_count']}x)."
+                f" Best strategy:"
+                f" {sig_boost_sid}"
+                f" (win rate: {wr:.0%})."
+            )
+            if known.get("failure_test"):
+                failure_hint += (
+                    f" Failing test:"
+                    f" {known['failure_test']}."
+                )
+
+    # Thompson sampling over Beta posteriors,
+    # with optional boost for known failures.
     best_sid = STRATEGIES[0]
     best_sample = -1.0
     for sid in STRATEGIES:
@@ -126,31 +190,77 @@ def suggest(req: SuggestReq):
             post.get(sid, {}).get("beta", 1.0),
         )
         sample = random.betavariate(a, b)
+
+        # Boost known-good strategy for this
+        # failure signature.
+        if sig_boost_sid and sid == sig_boost_sid:
+            sample *= 1.5
+
         if sample > best_sample:
             best_sample = sample
             best_sid = sid
 
+    # If we have zero data and know the failure
+    # class, use the prior mapping.
+    fc = (req.meta.get("failure") or "").strip()
+    total_trials = sum(
+        post.get(sid, {}).get("trials", 0)
+        for sid in STRATEGIES
+    )
+    if (
+        total_trials == 0
+        and fc in _FAILURE_STRATEGY_PRIORS
+    ):
+        best_sid = _FAILURE_STRATEGY_PRIORS[fc]
+
     addendum = _ADDENDA[best_sid]
 
+    # ── Past outcome lookup ───────────────────
+    past_outcomes: Optional[list] = None
+    th = _task_hash(req.repo_id, req.task)
+    history = store.lookup_patch_history(
+        th, limit=5,
+    )
+    if history:
+        past_outcomes = history
+
     # Learner recommends; Gate enforces final policy.
+    # Constraints MUST match what gate_policy.yaml
+    # and tool_gateway actually enforce.
     constraints = {
-        "max_patch_files": 6,
-        "max_patch_total_lines": 300,
+        "max_patch_files": 3,
+        "max_patch_total_lines": 80,
+        "max_added_lines": 40,
+        "max_deleted_lines": 40,
         "forbid_test_edits": True,
         "enforce_tests": True,
     }
+
+    # Look up the full playbook for guidance.
+    pb = PLAYBOOK_MAP.get(best_sid)
+    pb_guidance = pb.prompt_addendum if pb else None
 
     return SuggestResp(
         context_key=ck,
         strategy_id=best_sid,
         prompt_addendum=addendum,
         constraints=constraints,
+        failure_hint=failure_hint,
+        past_outcomes=past_outcomes,
+        playbook_id=best_sid,
+        playbook_guidance=pb_guidance,
     )
 
 
 @app.post("/ingest")
 def ingest(req: IngestReq):
-    ck = context_key(req.meta)
+    # Inject stage into meta for context_key.
+    meta = dict(req.meta)
+    if req.stage:
+        meta["stage"] = req.stage
+    ck = context_key(meta)
+
+    # Record episode for Thompson sampling.
     store.record_episode(
         run_id=req.run_id,
         context_key=ck,
@@ -158,4 +268,159 @@ def ingest(req: IngestReq):
         success=bool(req.success),
         failure_signature=req.failure_signature or "",
     )
+
+    # Record outcome mapping if we have patch data.
+    if req.patch_hash:
+        th = _task_hash(req.repo_id, req.task)
+        store.record_outcome(
+            run_id=req.run_id,
+            repo_id=req.repo_id,
+            task_hash=th,
+            patch_hash=req.patch_hash,
+            patch_files=req.patch_files,
+            patch_added=req.patch_added,
+            patch_deleted=req.patch_deleted,
+            test_exit_code=req.test_exit_code,
+            tests_passed=req.tests_passed,
+            tests_failed=req.tests_failed,
+            tests_total=req.tests_total,
+            failure_class=req.failure_class,
+            failure_signature=(
+                req.failure_signature or ""
+            ),
+            strategy_id=req.strategy_id,
+            success=bool(req.success),
+            dense_reward=req.dense_reward,
+        )
+
+    # Index the failure signature if present.
+    if (
+        req.failure_signature_hash
+        and req.failure_class
+    ):
+        best_sid = None
+        best_wr = None
+        if req.success:
+            best_sid = req.strategy_id
+            best_wr = 1.0
+        store.upsert_failure(
+            signature_hash=(
+                req.failure_signature_hash
+            ),
+            failure_class=req.failure_class,
+            failure_module=req.failure_module or "",
+            failure_test=req.failure_test or "",
+            failure_message=(
+                req.failure_message or ""
+            ),
+            repo_id=req.repo_id,
+            best_strategy_id=best_sid,
+            best_win_rate=best_wr,
+        )
+
     return {"ok": True}
+
+
+# ── Query endpoints for outcome intelligence ──
+
+@app.get("/outcomes/{repo_id}")
+def get_outcomes(repo_id: str, limit: int = 20):
+    """Get recent outcomes for a repo."""
+    rows = store.con.execute(
+        """
+        SELECT run_id, task_hash, patch_hash,
+               success, dense_reward,
+               strategy_id, failure_class,
+               tests_passed, tests_failed,
+               ts
+        FROM outcome_map
+        WHERE repo_id = ?
+        ORDER BY ts DESC
+        LIMIT ?
+        """,
+        [repo_id, limit],
+    ).fetchall()
+    return [
+        {
+            "run_id": r[0],
+            "task_hash": r[1],
+            "patch_hash": r[2],
+            "success": bool(r[3]),
+            "dense_reward": float(r[4]),
+            "strategy_id": r[5],
+            "failure_class": r[6],
+            "tests_passed": int(r[7]),
+            "tests_failed": int(r[8]),
+        }
+        for r in rows
+    ]
+
+
+@app.get("/failures")
+def get_failures(
+    failure_class: Optional[str] = None,
+    limit: int = 20,
+):
+    """Get indexed failure signatures."""
+    if failure_class:
+        return store.find_similar_failures(
+            failure_class, limit=limit,
+        )
+    rows = store.con.execute(
+        """
+        SELECT signature_hash, failure_class,
+               failure_module, failure_test,
+               occurrence_count,
+               best_strategy_id,
+               best_strategy_win_rate
+        FROM failure_index
+        ORDER BY occurrence_count DESC
+        LIMIT ?
+        """,
+        [limit],
+    ).fetchall()
+    return [
+        {
+            "signature_hash": r[0],
+            "failure_class": r[1],
+            "failure_module": r[2],
+            "failure_test": r[3],
+            "occurrence_count": int(r[4]),
+            "best_strategy_id": r[5],
+            "best_strategy_win_rate": (
+                float(r[6]) if r[6] else None
+            ),
+        }
+        for r in rows
+    ]
+
+
+@app.get("/strategy_stats")
+def get_strategy_stats():
+    """Get all strategy stats across contexts."""
+    rows = store.con.execute(
+        """
+        SELECT strategy_id, context_key,
+               trials, wins, losses,
+               alpha, beta
+        FROM strategy_stats
+        WHERE trials > 0
+        ORDER BY trials DESC
+        LIMIT 100
+        """,
+    ).fetchall()
+    return [
+        {
+            "strategy_id": r[0],
+            "context_key": r[1],
+            "trials": int(r[2]),
+            "wins": int(r[3]),
+            "losses": int(r[4]),
+            "alpha": float(r[5]),
+            "beta": float(r[6]),
+            "win_rate": (
+                int(r[3]) / max(int(r[2]), 1)
+            ),
+        }
+        for r in rows
+    ]

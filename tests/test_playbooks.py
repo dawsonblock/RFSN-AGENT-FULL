@@ -18,8 +18,6 @@ from playbooks import (  # noqa: E402  # type: ignore[import-not-found]
     PLAYBOOK_IDS,
     PLAYBOOK_MAP,
     FAILURE_PLAYBOOK_PRIORS,
-    Playbook,
-    PlaybookStep,
     PB_IMPORT_FIX,
     PB_ASSERTION_FIX,
     PB_SYNTAX_FIX,

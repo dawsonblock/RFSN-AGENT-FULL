@@ -6,7 +6,9 @@ allowed_step_types:
   - ensure_deps
   - run_tests
 
-repo_root_required: true
+# Paths are repo-root-relative (src/foo.py, not repo/src/foo.py).
+# The executor cd's into /work/repo, so paths resolve correctly.
+repo_root_required: false
 
 max_patch_bytes: 200000
 max_read_bytes: 200000
@@ -16,7 +18,7 @@ max_search_steps_per_iter: 4
 max_bytes_returned_per_iter: 250000
 
 allowed_paths:
-  - "repo/**"
+  - "**"
 
 blocked_globs:
   - "**/.git/**"

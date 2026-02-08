@@ -1,4 +1,9 @@
 # yaml-language-server: $schema=
+# DEPRECATED: diff-guard limits have been merged into
+# gate_policy.yaml as the single source of truth.
+# tool_gateway now reads from gate_policy.yaml.
+# This file is kept for backward compatibility but
+# is no longer the authoritative source.
 max_changed_files: 3
 max_added_lines: 40
 max_deleted_lines: 40

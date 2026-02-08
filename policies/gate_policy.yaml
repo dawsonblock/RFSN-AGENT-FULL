@@ -1,6 +1,11 @@
 # Deterministic kernel gate policy (final authority)
-max_patch_files: 6
-max_patch_total_lines: 300
+# ── Unified patch limits (single source of truth) ──
+# These are the EFFECTIVE limits enforced at both
+# kernel gate and tool_gateway layers.
+max_patch_files: 3
+max_patch_total_lines: 80
+max_added_lines: 40
+max_deleted_lines: 40
 
 # Default safety posture: don't let the agent mutate
 # tests/CI/deps without explicit intent.
@@ -14,6 +19,11 @@ enforce_tests: true
 
 # Risk scoring thresholds
 reject_risk_score: 60
+
+# λ controls risk vs expected-value balance:
+# score = λ * risk - (1-λ) * expected_value
+# Lower λ → more lenient toward focused patches.
+risk_lambda: 0.7
 
 # ── Per-step-type budgets (per iteration) ────────
 # Hard caps enforced deterministically by the gate.

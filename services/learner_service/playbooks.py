@@ -11,7 +11,7 @@ the learner's strategy_stats and outcome_map tables.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 

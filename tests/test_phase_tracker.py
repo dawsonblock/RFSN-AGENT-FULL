@@ -2,8 +2,6 @@
 import os
 import sys
 
-import pytest  # type: ignore[import-not-found]
-
 sys.path.insert(
     0,
     os.path.join(

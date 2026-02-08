@@ -2,8 +2,6 @@
 import os
 import sys
 
-import pytest
-
 # ── Wire up learner_service imports ──────────
 sys.path.insert(
     0,
@@ -16,8 +14,7 @@ sys.path.insert(
 # We only need the pure function; avoid importing
 # FastAPI app which needs DuckDB at module level.
 # So we extract context_key manually.
-import importlib
-import types
+import types  # noqa: E402
 
 _learner_path = os.path.join(
     os.path.dirname(__file__),
@@ -44,6 +41,8 @@ def _load_context_key():
             func_source = ast.get_source_segment(
                 source, node,
             )
+            if func_source is None:
+                continue
             mod = types.ModuleType("_ck_mod")
             exec(
                 compile(func_source, "<ck>", "exec"),

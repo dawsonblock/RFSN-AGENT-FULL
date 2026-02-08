@@ -52,8 +52,21 @@ GATE_POLICY = _load_yaml(
     "/policies/gate_policy.yaml",
 )
 
+# ── Unified patch limits from gate_policy ──────────
+# tool_gateway now enforces the SAME limits that the
+# kernel gate and LLM prompt advertise.
+_EFFECTIVE_MAX_FILES = int(
+    GATE_POLICY.get("max_patch_files", 3),
+)
+_EFFECTIVE_MAX_ADDED = int(
+    GATE_POLICY.get("max_added_lines", 40),
+)
+_EFFECTIVE_MAX_DELETED = int(
+    GATE_POLICY.get("max_deleted_lines", 40),
+)
+
 ALLOWED_TYPES = set(ALLOW.get("allowed_step_types", []))
-ALLOWED_PATHS = ALLOW.get("allowed_paths", ["repo/**"])
+ALLOWED_PATHS = ALLOW.get("allowed_paths", ["**"])
 BLOCKED_GLOBS = ALLOW.get("blocked_globs", [])
 
 MAX_PATCH_BYTES = int(ALLOW.get("max_patch_bytes", 200000))
@@ -121,6 +134,7 @@ class RunStepReq(BaseModel):
     repo_id: str
     iter: int
     step: Step
+    run_id: Optional[str] = None
 
 
 @app.get("/health")
@@ -128,13 +142,34 @@ def health():
     return {"ok": True}
 
 
-def _executor(step: dict, repo_id: str, it: int):
-    r = requests.post(
-        f"{EXECUTOR_URL}/run",
-        json={"repo_id": repo_id, "iter": it, "step": step},
-        headers=auth_headers(),
-        timeout=600,
-    )
+def _executor(
+    step: dict, repo_id: str, it: int,
+    run_id: str | None = None,
+):
+    if run_id:
+        # Route through warm sandbox.
+        r = requests.post(
+            f"{EXECUTOR_URL}/run_warm",
+            json={
+                "run_id": run_id,
+                "repo_id": repo_id,
+                "step": step,
+            },
+            headers=auth_headers(),
+            timeout=600,
+        )
+    else:
+        # Cold (ephemeral) execution.
+        r = requests.post(
+            f"{EXECUTOR_URL}/run",
+            json={
+                "repo_id": repo_id,
+                "iter": it,
+                "step": step,
+            },
+            headers=auth_headers(),
+            timeout=600,
+        )
     if r.status_code != 200:
         raise HTTPException(r.status_code, r.text)
     return r.json()
@@ -227,12 +262,11 @@ def run_step(req: RunStepReq):
                 parts = line.split()
                 if len(parts) >= 4:
                     files_touched.add(parts[2].replace("a/", "", 1))
-        max_files = int(DIFF_GUARD.get("max_changed_files", 0))
-        if max_files and len(files_touched) > max_files:
+        if len(files_touched) > _EFFECTIVE_MAX_FILES:
             raise HTTPException(
                 403,
                 "diff guard: too many files changed"
-                f" ({len(files_touched)} > {max_files})",
+                f" ({len(files_touched)} > {_EFFECTIVE_MAX_FILES})",
             )
 
         # --- diff-guard: max_added_lines / max_deleted_lines ---
@@ -243,19 +277,17 @@ def run_step(req: RunStepReq):
                 added_lines += 1
             elif line.startswith("-") and not line.startswith("---"):
                 deleted_lines += 1
-        max_added = int(DIFF_GUARD.get("max_added_lines", 0))
-        max_deleted = int(DIFF_GUARD.get("max_deleted_lines", 0))
-        if max_added and added_lines > max_added:
+        if added_lines > _EFFECTIVE_MAX_ADDED:
             raise HTTPException(
                 403,
                 "diff guard: too many added lines"
-                f" ({added_lines} > {max_added})",
+                f" ({added_lines} > {_EFFECTIVE_MAX_ADDED})",
             )
-        if max_deleted and deleted_lines > max_deleted:
+        if deleted_lines > _EFFECTIVE_MAX_DELETED:
             raise HTTPException(
                 403,
                 "diff guard: too many deleted lines"
-                f" ({deleted_lines} > {max_deleted})",
+                f" ({deleted_lines} > {_EFFECTIVE_MAX_DELETED})",
             )
 
     # Enforce per-step budgets from kernel
@@ -269,7 +301,9 @@ def run_step(req: RunStepReq):
         cur = int(s.get("timeout_s") or max_t)
         s["timeout_s"] = min(cur, max_t)
 
-    out = _executor(s, req.repo_id, req.iter)
+    out = _executor(
+        s, req.repo_id, req.iter, req.run_id,
+    )
 
     # charge output bytes (stable cap) for reads/searches
     payload = out.get("payload")

@@ -32,7 +32,7 @@ sys.path.insert(0, str(EXEC))
 # ═══════════════════════════════════════════════
 # 2. Targeted test node extraction
 # ═══════════════════════════════════════════════
-from context_fingerprint import (
+from context_fingerprint import (  # noqa: E402
     extract_test_nodes,
     parse_failure_signature,
 )
@@ -94,12 +94,11 @@ class TestExtractTestNodes:
 
 def _parse_patch_stat_standalone(logs: str) -> dict:
     """Standalone copy of _parse_patch_stat for testing."""
-    meta = {
-        "files_touched": 0,
-        "lines_added": 0,
-        "lines_deleted": 0,
-        "changed_files": [],
-    }
+    files_touched = 0
+    lines_added = 0
+    lines_deleted = 0
+    changed_files: list = []
+
     in_stat = False
     for line in logs.splitlines():
         if "---PATCH_STAT_START---" in line:
@@ -116,13 +115,18 @@ def _parse_patch_stat_standalone(logs: str) -> dict:
                 a = int(parts[0])
                 d = int(parts[1])
                 f = parts[2].strip()
-                meta["lines_added"] += a
-                meta["lines_deleted"] += d
-                meta["changed_files"].append(f)
+                lines_added += a
+                lines_deleted += d
+                changed_files.append(f)
             except ValueError:
                 pass
-    meta["files_touched"] = len(meta["changed_files"])
-    return meta
+    files_touched = len(changed_files)
+    return {
+        "files_touched": files_touched,
+        "lines_added": lines_added,
+        "lines_deleted": lines_deleted,
+        "changed_files": changed_files,
+    }
 
 
 class TestParsePatchStat:
@@ -197,7 +201,7 @@ def _repair_json(text):
             brace_depth -= 1
             if brace_depth == 0 and start >= 0:
                 end_idx = i
-                candidate = raw[start : i + 1]
+                candidate = raw[start:i + 1]
                 try:
                     obj = json.loads(candidate)
                     if isinstance(obj, dict):
@@ -206,7 +210,7 @@ def _repair_json(text):
                     pass
                 break
     if start >= 0 and end_idx >= 0:
-        candidate = raw[start : end_idx + 1]
+        candidate = raw[start:end_idx + 1]
         fixed = re.sub(r",\s*([}\]])", r"\1", candidate)
         try:
             obj = json.loads(fixed)

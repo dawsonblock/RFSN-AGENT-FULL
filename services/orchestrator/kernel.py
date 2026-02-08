@@ -8,6 +8,141 @@ import yaml  # type: ignore[import-untyped]
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
 
+# ── RFSN Phase State Machine ─────────────────
+# Enforces valid step ordering within a run.
+# Transitions:
+#   IDLE → SEARCHING, PATCHING, DEPS
+#   SEARCHING → SEARCHING, READING, PATCHING
+#   READING → READING, SEARCHING, PATCHING
+#   PATCHING → TESTING
+#   TESTING → SEARCHING, READING, PATCHING, DONE
+#   DEPS → SEARCHING, READING, PATCHING
+#   DONE → (terminal)
+#   FAILED → (terminal)
+
+class RfsnPhase:
+    IDLE = "IDLE"
+    SEARCHING = "SEARCHING"
+    READING = "READING"
+    PATCHING = "PATCHING"
+    TESTING = "TESTING"
+    DEPS = "DEPS"
+    DONE = "DONE"
+    FAILED = "FAILED"
+
+
+# Map step type → phase
+_STEP_TO_PHASE: Dict[str, str] = {
+    "repo_search": RfsnPhase.SEARCHING,
+    "repo_read_range": RfsnPhase.READING,
+    "apply_patch": RfsnPhase.PATCHING,
+    "run_tests": RfsnPhase.TESTING,
+    "ensure_deps": RfsnPhase.DEPS,
+}
+
+# Valid transitions: from_phase → set of to_phases
+_VALID_TRANSITIONS: Dict[str, Set[str]] = {
+    RfsnPhase.IDLE: {
+        RfsnPhase.SEARCHING,
+        RfsnPhase.READING,
+        RfsnPhase.PATCHING,
+        RfsnPhase.DEPS,
+    },
+    RfsnPhase.SEARCHING: {
+        RfsnPhase.SEARCHING,
+        RfsnPhase.READING,
+        RfsnPhase.PATCHING,
+    },
+    RfsnPhase.READING: {
+        RfsnPhase.READING,
+        RfsnPhase.SEARCHING,
+        RfsnPhase.PATCHING,
+    },
+    RfsnPhase.PATCHING: {
+        RfsnPhase.TESTING,
+        # Allow another patch (multi-file fix).
+        RfsnPhase.PATCHING,
+    },
+    RfsnPhase.TESTING: {
+        RfsnPhase.SEARCHING,
+        RfsnPhase.READING,
+        RfsnPhase.PATCHING,
+        RfsnPhase.DONE,
+    },
+    RfsnPhase.DEPS: {
+        RfsnPhase.SEARCHING,
+        RfsnPhase.READING,
+        RfsnPhase.PATCHING,
+    },
+    RfsnPhase.DONE: set(),
+    RfsnPhase.FAILED: set(),
+}
+
+
+class PhaseTracker:
+    """Tracks RFSN phase transitions per run."""
+
+    def __init__(self) -> None:
+        self._phase = RfsnPhase.IDLE
+        self._history: List[str] = [RfsnPhase.IDLE]
+
+    @property
+    def phase(self) -> str:
+        return self._phase
+
+    @property
+    def history(self) -> List[str]:
+        return list(self._history)
+
+    def check_transition(
+        self, step_type: str,
+    ) -> Tuple[bool, str]:
+        """Check if a step type is valid given
+        the current phase.
+
+        Returns (ok, error_message).
+        """
+        target = _STEP_TO_PHASE.get(step_type)
+        if target is None:
+            return False, (
+                f"Unknown step type: {step_type}"
+            )
+
+        allowed = _VALID_TRANSITIONS.get(
+            self._phase, set(),
+        )
+        if target not in allowed:
+            return False, (
+                f"Invalid phase transition:"
+                f" {self._phase} → {target}"
+                f" (step_type={step_type})."
+                f" Allowed targets:"
+                f" {sorted(allowed)}"
+            )
+        return True, ""
+
+    def advance(self, step_type: str) -> None:
+        """Advance to the phase implied by step."""
+        target = _STEP_TO_PHASE.get(
+            step_type, self._phase,
+        )
+        self._phase = target
+        self._history.append(target)
+
+    def mark_done(self) -> None:
+        self._phase = RfsnPhase.DONE
+        self._history.append(RfsnPhase.DONE)
+
+    def mark_failed(self) -> None:
+        self._phase = RfsnPhase.FAILED
+        self._history.append(RfsnPhase.FAILED)
+
+    def reset(self) -> None:
+        """Reset for new iteration."""
+        self._phase = RfsnPhase.IDLE
+        self._history = [RfsnPhase.IDLE]
+
+
 _BANNED_PATCH_PATTERNS = [
     r"pytest\.skip",
     r"unittest\.skip",
@@ -294,11 +429,21 @@ class Kernel:
 
         # Policy knobs
         max_files = int(
-            self.policy.get("max_patch_files", 6),
+            self.policy.get("max_patch_files", 3),
         )
         max_lines = int(
             self.policy.get(
-                "max_patch_total_lines", 300,
+                "max_patch_total_lines", 80,
+            ),
+        )
+        max_added_lines = int(
+            self.policy.get(
+                "max_added_lines", 40,
+            ),
+        )
+        max_deleted_lines = int(
+            self.policy.get(
+                "max_deleted_lines", 40,
             ),
         )
         forbid_tests = bool(
@@ -514,6 +659,35 @@ class Kernel:
                         ],
                     })
 
+                # Per-side line limits (unified
+                # with diff_guard policy).
+                if add > max_added_lines:
+                    errs.append({
+                        "code": (
+                            "PATCH_TOO_MANY_ADDS"
+                        ),
+                        "msg": (
+                            f"added {add}"
+                            f" > {max_added_lines}"
+                        ),
+                        "path": [
+                            "steps", i, "patch",
+                        ],
+                    })
+                if rem > max_deleted_lines:
+                    errs.append({
+                        "code": (
+                            "PATCH_TOO_MANY_DELS"
+                        ),
+                        "msg": (
+                            f"deleted {rem}"
+                            f" > {max_deleted_lines}"
+                        ),
+                        "path": [
+                            "steps", i, "patch",
+                        ],
+                    })
+
                 if total > 120:
                     risk += 10
 
@@ -643,19 +817,68 @@ class Kernel:
                     "timeout_s": 900,
                 })
 
-        # 5. Risk threshold
+        # 5. Risk threshold (λ-weighted scoring)
+        # score = λ * risk - (1-λ) * expected_value
+        # λ controls the balance: lower λ favours
+        # patches with higher expected value even if
+        # risk is moderate.
         reject_thr = int(
             self.policy.get(
                 "reject_risk_score", 60,
             ),
         )
-        if risk >= reject_thr:
+        # Expected value heuristic: minimal diffs
+        # touching source (not tests/ci/deps) get
+        # a bonus that offsets some risk.
+        ev = 0
+        src_files = [
+            f for f in touched
+            if not (
+                f.startswith("tests/")
+                or "/tests/" in f
+            )
+            and not any(
+                f.startswith(p)
+                for p in _FORBIDDEN_CI_PREFIXES
+            )
+            and f not in _DEP_MANIFEST_FILES
+        ]
+        if src_files:
+            # Reward: fewer files + smaller diff
+            # = higher expected value.
+            total_changed = sum(
+                _count_diff_lines(
+                    s.get("patch", ""),
+                )[0]
+                + _count_diff_lines(
+                    s.get("patch", ""),
+                )[1]
+                for s in steps
+                if s.get("type") == "apply_patch"
+            )
+            if total_changed <= 20:
+                ev = 30  # small, focused patch
+            elif total_changed <= 50:
+                ev = 15  # medium patch
+            else:
+                ev = 5   # large patch
+
+        lam = float(
+            self.policy.get("risk_lambda", 0.7),
+        )
+        effective_risk = (
+            lam * risk - (1 - lam) * ev
+        )
+        if effective_risk >= reject_thr:
             return GateDecision(
                 ok=False,
                 errors=[{
                     "code": "RISK_REJECT",
                     "msg": (
                         f"risk={risk}"
+                        f" ev={ev}"
+                        f" effective="
+                        f"{effective_risk:.0f}"
                         f" >= {reject_thr}"
                     ),
                 }],
