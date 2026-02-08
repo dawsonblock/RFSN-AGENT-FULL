@@ -45,6 +45,8 @@ class BenchTask:
 
 @dataclass
 class TestRun:
+    __test__ = False  # not a pytest test class
+
     exit_code: int
     stdout_tail: str
     stderr_tail: str
