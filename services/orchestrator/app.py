@@ -26,6 +26,35 @@ from prompts import (  # type: ignore[import-not-found]
     DONE_PROMPT,
 )
 
+# ── Hard RFSN Kernel (v2) ─────────────────────
+import sys as _sys
+_sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))
+    )),
+))
+try:
+    from rfsn_kernel.kernel import (
+        HardKernel, KernelStepResult,
+    )
+    from rfsn_kernel.state import (
+        SystemState, Outcome,
+    )
+    from rfsn_kernel.planner import (
+        HierarchicalPlanner,
+    )
+    from rfsn_kernel.memory import (
+        MemoryImmuneSystem,
+        MemoryEntry,
+    )
+    from rfsn_kernel.replay import (
+        ReplayRunner,
+        snapshot_environment,
+    )
+    _HAS_HARD_KERNEL = True
+except ImportError:
+    _HAS_HARD_KERNEL = False
+
 import sys
 sys.path.insert(0, "/shared")
 try:
@@ -180,6 +209,38 @@ kernel = Kernel(
 )
 ledger = Ledger("/data/ledger.jsonl")
 
+# ── Hard kernel v2 (simulation + risk + replay) ─
+if _HAS_HARD_KERNEL:
+    _hard_kernel = HardKernel(
+        ledger_path="/data/kernel_ledger.jsonl",
+        policy={
+            "risk_max": 0.65,
+            "success_min": 0.15,
+            "loop_max": 0.8,
+            "drift_max": 0.85,
+            "risk_lambda": 0.7,
+            "max_total_steps": 200,
+            "history_max": 500,
+            "rng_seed": _EPISODE_SEED,
+            "policy_hash": POLICY_HASH,
+            "fail_cluster_threshold": 8,
+        },
+    )
+    _planner = HierarchicalPlanner(
+        max_stagnation=5,
+        max_escalations=3,
+    )
+    _memory = MemoryImmuneSystem(
+        quality_min=0.3,
+        risk_max=0.7,
+        contradiction_max=0.6,
+        max_entries=2000,
+    )
+else:
+    _hard_kernel = None  # type: ignore[assignment]
+    _planner = None      # type: ignore[assignment]
+    _memory = None       # type: ignore[assignment]
+
 
 def stable_id(
     prefix: str, *parts: str, n: int = 10,
@@ -268,6 +329,37 @@ def metrics():
 def ledger_verify():
     """Verify integrity of the append-only ledger."""
     return ledger.verify_chain()
+
+
+@app.get("/kernel/stats")
+def kernel_stats():
+    """Hard kernel v2 statistics."""
+    if not _HAS_HARD_KERNEL:
+        return {"available": False}
+    return {
+        "available": True,
+        "kernel": _hard_kernel.get_stats(),
+        "planner": _planner.get_stats(),
+        "memory": _memory.get_stats(),
+    }
+
+
+@app.get("/kernel/replay/verify")
+def kernel_replay_verify():
+    """Verify hard kernel ledger chain."""
+    if not _HAS_HARD_KERNEL:
+        return {"available": False}
+    runner = ReplayRunner("/data/kernel_ledger.jsonl")
+    return runner.replay_verify().to_dict()
+
+
+@app.get("/kernel/replay/trace")
+def kernel_replay_trace():
+    """Extract decision trace from hard kernel."""
+    if not _HAS_HARD_KERNEL:
+        return {"available": False}
+    runner = ReplayRunner("/data/kernel_ledger.jsonl")
+    return {"trace": runner.extract_decision_trace()}
 
 
 def _sandbox_create(run_id: str, repo_id: str):
@@ -760,11 +852,32 @@ def run(req: RunReq):
                 + pb_guidance
             )
 
+        # ── Hierarchical planner guidance ─────
+        strategic_guidance = ""
+        if _HAS_HARD_KERNEL and _planner:
+            if it == 1 and not _planner.state.goal:
+                fail_cls = (
+                    parse_failure_signature(
+                        last_fail,
+                    ).get("failure_class", "")
+                )
+                task_type = _planner.classify_task(
+                    req.task, fail_cls,
+                )
+                _planner.set_goal(
+                    req.task, task_type,
+                )
+            strategic_guidance = (
+                _planner.get_planner_guidance()
+            )
+
         prompt = USER_TEMPLATE.format(
             repo_id=req.repo_id,
             task=(
                 req.task + fail_ctx
                 + failure_hint_text + past_text
+                + ("\n\n" + strategic_guidance
+                   if strategic_guidance else "")
             ),
             learner_addendum=sug.get(
                 "prompt_addendum", "",
@@ -1106,14 +1219,134 @@ def run(req: RunReq):
             approved_step = (
                 decision["approved_steps"][0]
             )
-            _METRICS["steps_executed"] += 1
-            iter_steps_used += 1
-            total_steps_used += 1
 
-            out = run_step(
-                req.repo_id, it, approved_step,
-                run_id,
-            )
+            # ── Hard kernel v2: simulate + risk
+            # before execution ─────────────────
+            if _HAS_HARD_KERNEL and _hard_kernel:
+                ctx_hash = sug.get(
+                    "context_key", "",
+                )
+
+                def _exec_step(s: dict) -> Outcome:
+                    """Execution callback for
+                    hard kernel."""
+                    r = run_step(
+                        req.repo_id, it, s,
+                        run_id,
+                    )
+                    ok = r.get("status", 1) == 0
+                    return Outcome(
+                        success=ok,
+                        exit_code=r.get(
+                            "status", 1,
+                        ),
+                        payload=str(
+                            r.get("payload", ""),
+                        )[:3000],
+                        logs=str(
+                            r.get("logs", ""),
+                        )[:5000],
+                        duration_sec=float(
+                            r.get("seconds", 0),
+                        ),
+                    )
+
+                kr = _hard_kernel.kernel_step(
+                    approved_step,
+                    execute_fn=_exec_step,
+                    context=ctx_hash,
+                    intent=resp.get(
+                        "intent", "",
+                    ),
+                    bundle_id=step_bundle[
+                        "bundle_id"
+                    ],
+                )
+                ledger.append({
+                    "type": "HARD_KERNEL_STEP",
+                    "run_id": run_id,
+                    "iter": it,
+                    "step_num": (
+                        iter_steps_used + 1
+                    ),
+                    "phase": kr.phase,
+                    "approved": kr.approved,
+                    "success": kr.success,
+                    "risk": (
+                        kr.risk.to_dict()
+                        if kr.risk else None
+                    ),
+                    "simulation": (
+                        kr.simulation.to_dict()
+                        if kr.simulation
+                        else None
+                    ),
+                })
+                # If hard kernel rejected (sim/
+                # risk), tell LLM and skip.
+                if not kr.approved:
+                    _METRICS[
+                        "gate_rejections"
+                    ] += 1
+                    messages.append({
+                        "role": "assistant",
+                        "content": content,
+                    })
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "HARD KERNEL REJECTED"
+                            " (simulation/risk):"
+                            f" {kr.decision.reason}"
+                            "\nTry a different"
+                            " approach."
+                        ),
+                    })
+                    continue
+                # Use hard kernel outcome.
+                _METRICS["steps_executed"] += 1
+                iter_steps_used += 1
+                total_steps_used += 1
+                out = {
+                    "status": (
+                        kr.outcome.exit_code
+                        if kr.outcome else 1
+                    ),
+                    "payload": (
+                        kr.outcome.payload
+                        if kr.outcome else ""
+                    ),
+                    "logs": (
+                        kr.outcome.logs
+                        if kr.outcome else ""
+                    ),
+                    "seconds": (
+                        kr.outcome.duration_sec
+                        if kr.outcome else 0
+                    ),
+                }
+                # Ingest to memory immune system.
+                _memory.admit(MemoryEntry(
+                    content=(
+                        f"action={approved_step.get('type')}"
+                        f" success={kr.success}"
+                        f" risk={kr.risk.total_risk:.2f}"
+                        if kr.risk else ""
+                    ),
+                    source="kernel",
+                    entry_type="action_outcome",
+                ))
+            else:
+                # Fallback: execute without hard
+                # kernel (original path).
+                _METRICS["steps_executed"] += 1
+                iter_steps_used += 1
+                total_steps_used += 1
+                out = run_step(
+                    req.repo_id, it,
+                    approved_step, run_id,
+                )
+
             ledger.append({
                 "type": "STEP_RESULT",
                 "run_id": run_id,
@@ -1232,8 +1465,28 @@ def run(req: RunReq):
                         })
                     last_fail = log_text[-5000:]
                     last_stage = "tests"
+                    # Planner: record stagnation.
+                    if (
+                        _HAS_HARD_KERNEL
+                        and _planner
+                    ):
+                        stagnant = (
+                            _planner
+                            .record_no_progress()
+                        )
+                        if stagnant:
+                            _planner.escalate()
                 else:
                     last_stage = "success"
+                    # Planner: advance subgoal.
+                    if (
+                        _HAS_HARD_KERNEL
+                        and _planner
+                    ):
+                        _planner.advance_subgoal()
+                        if _hard_kernel:
+                            _hard_kernel\
+                                .adaptive_relax()
 
             # Track patch metadata for outcome DB.
             if approved_step.get("type") == "apply_patch":
