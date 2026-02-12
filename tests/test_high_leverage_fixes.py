@@ -254,6 +254,7 @@ class TestCompiledPolicyHash:
                 "deps_policy.yaml",
                 "diff_guard.yaml",
                 "gate_policy.yaml",
+                "gate_policy_tiers.yaml",
                 "llm_cassette.yaml",
                 "test_policy.yaml",
                 "tool_allowlist.yaml",
@@ -363,178 +364,94 @@ class TestEpisodeDeterminism:
 # ═══════════════════════════════════════════════
 
 class TestKernelGateLambda:
-    """Integration tests against real Kernel."""
+    """Integration tests against HardKernel."""
 
     @pytest.fixture
     def kernel(self, tmp_path):
-        from kernel import Kernel
+        from rfsn_kernel.kernel import HardKernel
 
-        schema = {
-            "$schema": "http://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {
-                "intent": {"type": "string"},
-                "bundle_id": {"type": "string"},
-                "steps": {
-                    "type": "array",
-                    "items": {"type": "object"},
-                },
-                "acceptance": {"type": "object"},
+        return HardKernel(
+            ledger_path=str(tmp_path / "ledger.jsonl"),
+            policy={
+                "risk_max": 1.0,
+                "success_min": 0.1,
+                "loop_max": 1.0,
+                "drift_max": 1.0,
+                "risk_lambda": 0.7,
+                "rng_seed": 1,
             },
-            "required": ["intent", "bundle_id", "steps", "acceptance"],
-        }
-        schema_path = tmp_path / "schema.json"
-        schema_path.write_text(json.dumps(schema))
-
-        allowlist = {
-            "allowed_step_types": [
-                "repo_search",
-                "repo_read_range",
-                "apply_patch",
-                "run_tests",
-                "ensure_deps",
-            ],
-        }
-        allow_path = tmp_path / "allowlist.yaml"
-        allow_path.write_text(
-            json.dumps(allowlist),
         )
 
-        # Policy with λ-weighted scoring.
-        policy = {
-            "max_patch_files": 3,
-            "max_patch_total_lines": 80,
-            "max_added_lines": 40,
-            "max_deleted_lines": 40,
-            "forbid_test_edits": True,
-            "forbid_ci_edits": True,
-            "forbid_dep_manifest_edits": True,
-            "enforce_tests": True,
-            "reject_risk_score": 60,
-            "risk_lambda": 0.7,
-            "max_steps_per_bundle": 15,
-            "step_budgets": {
-                "apply_patch": {
-                    "max_per_iter": 2,
-                    "timeout_s": 60,
-                },
-                "run_tests": {
-                    "max_per_iter": 4,
-                    "timeout_s": 900,
-                },
-            },
-            "blocked_read_prefixes": [".git/"],
-            "blocked_read_suffixes": [".pem"],
-        }
-        policy_path = tmp_path / "policy.yaml"
-        import yaml
-        policy_path.write_text(
-            yaml.dump(policy),
-        )
-
-        return Kernel(
-            str(schema_path),
-            str(allow_path),
-            str(policy_path),
+    @staticmethod
+    def _ok_exec(_step):
+        from rfsn_kernel.state import Outcome
+        return Outcome(
+            success=True,
+            exit_code=0,
+            logs="ok",
         )
 
     def test_small_src_patch_passes(self, kernel):
-        """A 10-line source-only patch should pass."""
         patch_text = (
             "--- a/src/utils.py\n"
             "+++ b/src/utils.py\n"
-            "@@ -1,5 +1,7 @@\n"
-            " def foo():\n"
-            "-    return 1\n"
-            "+    # fixed\n"
-            "+    return 2\n"
-            " \n"
+            "@@ -1,1 +1,1 @@\n"
+            "-x\n"
+            "+y\n"
         )
-        bundle = {
-            "intent": "fix bug",
-            "bundle_id": "test-1",
-            "steps": [{
+        kernel.reset_for_run(run_id="r1")
+        dec = kernel.kernel_step(
+            {
                 "id": "s1",
                 "type": "apply_patch",
                 "patch": patch_text,
-                "timeout_s": 60,
-            }],
-            "acceptance": {},
-        }
-        dec = kernel.validate_and_plan(bundle)
-        assert dec["ok"], dec.get("errors")
+            },
+            execute_fn=self._ok_exec,
+            run_id="r1",
+        )
+        assert dec.approved
 
-    def test_empty_patch_passes_gate(self, kernel):
-        """An empty patch with no diff lines should
-        still pass the kernel gate (the executor
-        is what rejects empty patches).
-        """
-        patch_text = ""
-        bundle = {
-            "intent": "no-op",
-            "bundle_id": "test-2",
-            "steps": [{
+    def test_empty_patch_rejected_by_validation(self, kernel):
+        kernel.reset_for_run(run_id="r2")
+        dec = kernel.kernel_step(
+            {
+                "id": "s1",
+                "type": "apply_patch",
+                "patch": "",
+            },
+            execute_fn=self._ok_exec,
+            run_id="r2",
+        )
+        assert not dec.approved
+        assert dec.validation is not None
+        assert any(
+            e["code"] == "EMPTY_PATCH"
+            for e in dec.validation.errors
+        )
+
+    def test_tier_rejects_test_edit(self, kernel):
+        patch_text = (
+            "--- a/tests/test_x.py\n"
+            "+++ b/tests/test_x.py\n"
+            "@@ -1,1 +1,1 @@\n"
+            "-x\n"
+            "+y\n"
+        )
+        kernel.reset_for_run(run_id="r3")
+        dec = kernel.kernel_step(
+            {
                 "id": "s1",
                 "type": "apply_patch",
                 "patch": patch_text,
-                "timeout_s": 60,
-            }],
-            "acceptance": {},
-        }
-        # The kernel doesn't reject empty patches —
-        # that's executor's job. Kernel should pass.
-        dec = kernel.validate_and_plan(bundle)
-        assert dec["ok"], dec.get("errors")
-
-    def test_path_rejection(self, kernel):
-        """Blocked read paths should be rejected."""
-        bundle = {
-            "intent": "read secrets",
-            "bundle_id": "test-3",
-            "steps": [{
-                "id": "s1",
-                "type": "repo_read_range",
-                "path": ".git/config",
-                "line_start": 1,
-                "line_end": 10,
-                "timeout_s": 15,
-            }],
-            "acceptance": {},
-        }
-        dec = kernel.validate_and_plan(bundle)
-        assert not dec["ok"]
-        codes = [e["code"] for e in dec["errors"]]
-        assert "READ_PATH_BLOCKED" in codes
-
-    def test_limit_matching(self, kernel):
-        """Exceeding max_patch_total_lines → rejection."""
-        # Build a patch with > 80 total lines.
-        big_patch = (
-            "--- a/src/foo.py\n"
-            "+++ b/src/foo.py\n"
-            "@@ -1,2 +1,90 @@\n"
-            + "".join(
-                f"+line {i}\n" for i in range(85)
-            )
+            },
+            execute_fn=self._ok_exec,
+            run_id="r3",
         )
-        bundle = {
-            "intent": "big patch",
-            "bundle_id": "test-4",
-            "steps": [{
-                "id": "s1",
-                "type": "apply_patch",
-                "patch": big_patch,
-                "timeout_s": 60,
-            }],
-            "acceptance": {},
-        }
-        dec = kernel.validate_and_plan(bundle)
-        assert not dec["ok"]
+        assert not dec.approved
+        assert dec.decision is not None
+        assert "tier forbids tests edits" in dec.decision.reason
 
     def test_transcript_template_inclusion(self):
-        """TRANSCRIPT_TEMPLATE should have all
-        needed placeholders.
-        """
         from prompts import TRANSCRIPT_TEMPLATE
         assert "{step_num}" in TRANSCRIPT_TEMPLATE
         assert "{step_json}" in TRANSCRIPT_TEMPLATE

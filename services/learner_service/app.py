@@ -104,6 +104,7 @@ class SuggestResp(BaseModel):
     strategy_id: str
     prompt_addendum: str
     constraints: dict
+    kernel_evidence: dict
     failure_hint: Optional[str] = None
     past_outcomes: Optional[list] = None
     playbook_id: Optional[str] = None
@@ -155,6 +156,7 @@ def suggest(req: SuggestReq):
     # toward the strategy that worked last time.
     failure_hint: Optional[str] = None
     sig_boost_sid: Optional[str] = None
+    known: Optional[dict] = None
 
     if req.failure_signature_hash:
         known = store.lookup_failure(
@@ -240,11 +242,37 @@ def suggest(req: SuggestReq):
     pb = PLAYBOOK_MAP.get(best_sid)
     pb_guidance = pb.prompt_addendum if pb else None
 
+    post_row = post.get(best_sid, {})
+    alpha = float(post_row.get("alpha", 1.0))
+    beta = float(post_row.get("beta", 1.0))
+    trials = int(post_row.get("trials", 0))
+    posterior_mean = alpha / max(alpha + beta, 1e-9)
+    failure_occurrence = int(
+        (known or {}).get("occurrence_count", 0),
+    )
+    failure_best_win_rate = float(
+        (known or {}).get("best_strategy_win_rate", 0.0)
+        or 0.0,
+    )
+    kernel_evidence = {
+        "strategy_id": best_sid,
+        "context_key": ck,
+        "prior_success_prob": round(
+            posterior_mean, 4,
+        ),
+        "prior_trials": trials,
+        "failure_occurrence": failure_occurrence,
+        "failure_best_win_rate": round(
+            failure_best_win_rate, 4,
+        ),
+    }
+
     return SuggestResp(
         context_key=ck,
         strategy_id=best_sid,
         prompt_addendum=addendum,
         constraints=constraints,
+        kernel_evidence=kernel_evidence,
         failure_hint=failure_hint,
         past_outcomes=past_outcomes,
         playbook_id=best_sid,

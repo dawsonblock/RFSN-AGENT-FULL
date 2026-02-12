@@ -71,7 +71,11 @@ class ReplayRunner:
     ) -> List[LedgerRecord]:
         return [
             r for r in records
-            if (r.metadata or {}).get("record_type") != "orchestrator_event"
+            if (r.metadata or {}).get("record_type")
+            not in {
+                "orchestrator_event",
+                "kernel_event",
+            }
         ]
 
     def verify_chain(self) -> Dict[str, Any]:

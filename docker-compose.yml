@@ -13,6 +13,7 @@ services:
       RFSN_SEED: ${RFSN_SEED:-1}
       LEDGER_FIXED_TS: ${LEDGER_FIXED_TS:-1.0}
       RFSN_SERVICE_TOKEN: ${RFSN_SERVICE_TOKEN:-}
+      RFSN_DEV_MODE: ${RFSN_DEV_MODE:-0}
     deploy:
       resources:
         limits:
@@ -26,7 +27,7 @@ services:
       learner_service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      test: ["CMD-SHELL", "curl -sf -H \"authorization: Bearer $${RFSN_SERVICE_TOKEN}\" http://localhost:8000/health > /dev/null"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -45,13 +46,14 @@ services:
       DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-reasoner}
       RFSN_SERVICE_TOKEN: ${RFSN_SERVICE_TOKEN:-}
+      RFSN_DEV_MODE: ${RFSN_DEV_MODE:-0}
     deploy:
       resources:
         limits:
           memory: 512m
           cpus: '1'
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8001/health"]
+      test: ["CMD-SHELL", "curl -sf -H \"authorization: Bearer $${RFSN_SERVICE_TOKEN}\" http://localhost:8001/health > /dev/null"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -67,6 +69,7 @@ services:
     environment:
       EXECUTOR_URL: http://executor:8003
       RFSN_SERVICE_TOKEN: ${RFSN_SERVICE_TOKEN:-}
+      RFSN_DEV_MODE: ${RFSN_DEV_MODE:-0}
     deploy:
       resources:
         limits:
@@ -76,7 +79,7 @@ services:
       executor:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8002/health"]
+      test: ["CMD-SHELL", "curl -sf -H \"authorization: Bearer $${RFSN_SERVICE_TOKEN}\" http://localhost:8002/health > /dev/null"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -90,19 +93,19 @@ services:
       - ./data:/data
       - ./policies:/policies:ro
       - ./shared:/shared:ro
-      # Docker socket mounted read-only; in production use a remote Docker API
-      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       BLESSED_IMAGE: ${BLESSED_IMAGE:-rfsn-blessed:0.2}
       HOST_DATA_DIR: ${HOST_DATA_DIR:-${PWD}/data}
+      RFSN_EXEC_USE_DOCKER: ${RFSN_EXEC_USE_DOCKER:-0}
       RFSN_SERVICE_TOKEN: ${RFSN_SERVICE_TOKEN:-}
+      RFSN_DEV_MODE: ${RFSN_DEV_MODE:-0}
     deploy:
       resources:
         limits:
           memory: 1g
           cpus: '2'
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8003/health"]
+      test: ["CMD-SHELL", "curl -sf -H \"authorization: Bearer $${RFSN_SERVICE_TOKEN}\" http://localhost:8003/health > /dev/null"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -117,13 +120,14 @@ services:
     environment:
       LEARNER_DB: /data/learner.duckdb
       RFSN_SERVICE_TOKEN: ${RFSN_SERVICE_TOKEN:-}
+      RFSN_DEV_MODE: ${RFSN_DEV_MODE:-0}
     deploy:
       resources:
         limits:
           memory: 512m
           cpus: '1'
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8004/health"]
+      test: ["CMD-SHELL", "curl -sf -H \"authorization: Bearer $${RFSN_SERVICE_TOKEN}\" http://localhost:8004/health > /dev/null"]
       interval: 10s
       timeout: 5s
       retries: 3

@@ -120,6 +120,7 @@ def _compile_policy_hash() -> str:
         "deps_policy.yaml",
         "diff_guard.yaml",
         "gate_policy.yaml",
+        "gate_policy_tiers.yaml",
         "llm_cassette.yaml",
         "test_policy.yaml",
         "tool_allowlist.yaml",
@@ -260,6 +261,29 @@ else:
 ledger = _LedgerSink(_hard_kernel)
 
 
+def _policy_tier_for_run(
+    run_id: str,
+) -> tuple[int, str, dict]:
+    if not (_HAS_HARD_KERNEL and _hard_kernel):
+        return 0, "code-only", {}
+
+    rs = _hard_kernel.run_state.get(run_id)
+    tiers = (_hard_kernel.tier_policy or {}).get(
+        "tiers", {},
+    )
+    cfg = tiers.get(rs.tier)
+    if not isinstance(cfg, dict):
+        cfg = tiers.get(str(rs.tier), {})
+    if not isinstance(cfg, dict):
+        cfg = {}
+    return rs.tier, str(cfg.get("name", rs.tier)), cfg
+
+
+def _end_kernel_run(run_id: str) -> None:
+    if _HAS_HARD_KERNEL and _hard_kernel:
+        _hard_kernel.end_run(run_id)
+
+
 def stable_id(
     prefix: str, *parts: str, n: int = 10,
 ) -> str:
@@ -309,6 +333,7 @@ def health():
         try:
             r = requests.get(
                 f"{url}/health",
+                headers=auth_headers(),
                 timeout=3,
             )
             deps[name] = r.status_code == 200
@@ -346,10 +371,231 @@ def metrics():
     return _METRICS
 
 
+@app.get("/policy/tier/{run_id}")
+def policy_tier_for_run(run_id: str):
+    if not (_HAS_HARD_KERNEL and _hard_kernel):
+        raise HTTPException(
+            500, "HardKernel not available",
+        )
+    tier, name, cfg = _policy_tier_for_run(run_id)
+    rs = _hard_kernel.run_state.get(run_id)
+    return {
+        "run_id": run_id,
+        "tier": tier,
+        "name": name,
+        "allow": cfg.get("allow", {}),
+        "budgets": cfg.get("budgets", {}),
+        "last_failure_kinds": list(rs.failure_kinds),
+    }
+
+
 @app.get("/ledger/verify")
 def ledger_verify():
     """Verify integrity of the append-only ledger."""
     return ledger.verify_chain()
+
+
+def _tail_lines_backwards(
+    path: str,
+    max_lines: int,
+    block_size: int = 64 * 1024,
+) -> list[str]:
+    max_lines = min(int(max_lines), 5000)
+    if max_lines <= 0 or not os.path.exists(path):
+        return []
+
+    lines: list[bytes] = []
+    remainder = b""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        pos = f.tell()
+        while pos > 0 and len(lines) < max_lines:
+            read_size = (
+                block_size if pos >= block_size else pos
+            )
+            pos -= read_size
+            f.seek(pos, os.SEEK_SET)
+            chunk = f.read(read_size)
+            chunk = chunk + remainder
+            parts = chunk.split(b"\n")
+            remainder = parts[0]
+            complete = parts[1:]
+            for i in range(
+                len(complete) - 1, -1, -1,
+            ):
+                if len(lines) >= max_lines:
+                    break
+                s = complete[i].strip()
+                if s:
+                    lines.append(s)
+        if (
+            pos == 0
+            and remainder.strip()
+            and len(lines) < max_lines
+        ):
+            lines.append(remainder.strip())
+
+    lines.reverse()
+    return [
+        b.decode("utf-8", errors="replace")
+        for b in lines
+    ]
+
+
+def _tail_jsonl(path: str, max_lines: int) -> list[dict]:
+    out: list[dict] = []
+    for line in _tail_lines_backwards(path, max_lines):
+        try:
+            out.append(json.loads(line))
+        except Exception:
+            continue
+    return out
+
+
+def _filter_events(
+    events: list[dict],
+    run_id: Optional[str],
+    types: Optional[list[str]],
+) -> list[dict]:
+    def _event_run_id(e: dict) -> str:
+        rid = e.get("run_id")
+        if isinstance(rid, str) and rid:
+            return rid
+        meta = e.get("metadata")
+        if isinstance(meta, dict):
+            rid = meta.get("run_id")
+            if isinstance(rid, str) and rid:
+                return rid
+            ev = meta.get("event")
+            if isinstance(ev, dict):
+                rid = ev.get("run_id")
+                if isinstance(rid, str) and rid:
+                    return rid
+        return ""
+
+    def _event_type(e: dict) -> str:
+        t = e.get("type")
+        if isinstance(t, str) and t:
+            return t
+        meta = e.get("metadata")
+        if isinstance(meta, dict):
+            et = meta.get("event_type")
+            if isinstance(et, str) and et:
+                return et
+            ev = meta.get("event")
+            if isinstance(ev, dict):
+                et = ev.get("type")
+                if isinstance(et, str) and et:
+                    return et
+        return "KERNEL_COMMIT"
+
+    if run_id:
+        events = [
+            e for e in events
+            if _event_run_id(e) == run_id
+        ]
+    if types:
+        want = set(types)
+        events = [
+            e for e in events
+            if _event_type(e) in want
+        ]
+    return events
+
+
+def _normalize_ledger_event(raw: dict) -> dict:
+    """Normalize hard-ledger records into human-usable events."""
+    meta = raw.get("metadata")
+    if not isinstance(meta, dict):
+        return raw
+
+    record_type = str(meta.get("record_type", ""))
+    event = meta.get("event")
+    if record_type in {
+        "orchestrator_event",
+        "kernel_event",
+    } and isinstance(event, dict):
+        out = dict(event)
+        out.setdefault(
+            "type",
+            str(meta.get("event_type", "EVENT")),
+        )
+        out.setdefault(
+            "run_id",
+            str(meta.get("run_id", "")),
+        )
+        out["_record_type"] = record_type
+        out["_chain_hash"] = raw.get("chain_hash", "")
+        out["_decision"] = raw.get("decision", "")
+        return out
+
+    return {
+        "type": "KERNEL_COMMIT",
+        "run_id": str(meta.get("run_id", "")),
+        "action": str(meta.get("action", "")),
+        "intent": str(meta.get("intent", "")),
+        "decision": str(raw.get("decision", "")),
+        "reason": str(raw.get("decision_reason", "")),
+        "risk": raw.get("risk", {}),
+        "simulation": raw.get("simulation", {}),
+        "state_hash": raw.get("state_hash", ""),
+        "ts": raw.get("ts", 0),
+        "_record_type": "kernel_commit",
+        "_chain_hash": raw.get("chain_hash", ""),
+    }
+
+
+@app.get("/ledger/tail")
+def ledger_tail(
+    n: int = 200,
+    run_id: Optional[str] = None,
+    type: Optional[str] = None,
+):
+    types = (
+        [
+            t.strip()
+            for t in type.split(",")
+            if t.strip()
+        ]
+        if type else None
+    )
+    events = [
+        _normalize_ledger_event(e)
+        for e in _tail_jsonl(HARD_LEDGER_PATH, n)
+    ]
+    events = _filter_events(events, run_id, types)
+    return {
+        "path": HARD_LEDGER_PATH,
+        "count": len(events),
+        "events": events,
+    }
+
+
+@app.get("/ledger/run/{run_id}")
+def ledger_for_run(
+    run_id: str,
+    n: int = 2000,
+    type: Optional[str] = None,
+):
+    types = (
+        [
+            t.strip()
+            for t in type.split(",")
+            if t.strip()
+        ]
+        if type else None
+    )
+    events = [
+        _normalize_ledger_event(e)
+        for e in _tail_jsonl(HARD_LEDGER_PATH, n)
+    ]
+    events = _filter_events(events, run_id, types)
+    return {
+        "run_id": run_id,
+        "path": HARD_LEDGER_PATH,
+        "count": len(events),
+        "events": events,
+    }
 
 
 @app.get("/kernel/stats")
@@ -461,6 +707,7 @@ def execute_approved_step(
     intent: str = "",
     bundle_id: str = "",
     step_num: Optional[int] = None,
+    learner_evidence: Optional[dict] = None,
 ) -> dict:
     """Execute a kernel-approved step through the hard kernel.
 
@@ -513,11 +760,15 @@ def execute_approved_step(
             intent=intent,
             bundle_id=bundle_id,
             run_id=run_id,
+            learner_evidence=learner_evidence,
         )
         hard_rec = {
             "type": "HARD_KERNEL_STEP",
             "run_id": run_id,
             "iter": it,
+            "tier": _hard_kernel.run_state.get(
+                run_id
+            ).tier,
             "phase": kr.phase,
             "approved": kr.approved,
             "success": kr.success,
@@ -692,7 +943,13 @@ def learner_suggest(
             timeout=10,
         )
         if r.status_code == 200:
-            return r.json()
+            out = r.json()
+            if "kernel_evidence" not in out:
+                out["kernel_evidence"] = {
+                    "prior_success_prob": 0.5,
+                    "prior_trials": 0,
+                }
+            return out
     except Exception:
         pass
     # Learner is advisory; fail open.
@@ -718,6 +975,10 @@ def learner_suggest(
         },
         "playbook_id": "PB_generic_fix",
         "playbook_guidance": None,
+        "kernel_evidence": {
+            "prior_success_prob": 0.5,
+            "prior_trials": 0,
+        },
     }
 
 
@@ -950,6 +1211,7 @@ def run(req: RunReq):
                     "status": "rejected",
                     "reason": ex["reason"],
                 })
+                _end_kernel_run(run_id)
                 return {
                     "run_id": run_id,
                     "status": "rejected",
@@ -976,6 +1238,7 @@ def run(req: RunReq):
                     "run_id": run_id,
                     "status": "fail",
                 })
+                _end_kernel_run(run_id)
                 return {
                     "run_id": run_id,
                     "status": "fail",
@@ -988,6 +1251,7 @@ def run(req: RunReq):
             "status": "ok",
         })
         _METRICS["runs_ok"] += 1
+        _end_kernel_run(run_id)
         return {
             "run_id": run_id,
             "status": "ok",
@@ -1135,11 +1399,21 @@ def run(req: RunReq):
             ),
             max_steps=MAX_STEPS_PER_ITER,
         )
+        tier, tier_name, _ = _policy_tier_for_run(
+            run_id,
+        )
 
         # Build message history: system + user
         # prompt + transcript of this iteration.
         messages = [
             {"role": "system", "content": SYSTEM},
+            {
+                "role": "system",
+                "content": (
+                    f"POLICY_TIER={tier} ({tier_name}). "
+                    "Propose steps within this tier only."
+                ),
+            },
             {"role": "user", "content": prompt},
         ]
 
@@ -1175,6 +1449,9 @@ def run(req: RunReq):
                 intent="auto deps",
                 bundle_id=dep_bundle_id,
                 step_num=0,
+                learner_evidence=sug.get(
+                    "kernel_evidence", {},
+                ),
             )
             if not ex["ok"]:
                 _METRICS["gate_rejections"] += 1
@@ -1349,8 +1626,53 @@ def run(req: RunReq):
                 })
                 continue
 
+            if not isinstance(resp.get("done"), bool):
+                messages.append({
+                    "role": "assistant",
+                    "content": content,
+                })
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "SCHEMA ERROR: 'done'"
+                        " must be a boolean."
+                    ),
+                })
+                continue
+
+            if (
+                not isinstance(resp.get("intent"), str)
+                or not resp.get("intent", "").strip()
+            ):
+                messages.append({
+                    "role": "assistant",
+                    "content": content,
+                })
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "SCHEMA ERROR: 'intent'"
+                        " must be a non-empty string."
+                    ),
+                })
+                continue
+
             # Check if LLM says done.
             if resp.get("done", False):
+                if resp.get("step") is not None:
+                    messages.append({
+                        "role": "assistant",
+                        "content": content,
+                    })
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "SCHEMA ERROR: when"
+                            " done=true, step must"
+                            " be null."
+                        ),
+                    })
+                    continue
                 ledger.append({
                     "type": "LLM_DONE",
                     "run_id": run_id,
@@ -1437,6 +1759,9 @@ def run(req: RunReq):
                 ),
                 bundle_id=bundle_id,
                 step_num=iter_steps_used + 1,
+                learner_evidence=sug.get(
+                    "kernel_evidence", {},
+                ),
             )
             if not ex["ok"]:
                 _METRICS["gate_rejections"] += 1
@@ -1709,6 +2034,9 @@ def run(req: RunReq):
                             intent="static analysis",
                             bundle_id=sa_bundle_id,
                             step_num=1000 + i_sa,
+                            learner_evidence=sug.get(
+                                "kernel_evidence", {},
+                            ),
                         )
                         if not ex["ok"]:
                             _METRICS[
@@ -1730,6 +2058,7 @@ def run(req: RunReq):
                                 "status": "rejected",
                                 "reason": ex["reason"],
                             })
+                            _end_kernel_run(run_id)
                             return {
                                 "run_id": run_id,
                                 "status": "rejected",
@@ -1789,6 +2118,7 @@ def run(req: RunReq):
                 stage="success",
             )
             _METRICS["runs_ok"] += 1
+            _end_kernel_run(run_id)
             return {
                 "run_id": run_id,
                 "status": "ok",
@@ -1867,6 +2197,7 @@ def run(req: RunReq):
         stage=last_stage,
     )
     _METRICS["runs_fail"] += 1
+    _end_kernel_run(run_id)
     return {
         "run_id": run_id,
         "status": "fail",

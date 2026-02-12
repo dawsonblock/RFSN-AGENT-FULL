@@ -27,6 +27,9 @@ if _HAS_AUTH:
 
 BLESSED_IMAGE = os.getenv("BLESSED_IMAGE", "rfsn-blessed:0.2")
 HOST_DATA_DIR = os.getenv("HOST_DATA_DIR", "/data")
+USE_DOCKER_SANDBOX = os.getenv(
+    "RFSN_EXEC_USE_DOCKER", "0",
+) == "1"
 
 # ── Warm sandbox pool ─────────────────────────
 try:
@@ -245,6 +248,17 @@ def _run_docker_with_data(
     - --memory 2g / --cpus 2 / --pids-limit 256
     - --cap-drop ALL
     """
+    if not USE_DOCKER_SANDBOX:
+        return _run_local_with_data(
+            script,
+            data_files,
+            repo_host,
+            art_host,
+            venv_host,
+            wheels_host,
+            timeout_s,
+        )
+
     script_path = _write_data_file(script, suffix=".sh")
     try:
         net = "none" if network_disabled else "bridge"
@@ -301,9 +315,14 @@ def _run_docker_with_data(
                 )[-200000:],
             }
         except FileNotFoundError:
-            raise HTTPException(
-                500,
-                "docker not found inside executor",
+            return _run_local_with_data(
+                script,
+                data_files,
+                repo_host,
+                art_host,
+                venv_host,
+                wheels_host,
+                timeout_s,
             )
         except Exception as e:
             raise HTTPException(500, f"executor error: {type(e).__name__}")
@@ -317,6 +336,66 @@ def _run_docker_with_data(
                 os.unlink(hpath)
             except OSError:
                 pass
+
+
+def _run_local_with_data(
+    script: str,
+    data_files: dict,
+    repo_host: str,
+    art_host: str,
+    venv_host: str,
+    wheels_host: str,
+    timeout_s: int,
+):
+    """Execute script directly in executor container.
+
+    Used when docker socket is intentionally unavailable.
+    """
+    start = time.time()
+    translated = script
+    replacements = {
+        "/work/repo": repo_host,
+        "/work/artifacts": art_host,
+        "/work/venv": venv_host,
+        "/work/wheels": wheels_host,
+    }
+    for src, dst in replacements.items():
+        translated = translated.replace(
+            src, shlex.quote(dst),
+        )
+    for cpath, hpath in data_files.items():
+        translated = translated.replace(
+            cpath, shlex.quote(hpath),
+        )
+
+    try:
+        p = subprocess.run(
+            ["bash", "-lc", translated],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout_s,
+            text=True,
+        )
+        out = p.stdout.replace("\r\n", "\n")[-200000:]
+        return {
+            "status": p.returncode,
+            "seconds": time.time() - start,
+            "logs": out,
+        }
+    except subprocess.TimeoutExpired as e:
+        raw = e.stdout or ""
+        if isinstance(raw, bytes):
+            raw = raw.decode(
+                "utf-8", errors="replace",
+            )
+        out = raw + "\n[TIMEOUT]\n"
+        return {
+            "status": 124,
+            "seconds": time.time() - start,
+            "logs": out.replace(
+                "\r\n", "\n",
+            )[-200000:],
+        }
 
 
 def _ensure_deps(

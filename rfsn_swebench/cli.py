@@ -9,7 +9,7 @@ Usage
         [--proposer orchestrator|direct|placeholder] \\
         [--orchestrator-url http://localhost:8000] \\
         [--executor-url http://localhost:8003] \\
-        [--ledger-path /data/ledger.jsonl] \\
+        [--ledger-path /data/kernel_ledger.jsonl] \\
         [--data-dir /data]
 """
 from __future__ import annotations
@@ -117,8 +117,15 @@ def make_orchestrator_proposer(
             "max_iters": task.limits.max_iters,
             "scenario": scenario,
         }
+        headers: dict[str, str] = {}
+        tok = os.environ.get("RFSN_SERVICE_TOKEN", "")
+        if tok:
+            headers["Authorization"] = f"Bearer {tok}"
         r = requests.post(
-            f"{orchestrator_url}/run", json=payload, timeout=600
+            f"{orchestrator_url}/run",
+            json=payload,
+            headers=headers,
+            timeout=600,
         )
         r.raise_for_status()
         data = r.json()

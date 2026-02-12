@@ -1,0 +1,92 @@
+version: 1
+
+tiers:
+  0:
+    name: "code-only"
+    allow:
+      edit_tests: false
+      edit_deps: false
+      edit_ci: false
+    budgets:
+      max_total_steps: 16
+      max_files_touched: 4
+      max_total_lines_changed: 120
+      max_patch_bytes: 24000
+
+  1:
+    name: "tests-allowed"
+    allow:
+      edit_tests: true
+      edit_deps: false
+      edit_ci: false
+    budgets:
+      max_total_steps: 22
+      max_files_touched: 7
+      max_total_lines_changed: 220
+      max_patch_bytes: 48000
+
+  2:
+    name: "deps-allowed"
+    allow:
+      edit_tests: true
+      edit_deps: true
+      edit_ci: false
+    budgets:
+      max_total_steps: 28
+      max_files_touched: 10
+      max_total_lines_changed: 320
+      max_patch_bytes: 72000
+
+  3:
+    name: "ci-allowed"
+    allow:
+      edit_tests: true
+      edit_deps: true
+      edit_ci: true
+    budgets:
+      max_total_steps: 32
+      max_files_touched: 14
+      max_total_lines_changed: 450
+      max_patch_bytes: 110000
+
+escalation_rules:
+  to_tier_1:
+    requires_any:
+      - failure_kind: "tests_failed"
+
+  to_tier_2:
+    requires_any:
+      - failure_kind: "deps_install_failed"
+      - failure_kind: "import_error_missing_module"
+      - failure_kind: "build_system_missing_dependency"
+
+  to_tier_3:
+    requires_any:
+      - failure_kind: "ci_failed"
+      - failure_kind: "ci_config_invalid"
+      - failure_kind: "ci_env_mismatch"
+
+classifiers:
+  tests_globs:
+    - "**/test_*.py"
+    - "**/*_test.py"
+    - "**/tests/**"
+    - "**/__tests__/**"
+  deps_globs:
+    - "**/requirements.txt"
+    - "**/requirements/*.txt"
+    - "**/pyproject.toml"
+    - "**/poetry.lock"
+    - "**/Pipfile"
+    - "**/Pipfile.lock"
+    - "**/package.json"
+    - "**/package-lock.json"
+    - "**/pnpm-lock.yaml"
+    - "**/yarn.lock"
+    - "**/go.mod"
+    - "**/go.sum"
+  ci_globs:
+    - "**/.github/workflows/**"
+    - "**/.gitlab-ci.yml"
+    - "**/azure-pipelines.yml"
+    - "**/.circleci/**"

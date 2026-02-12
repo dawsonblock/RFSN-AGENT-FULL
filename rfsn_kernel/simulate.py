@@ -10,7 +10,7 @@ heuristic models produce major stability gains.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from rfsn_kernel.state import Proposal, SystemState
 
@@ -204,6 +204,9 @@ def simulate(
     state: SystemState,
     history: Optional[OutcomeHistory] = None,
     context: str = "",
+    prior_success_prob: Optional[float] = None,
+    prior_trials: int = 0,
+    prior_loop_risk: Optional[float] = None,
 ) -> SimResult:
     """Run a fast predictive model — no side effects.
 
@@ -235,6 +238,20 @@ def simulate(
                 + weight * stats.success_rate
             )
 
+    # Blend in learner evidence as an upstream prior.
+    if prior_success_prob is not None:
+        prior = max(
+            0.01, min(1.0, float(prior_success_prob)),
+        )
+        confidence = max(
+            0.0, min(1.0, float(prior_trials) / 20.0),
+        )
+        weight = 0.25 + (0.5 * confidence)
+        success_prob = (
+            (1.0 - weight) * success_prob
+            + weight * prior
+        )
+
     # Penalize for high recent failure count.
     if state.recent_failures >= 3:
         success_prob *= 0.7
@@ -249,6 +266,11 @@ def simulate(
 
     cost_est = _estimate_cost(proposal)
     loop_risk = _detect_loop(proposal, state)
+    if prior_loop_risk is not None:
+        loop_risk = max(
+            loop_risk,
+            max(0.0, min(1.0, float(prior_loop_risk))),
+        )
     drift_risk = _detect_drift(state)
     failure_mode = _predict_failure_mode(
         proposal, state, history, context,

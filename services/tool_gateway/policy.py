@@ -1,4 +1,5 @@
 import fnmatch
+import os
 from pathlib import PurePosixPath
 
 
@@ -44,8 +45,25 @@ def validate_repo_path(
     path: str,
     allowed_paths: list[str],
     blocked_globs: list[str],
+    *,
+    repo_root_required: bool = True,
+    repo_root: str = "",
 ) -> bool:
-    if not is_safe_relpath(path):
+    if repo_root_required:
+        if not is_safe_relpath(path):
+            return False
+        root = os.path.abspath(
+            repo_root or "/work/repo",
+        )
+        abs_path = os.path.abspath(
+            os.path.join(root, path),
+        )
+        if not (
+            abs_path == root
+            or abs_path.startswith(root + os.sep)
+        ):
+            return False
+    elif not is_safe_relpath(path):
         return False
     if glob_blocked(path, blocked_globs):
         return False

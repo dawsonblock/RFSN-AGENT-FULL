@@ -10,9 +10,13 @@ If any step fails → abort, no side effects.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
+import yaml
 
 from rfsn_kernel.state import Proposal, SystemState, Outcome
 from rfsn_kernel.normalize import normalize, proposal_to_step
@@ -22,6 +26,13 @@ from rfsn_kernel.risk import risk_score, RiskBreakdown
 from rfsn_kernel.decide import decide, Decision
 from rfsn_kernel.verify import verify, VerificationResult
 from rfsn_kernel.hard_ledger import HardLedger, LedgerRecord
+from rfsn_kernel.tier_policy import (
+    tier_allows_step,
+    pick_next_tier,
+    step_touches,
+)
+from rfsn_kernel.failure_kinds import extract_failure_kinds
+from rfsn_kernel.run_state import RunStateStore
 
 
 @dataclass
@@ -61,7 +72,10 @@ class KernelStepResult:
                 self.decision.reason if self.decision else None
             ),
             "risk": self.risk.to_dict() if self.risk else None,
-            "simulation": self.simulation.to_dict() if self.simulation else None,
+            "simulation": (
+                self.simulation.to_dict()
+                if self.simulation else None
+            ),
         }
 
 
@@ -69,6 +83,74 @@ class KernelStepResult:
 # returns an Outcome. This is how the kernel
 # delegates to the executor without coupling.
 ExecuteCallback = Callable[[Dict[str, Any]], Outcome]
+
+
+_DEFAULT_TIER_POLICY: Dict[str, Any] = {
+    "tiers": {
+        0: {
+            "name": "code-only",
+            "allow": {
+                "edit_tests": False,
+                "edit_deps": False,
+                "edit_ci": False,
+            },
+            "budgets": {},
+        },
+        1: {
+            "name": "tests-allowed",
+            "allow": {
+                "edit_tests": True,
+                "edit_deps": False,
+                "edit_ci": False,
+            },
+            "budgets": {},
+        },
+        2: {
+            "name": "deps-allowed",
+            "allow": {
+                "edit_tests": True,
+                "edit_deps": True,
+                "edit_ci": False,
+            },
+            "budgets": {},
+        },
+        3: {
+            "name": "ci-allowed",
+            "allow": {
+                "edit_tests": True,
+                "edit_deps": True,
+                "edit_ci": True,
+            },
+            "budgets": {},
+        },
+    },
+    "escalation_rules": {
+        "to_tier_1": {
+            "requires_any": [
+                {"failure_kind": "tests_failed"},
+            ],
+        },
+        "to_tier_2": {
+            "requires_any": [
+                {"failure_kind": "deps_install_failed"},
+                {"failure_kind": "import_error_missing_module"},
+                {"failure_kind": "build_system_missing_dependency"},
+            ],
+        },
+        "to_tier_3": {
+            "requires_any": [
+                {"failure_kind": "ci_failed"},
+                {"failure_kind": "ci_config_invalid"},
+                {"failure_kind": "ci_env_mismatch"},
+            ],
+        },
+    },
+    "classifiers": {
+        "tests_globs": ["**/tests/**"],
+        "deps_globs": ["**/requirements.txt", "**/pyproject.toml"],
+        "ci_globs": ["**/.github/workflows/**"],
+    },
+}
 
 
 class HardKernel:
@@ -92,7 +174,107 @@ class HardKernel:
             rng_seed=int(self.policy.get("rng_seed", 42)),
             policy_hash=str(self.policy.get("policy_hash", "")),
         )
+        self.tier_policy_path = os.environ.get(
+            "RFSN_TIER_POLICY_PATH",
+            "/policies/gate_policy_tiers.yaml",
+        )
+        self.tier_policy = self._load_tier_policy(
+            self.tier_policy_path,
+        )
+        self.classifiers = (
+            self.tier_policy.get("classifiers") or {}
+        )
+        self.run_state = RunStateStore()
         self._step_count = 0
+
+    def _load_tier_policy(
+        self, path: str,
+    ) -> Dict[str, Any]:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            if not isinstance(data, dict):
+                return dict(_DEFAULT_TIER_POLICY)
+            # Normalize tier keys to ints.
+            tiers = data.get("tiers", {})
+            fixed_tiers: Dict[int, Dict[str, Any]] = {}
+            if isinstance(tiers, dict):
+                for k, v in tiers.items():
+                    try:
+                        ik = int(k)
+                    except (TypeError, ValueError):
+                        continue
+                    if isinstance(v, dict):
+                        fixed_tiers[ik] = v
+            data["tiers"] = fixed_tiers or dict(
+                _DEFAULT_TIER_POLICY["tiers"],
+            )
+            return data
+        except Exception:
+            return dict(_DEFAULT_TIER_POLICY)
+
+    def _tier_cfg(self, tier: int) -> Dict[str, Any]:
+        tiers = self.tier_policy.get("tiers", {})
+        if not isinstance(tiers, dict):
+            return {}
+        cfg = tiers.get(tier)
+        if isinstance(cfg, dict):
+            return cfg
+        # Handle string-keyed tiers in external policy.
+        cfg = tiers.get(str(tier))
+        if isinstance(cfg, dict):
+            return cfg
+        return {}
+
+    def _append_kernel_event(
+        self,
+        *,
+        event_type: str,
+        run_id: str,
+        intent: str,
+        bundle_id: str,
+        fields: Dict[str, Any],
+    ) -> None:
+        payload = {
+            "type": event_type,
+            "run_id": run_id,
+            "intent": intent,
+            "bundle_id": bundle_id,
+            **fields,
+        }
+        blob = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            default=str,
+        )
+        ev_hash = hashlib.sha256(
+            blob.encode("utf-8"),
+        ).hexdigest()
+        state_hash = hashlib.sha256(
+            f"kernel_event:{ev_hash}".encode("utf-8"),
+        ).hexdigest()
+        record = LedgerRecord(
+            proposal_hash=ev_hash,
+            simulation={},
+            risk={},
+            decision="REJECT",
+            decision_reason=f"event:{event_type}",
+            outcome_hash=None,
+            state_hash=state_hash,
+            metadata={
+                "record_type": "kernel_event",
+                "run_id": run_id,
+                "event_type": event_type,
+                "action": f"event:{event_type}",
+                "intent": intent,
+                "bundle_id": bundle_id,
+                "event": payload,
+                "ts": time.time(),
+            },
+        )
+        self.ledger.append(record)
 
     def kernel_step(
         self,
@@ -102,6 +284,7 @@ class HardKernel:
         intent: str = "",
         bundle_id: str = "",
         run_id: str = "",
+        learner_evidence: Optional[Dict[str, Any]] = None,
     ) -> KernelStepResult:
         """The ONLY path to execution.
 
@@ -124,6 +307,234 @@ class HardKernel:
             context_hash=context,
             bundle_id=bundle_id,
         )
+        rs = self.run_state.get(run_id)
+        tier_cfg = self._tier_cfg(rs.tier)
+        budgets = (
+            tier_cfg.get("budgets", {})
+            if isinstance(tier_cfg, dict) else {}
+        )
+
+        max_total_steps = int(
+            budgets.get("max_total_steps", 0) or 0,
+        )
+        if (
+            max_total_steps > 0
+            and self.state.step_count >= max_total_steps
+        ):
+            reason = (
+                "tier max_total_steps exceeded:"
+                f" {self.state.step_count} >= {max_total_steps}"
+            )
+            self._append_kernel_event(
+                event_type="TIER_STEP_REJECTED",
+                run_id=run_id,
+                intent=intent,
+                bundle_id=bundle_id,
+                fields={
+                    "tier": rs.tier,
+                    "reason": reason,
+                },
+            )
+            record = self._commit_ledger(
+                proposal,
+                None,
+                None,
+                "REJECT",
+                reason,
+                None,
+                None,
+                run_id,
+            )
+            return KernelStepResult(
+                phase="VALIDATE",
+                proposal=proposal,
+                decision=Decision(
+                    approved=False,
+                    reason=reason,
+                ),
+                ledger_record=record,
+                error="tier budget rejected step",
+            )
+
+        if raw_step.get("type") == "apply_patch":
+            patch = str(raw_step.get("patch", ""))
+            max_patch_bytes = int(
+                budgets.get("max_patch_bytes", 0) or 0,
+            )
+            if (
+                max_patch_bytes > 0
+                and len(
+                    patch.encode(
+                        "utf-8",
+                        errors="replace",
+                    )
+                ) > max_patch_bytes
+            ):
+                reason = (
+                    "tier max_patch_bytes exceeded:"
+                    f" > {max_patch_bytes}"
+                )
+                self._append_kernel_event(
+                    event_type="TIER_STEP_REJECTED",
+                    run_id=run_id,
+                    intent=intent,
+                    bundle_id=bundle_id,
+                    fields={
+                        "tier": rs.tier,
+                        "reason": reason,
+                    },
+                )
+                record = self._commit_ledger(
+                    proposal,
+                    None,
+                    None,
+                    "REJECT",
+                    reason,
+                    None,
+                    None,
+                    run_id,
+                )
+                return KernelStepResult(
+                    phase="VALIDATE",
+                    proposal=proposal,
+                    decision=Decision(
+                        approved=False,
+                        reason=reason,
+                    ),
+                    ledger_record=record,
+                    error="tier budget rejected step",
+                )
+
+            max_files_touched = int(
+                budgets.get("max_files_touched", 0) or 0,
+            )
+            touched = step_touches(raw_step)
+            if (
+                max_files_touched > 0
+                and len(touched) > max_files_touched
+            ):
+                reason = (
+                    "tier max_files_touched exceeded:"
+                    f" {len(touched)} > {max_files_touched}"
+                )
+                self._append_kernel_event(
+                    event_type="TIER_STEP_REJECTED",
+                    run_id=run_id,
+                    intent=intent,
+                    bundle_id=bundle_id,
+                    fields={
+                        "tier": rs.tier,
+                        "reason": reason,
+                    },
+                )
+                record = self._commit_ledger(
+                    proposal,
+                    None,
+                    None,
+                    "REJECT",
+                    reason,
+                    None,
+                    None,
+                    run_id,
+                )
+                return KernelStepResult(
+                    phase="VALIDATE",
+                    proposal=proposal,
+                    decision=Decision(
+                        approved=False,
+                        reason=reason,
+                    ),
+                    ledger_record=record,
+                    error="tier budget rejected step",
+                )
+
+            max_lines_changed = int(
+                budgets.get(
+                    "max_total_lines_changed", 0,
+                ) or 0,
+            )
+            if max_lines_changed > 0:
+                added = 0
+                deleted = 0
+                for ln in patch.splitlines():
+                    if ln.startswith("+") and not ln.startswith("+++"):
+                        added += 1
+                    elif ln.startswith("-") and not ln.startswith("---"):
+                        deleted += 1
+                if (added + deleted) > max_lines_changed:
+                    reason = (
+                        "tier max_total_lines_changed exceeded:"
+                        f" {added + deleted} > {max_lines_changed}"
+                    )
+                    self._append_kernel_event(
+                        event_type="TIER_STEP_REJECTED",
+                        run_id=run_id,
+                        intent=intent,
+                        bundle_id=bundle_id,
+                        fields={
+                            "tier": rs.tier,
+                            "reason": reason,
+                        },
+                    )
+                    record = self._commit_ledger(
+                        proposal,
+                        None,
+                        None,
+                        "REJECT",
+                        reason,
+                        None,
+                        None,
+                        run_id,
+                    )
+                    return KernelStepResult(
+                        phase="VALIDATE",
+                        proposal=proposal,
+                        decision=Decision(
+                            approved=False,
+                            reason=reason,
+                        ),
+                        ledger_record=record,
+                        error="tier budget rejected step",
+                    )
+
+        # Tier gate is enforced before any simulation/execution.
+        tier_ok, tier_reason = tier_allows_step(
+            raw_step,
+            tier_cfg,
+            self.classifiers,
+        )
+        if not tier_ok:
+            reason = tier_reason or "tier_policy_reject"
+            self._append_kernel_event(
+                event_type="TIER_STEP_REJECTED",
+                run_id=run_id,
+                intent=intent,
+                bundle_id=bundle_id,
+                fields={
+                    "tier": rs.tier,
+                    "reason": reason,
+                },
+            )
+            record = self._commit_ledger(
+                proposal,
+                None,
+                None,
+                "REJECT",
+                reason,
+                None,
+                None,
+                run_id,
+            )
+            return KernelStepResult(
+                phase="VALIDATE",
+                proposal=proposal,
+                decision=Decision(
+                    approved=False,
+                    reason=reason,
+                ),
+                ledger_record=record,
+                error="tier policy rejected step",
+            )
 
         # ── 2. VALIDATE ──
         validation = validate(proposal, self.state, self.policy)
@@ -143,10 +554,68 @@ class HardKernel:
             )
 
         # ── 3. SIMULATE ──
+        prior_success_prob: Optional[float] = None
+        prior_trials = 0
+        prior_loop_risk: Optional[float] = None
+        if isinstance(learner_evidence, dict):
+            try:
+                v = learner_evidence.get(
+                    "prior_success_prob",
+                )
+                if v is not None:
+                    prior_success_prob = float(v)
+            except (TypeError, ValueError):
+                prior_success_prob = None
+            try:
+                prior_trials = int(
+                    learner_evidence.get(
+                        "prior_trials", 0,
+                    )
+                    or 0,
+                )
+            except (TypeError, ValueError):
+                prior_trials = 0
+
+            try:
+                failure_occurrence = int(
+                    learner_evidence.get(
+                        "failure_occurrence", 0,
+                    )
+                    or 0,
+                )
+            except (TypeError, ValueError):
+                failure_occurrence = 0
+            try:
+                failure_best_win_rate = float(
+                    learner_evidence.get(
+                        "failure_best_win_rate", 0.0,
+                    )
+                    or 0.0,
+                )
+            except (TypeError, ValueError):
+                failure_best_win_rate = 0.0
+            if failure_occurrence >= 2:
+                prior_loop_risk = min(
+                    0.9,
+                    0.2 + (0.1 * min(
+                        failure_occurrence, 5,
+                    )),
+                )
+            if (
+                failure_occurrence >= 3
+                and failure_best_win_rate < 0.35
+            ):
+                prior_loop_risk = max(
+                    prior_loop_risk or 0.0, 0.7,
+                )
+
         sim = simulate(
             proposal, self.state,
             history=self.history,
             context=context,
+            prior_success_prob=prior_success_prob,
+            prior_trials=prior_trials,
+            prior_loop_risk=prior_loop_risk,
         )
 
         # ── 4. RISK SCORE ──
@@ -202,6 +671,34 @@ class HardKernel:
             proposal.action, context,
             outcome.success, sim.cost_est,
         )
+
+        executor_out_like = {
+            "status": outcome.exit_code,
+            "logs": outcome.logs or "",
+            "payload": outcome.payload or "",
+        }
+        kinds = extract_failure_kinds(
+            executor_out_like,
+        )
+        rs.failure_kinds = kinds
+        td = pick_next_tier(
+            rs.tier, kinds, self.tier_policy,
+        )
+        if td.tier != rs.tier:
+            old_tier = rs.tier
+            rs.tier = td.tier
+            self._append_kernel_event(
+                event_type="TIER_ESCALATED",
+                run_id=run_id,
+                intent=intent,
+                bundle_id=bundle_id,
+                fields={
+                    "from": old_tier,
+                    "to": td.tier,
+                    "reason": td.reason,
+                    "failure_kinds": kinds,
+                },
+            )
 
         # ── 7. VERIFY ──
         verification = verify(
@@ -267,6 +764,7 @@ class HardKernel:
                 "intent": proposal.intent,
                 "run_id": run_id,
                 "bundle_id": proposal.bundle_id,
+                "tier": self.run_state.get(run_id).tier,
                 "context_hash": proposal.context_hash,
                 "memory_version": self.state.memory_version,
                 "env_hash": self.state.env_hash,
@@ -308,13 +806,16 @@ class HardKernel:
             resource_state={
                 "run_id": run_id,
             },
-        )
+            )
         if reset_history:
             self.history = OutcomeHistory(
                 max_entries=int(
                     self.policy.get("history_max", 500),
                 ),
             )
+        rs = self.run_state.get(run_id)
+        rs.tier = 0
+        rs.failure_kinds = []
 
     def _adaptive_tighten(self) -> None:
         """Tighten safety envelope after failure cluster.
@@ -347,6 +848,10 @@ class HardKernel:
         self.state.iter_count += 1
         self.state.recent_actions = []
 
+    def end_run(self, run_id: str) -> None:
+        """Clear per-run tier state."""
+        self.run_state.clear(run_id)
+
     def get_stats(self) -> Dict[str, Any]:
         """Return current kernel statistics."""
         return {
@@ -358,4 +863,6 @@ class HardKernel:
             "risk_max": float(self.policy.get("risk_max", 0.65)),
             "success_min": float(self.policy.get("success_min", 0.15)),
             "drift_variance": round(self.state.drift_variance, 6),
+            "tier_policy_path": self.tier_policy_path,
+            "active_runs": self.run_state.snapshot(),
         }

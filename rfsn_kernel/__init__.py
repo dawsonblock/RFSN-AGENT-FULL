@@ -17,6 +17,13 @@ from rfsn_kernel.decide import decide, Decision
 from rfsn_kernel.verify import verify, VerificationResult
 from rfsn_kernel.hard_ledger import HardLedger, LedgerRecord
 from rfsn_kernel.kernel import HardKernel, KernelStepResult
+from rfsn_kernel.run_state import RunState, RunStateStore
+from rfsn_kernel.tier_policy import (
+    TierDecision,
+    tier_allows_step,
+    pick_next_tier,
+)
+from rfsn_kernel.failure_kinds import extract_failure_kinds
 
 __all__ = [
     "HardKernel",
@@ -35,4 +42,10 @@ __all__ = [
     "VerificationResult",
     "HardLedger",
     "LedgerRecord",
+    "RunState",
+    "RunStateStore",
+    "TierDecision",
+    "tier_allows_step",
+    "pick_next_tier",
+    "extract_failure_kinds",
 ]

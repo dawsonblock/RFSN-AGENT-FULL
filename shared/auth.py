@@ -1,8 +1,7 @@
 """Shared bearer-token authentication for inter-service calls.
 
 Every service loads RFSN_SERVICE_TOKEN from env.  The middleware rejects any
-request without a matching ``Authorization: Bearer <token>`` header.  The
-/health endpoint is exempt so that Docker health-checks still work.
+request without a matching ``Authorization: Bearer <token>`` header.
 
 This ensures that the executor is ONLY reachable via the tool_gateway, making
 the gateway the true final authority on what runs.
@@ -28,9 +27,8 @@ if not RFSN_SERVICE_TOKEN and not RFSN_DEV_MODE:
         "RFSN_SERVICE_TOKEN is required unless RFSN_DEV_MODE=1",
     )
 
-# Paths that bypass auth (health checks, readiness probes)
+# Paths that bypass auth (docs only)
 _PUBLIC_PATHS = frozenset({
-    "/health", "/healthz", "/ready",
     "/docs", "/openapi.json",
 })
 
@@ -42,8 +40,6 @@ def get_service_token() -> str:
 
 class ServiceAuthMiddleware(BaseHTTPMiddleware):
     """Reject requests without a valid Bearer token.
-
-    /health is always public so Docker/k8s probes work.
     """
 
     def __init__(self, app: ASGIApp, *, token: str | None = None):

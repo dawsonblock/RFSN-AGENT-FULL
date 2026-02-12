@@ -68,6 +68,9 @@ _EFFECTIVE_MAX_DELETED = int(
 ALLOWED_TYPES = set(ALLOW.get("allowed_step_types", []))
 ALLOWED_PATHS = ALLOW.get("allowed_paths", ["**"])
 BLOCKED_GLOBS = ALLOW.get("blocked_globs", [])
+REPO_ROOT_REQUIRED = bool(
+    ALLOW.get("repo_root_required", True),
+)
 
 MAX_PATCH_BYTES = int(ALLOW.get("max_patch_bytes", 200000))
 MAX_READ_BYTES = int(ALLOW.get("max_read_bytes", 200000))
@@ -178,6 +181,7 @@ def _executor(
 @app.post("/run_step")
 def run_step(req: RunStepReq):
     s = req.step.model_dump()
+    repo_root = f"/data/repos/{req.repo_id}"
 
     if s["type"] not in ALLOWED_TYPES:
         raise HTTPException(403, f"step type blocked: {s['type']}")
@@ -186,7 +190,13 @@ def run_step(req: RunStepReq):
 
     if s["type"] == "repo_read_range":
         p = s.get("path") or ""
-        if not validate_repo_path(p, ALLOWED_PATHS, BLOCKED_GLOBS):
+        if not validate_repo_path(
+            p,
+            ALLOWED_PATHS,
+            BLOCKED_GLOBS,
+            repo_root_required=REPO_ROOT_REQUIRED,
+            repo_root=repo_root,
+        ):
             raise HTTPException(403, "path blocked")
         charge(req.repo_id, req.iter, "read")
 
@@ -225,11 +235,8 @@ def run_step(req: RunStepReq):
             r'\.env$', r'\.env\.', r'id_rsa', r'\.pem$', r'\.key$',
             r'\.p12$', r'\.pfx$', r'\.jks$', r'\.pypirc$', r'\.npmrc$',
             r'\.netrc$', r'Dockerfile', r'docker-compose',
-            r'\.github/workflows/', r'\.circleci/', r'Jenkinsfile',
         ]
 
-        # --- diff-guard: blocked dependency files ---
-        blocked = set(DIFF_GUARD.get("blocked_dependency_files", []))
         header_paths = set(re.findall(
             r"^[+]{3} b/(.+)$|^--- a/(.+)$",
             patch_text, flags=re.MULTILINE,
@@ -241,11 +248,16 @@ def run_step(req: RunStepReq):
             if b:
                 flat.add(b.strip())
         for f in flat:
-            base = os.path.basename(f)
-            if base in blocked:
+            if not validate_repo_path(
+                f,
+                ALLOWED_PATHS,
+                BLOCKED_GLOBS,
+                repo_root_required=REPO_ROOT_REQUIRED,
+                repo_root=repo_root,
+            ):
                 raise HTTPException(
                     403,
-                    f"dependency manifest edit blocked: {base}",
+                    f"patch path blocked: {f}",
                 )
             # Check sensitive file patterns
             for sp in _SENSITIVE_PATTERNS:

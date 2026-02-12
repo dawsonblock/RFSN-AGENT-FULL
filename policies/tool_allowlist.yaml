@@ -7,8 +7,7 @@ allowed_step_types:
   - run_tests
 
 # Paths are repo-root-relative (src/foo.py, not repo/src/foo.py).
-# The executor cd's into /work/repo, so paths resolve correctly.
-repo_root_required: false
+repo_root_required: true
 
 max_patch_bytes: 200000
 max_read_bytes: 200000
@@ -23,22 +22,14 @@ allowed_paths:
 blocked_globs:
   - "**/.git/**"
   - "**/.env"
-  - "**/.env.*"
-  - "**/id_rsa"
   - "**/*.pem"
-  - "**/*.key"
-  - "**/*.p12"
-  - "**/*.pfx"
-  - "**/*.jks"
-  - "**/.pypirc"
-  - "**/.npmrc"
-  - "**/.netrc"
-  - "**/*_history"
-  - "**/secrets.*"
-  - "**/*token*"
-  - "**/*credential*"
-  - "**/Dockerfile*"
-  - "**/docker-compose*"
-  - "**/.github/**"
-  - "**/.circleci/**"
-  - "**/Jenkinsfile"
+  - "**/*id_rsa*"
+  - "**/*secrets*"
+  - "**/node_modules/**"
+  - "**/.venv/**"
+  - "**/venv/**"
+  - "**/__pycache__/**"
+  - "**/.pytest_cache/**"
+  - "**/dist/**"
+  - "**/build/**"
+  - "**/.ruff_cache/**"

@@ -9,6 +9,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Sanity checks
+        run: bash scripts/ci_sanity.sh
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -72,12 +74,14 @@ jobs:
           echo "DEEPSEEK_API_KEY=dummy" >> $GITHUB_ENV
           echo "RFSN_SEED=1" >> $GITHUB_ENV
           echo "LEDGER_FIXED_TS=1.0" >> $GITHUB_ENV
+          echo "RFSN_SERVICE_TOKEN=dummy" >> $GITHUB_ENV
+          echo "RFSN_DEV_MODE=0" >> $GITHUB_ENV
       - name: Build & smoke
         run: |
           docker compose build
           docker compose up -d
-          curl -sf http://localhost:8000/health
-          curl -sf http://localhost:8001/health
-          curl -sf http://localhost:8002/health
-          curl -sf http://localhost:8003/health
+          curl -sf -H "authorization: Bearer dummy" http://localhost:8000/health
+          curl -sf -H "authorization: Bearer dummy" http://localhost:8001/health
+          curl -sf -H "authorization: Bearer dummy" http://localhost:8002/health
+          curl -sf -H "authorization: Bearer dummy" http://localhost:8003/health
           docker compose down

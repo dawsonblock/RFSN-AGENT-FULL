@@ -170,16 +170,16 @@ Use cassette replay mode for fully deterministic CI.
 
 ```
 ├── services/
-│   ├── orchestrator/         # Run loop, kernel gate, learner integration
+│   ├── orchestrator/         # Run loop + hard-kernel integration
 │   │   ├── app.py            # FastAPI orchestrator (multi-proposal, context-aware)
-│   │   ├── kernel.py         # Deterministic gate (final authority)
 │   │   ├── context_fingerprint.py  # Repo + failure fingerprinting
-│   │   ├── ledger.py         # Hash-chained event ledger
+│   │   ├── phase_tracker.py  # Step-phase state tracker
 │   │   └── prompts.py        # LLM prompt templates
 │   ├── llm_service/          # DeepSeek API wrapper + cassette system
 │   ├── tool_gateway/         # Policy enforcement + budget tracking
 │   ├── executor/             # Docker-sandboxed step runner
 │   └── learner_service/      # Thompson-sampling strategy selector (DuckDB)
+├── rfsn_kernel/              # HardKernel gate + hard ledger + replay + tier policy
 ├── rfsn_swebench/            # Standalone SWE-bench bench runner
 │   ├── cli.py                # CLI entry point (3 proposer modes)
 │   ├── runner.py             # Core propose → apply → gate → test loop
@@ -204,23 +204,18 @@ Use cassette replay mode for fully deterministic CI.
 
 ## Gate Policy (what gets enforced)
 
-The kernel gate at `services/orchestrator/kernel.py` is the **final authority** over
+The hard kernel at `rfsn_kernel/kernel.py` is the **final authority** over
 every step that executes. No step bypasses it.
 
 | Check | Detail |
 |-------|--------|
-| **Schema** | JSON Schema validation against `shared/bundle_schema.json` |
-| **Step type** | Must be in `tool_allowlist.yaml` |
-| **Content bans** | `pytest.skip`, `xfail`, `eval(`, `exec(`, `subprocess.`, `os.system(` in added lines |
-| **Patch size** | Max 6 files, max 300 total lines |
-| **Forbidden edits** | CI configs, test files, dependency manifests |
-| **Step budgets** | Per-type caps: search ≤4, read ≤6, patch ≤2, deps ≤1, tests ≤4 |
-| **Read paths** | Blocks traversal (`..`), `.git/`, `.github/workflows/`, `.pem`, `.key`, `.env` |
-| **Read range** | Max 300 lines per read |
-| **Timeout clamp** | Per-type max (search 30s, read 15s, patch 60s, deps 420s, tests 900s) |
-| **Bundle size** | Max 15 steps total |
-| **Risk score** | Additive scoring → reject if ≥ 60 |
-| **Test ordering** | Enforces targeted tests before suite when patch exists |
+| **Execution path** | All side-effecting actions route through `HardKernel.kernel_step(...)` |
+| **State machine** | Normalize → Validate → Simulate → Risk → Decide → Execute → Verify → Commit |
+| **Tier policy** | Per-run deterministic tier gate from `policies/gate_policy_tiers.yaml` |
+| **Risk gate** | Rejects loop/drift/high-risk actions before execution |
+| **Simulation** | Predicts success/cost/loop/drift before execution |
+| **Tool policy** | `tool_gateway` enforces allowlists, path guards, and patch limits |
+| **Replay** | Hash-chained hard ledger supports deterministic replay verification |
 
 ---
 
@@ -261,7 +256,7 @@ tables.
 
 - **Result JSON** — SWE-bench compatible: `PASS` / `FAIL` / `ABORT` + patch + test logs
 - **Replay directory** — `events.jsonl` (structured log) + `blobs/` (content-addressed patches, stdout/stderr)
-- **Ledger** — Hash-chained JSONL at `/data/ledger.jsonl`
+- **Ledger** — Hash-chained JSONL at `/data/kernel_ledger.jsonl`
 - **DuckDB** — Learner statistics at `/data/learner.duckdb`
 
 ---

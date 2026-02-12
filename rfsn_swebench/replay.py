@@ -13,25 +13,65 @@ from typing import Any, Dict, Optional
 from .util import now_ms, sha256_bytes
 
 # ---------------------------------------------------------------------------
-# Optional import: RFSN Ledger (available when running inside the full stack)
+# Optional import: HardLedger bridge (available in full stack)
 # ---------------------------------------------------------------------------
-_Ledger = None
+_LedgerBridge = None
 
 
 def _try_import_ledger():
-    """Lazily import the RFSN Ledger class if reachable on sys.path."""
-    global _Ledger
-    if _Ledger is not None:
-        return _Ledger
+    """Lazily import a bridge that appends events to HardLedger."""
+    global _LedgerBridge
+    if _LedgerBridge is not None:
+        return _LedgerBridge
     try:
-        # When installed as part of the full repo, the orchestrator's ledger
-        # module can be reached if services/orchestrator is on PYTHONPATH.
-        # type: ignore[import-untyped]
-        from services.orchestrator.ledger import Ledger
-        _Ledger = Ledger
+        from rfsn_kernel.hard_ledger import (
+            HardLedger,
+            LedgerRecord,
+        )
+
+        class _ReplayBridge:
+            def __init__(self, path: str):
+                self._ledger = HardLedger(path)
+
+            def append(self, event: Dict[str, Any]) -> None:
+                ev = dict(event or {})
+                ev_type = str(ev.get("type", "REPLAY_EVENT"))
+                run_id = str(ev.get("run_id", ""))
+                blob = json.dumps(
+                    ev,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    default=str,
+                )
+                import hashlib
+                ev_hash = hashlib.sha256(
+                    blob.encode("utf-8"),
+                ).hexdigest()
+                state_hash = hashlib.sha256(
+                    f"replay_event:{ev_hash}".encode("utf-8"),
+                ).hexdigest()
+                rec = LedgerRecord(
+                    proposal_hash=ev_hash,
+                    simulation={},
+                    risk={},
+                    decision="REJECT",
+                    decision_reason=f"event:{ev_type}",
+                    outcome_hash=None,
+                    state_hash=state_hash,
+                    metadata={
+                        "record_type": "replay_event",
+                        "event_type": ev_type,
+                        "run_id": run_id,
+                        "event": ev,
+                    },
+                )
+                self._ledger.append(rec)
+
+        _LedgerBridge = _ReplayBridge
     except ImportError:
-        _Ledger = None  # type: ignore[assignment]
-    return _Ledger
+        _LedgerBridge = None  # type: ignore[assignment]
+    return _LedgerBridge
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +100,7 @@ def init_replay_dir(
             _ledger_instance = Klass(ledger_path)
         else:
             print(
-                "[replay] RFSN Ledger not importable — "
+                "[replay] HardLedger not importable — "
                 "falling back to flat JSONL replay log",
                 file=sys.stderr,
             )

@@ -45,3 +45,10 @@ def test_auth_headers_include_token_when_configured(monkeypatch):
     assert mod.auth_headers() == {
         "Authorization": "Bearer secret-token",
     }
+
+
+def test_health_not_public_when_auth_enabled(monkeypatch):
+    monkeypatch.setenv("RFSN_DEV_MODE", "0")
+    monkeypatch.setenv("RFSN_SERVICE_TOKEN", "secret-token")
+    mod = _load_auth_module("auth_health_private_case")
+    assert "/health" not in mod._PUBLIC_PATHS

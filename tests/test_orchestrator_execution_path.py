@@ -102,3 +102,16 @@ def test_phase_tracker_decoupled_from_legacy_kernel_module():
     src = APP_PATH.read_text(encoding="utf-8")
     assert "from phase_tracker import PhaseTracker" in src
     assert "from kernel import PhaseTracker" not in src
+
+
+def test_hard_ledger_tail_endpoints_exist():
+    src = APP_PATH.read_text(encoding="utf-8")
+    assert '@app.get("/ledger/tail")' in src
+    assert '@app.get("/ledger/run/{run_id}")' in src
+
+
+def test_llm_response_schema_checks_are_strict():
+    src = APP_PATH.read_text(encoding="utf-8")
+    assert "SCHEMA ERROR: 'done'" in src
+    assert "SCHEMA ERROR: 'intent'" in src
+    assert "done=true, step must" in src

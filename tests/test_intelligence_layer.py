@@ -18,7 +18,10 @@ from context_fingerprint import (  # noqa: E402
     compute_dense_reward,
     _parse_test_counts,
 )
-from ledger import Ledger  # noqa: E402
+from rfsn_kernel.hard_ledger import (  # noqa: E402
+    HardLedger,
+    LedgerRecord,
+)
 
 
 # ── parse_failure_signature ──────────────────
@@ -181,19 +184,32 @@ class TestComputeDenseReward:
 
 class TestLedgerVerifyChain:
 
+    @staticmethod
+    def _rec(action: str) -> LedgerRecord:
+        return LedgerRecord(
+            proposal_hash=f"p-{action}",
+            simulation={},
+            risk={},
+            decision="APPROVE",
+            decision_reason="ok",
+            outcome_hash=f"o-{action}",
+            state_hash=f"s-{action}",
+            metadata={"action": action, "run_id": "run"},
+        )
+
     def test_empty_ledger(self, tmp_path):
         path = str(tmp_path / "ledger.jsonl")
-        lg = Ledger(path)
+        lg = HardLedger(path)
         result = lg.verify_chain()
         assert result["ok"] is True
         assert result["entries"] == 0
 
     def test_valid_chain(self, tmp_path):
         path = str(tmp_path / "ledger.jsonl")
-        lg = Ledger(path)
-        lg.append({"type": "A", "val": 1})
-        lg.append({"type": "B", "val": 2})
-        lg.append({"type": "C", "val": 3})
+        lg = HardLedger(path)
+        lg.append(self._rec("A"))
+        lg.append(self._rec("B"))
+        lg.append(self._rec("C"))
         result = lg.verify_chain()
         assert result["ok"] is True
         assert result["entries"] == 3
@@ -201,31 +217,31 @@ class TestLedgerVerifyChain:
 
     def test_tampered_entry(self, tmp_path):
         path = str(tmp_path / "ledger.jsonl")
-        lg = Ledger(path)
-        lg.append({"type": "A"})
-        lg.append({"type": "B"})
+        lg = HardLedger(path)
+        lg.append(self._rec("A"))
+        lg.append(self._rec("B"))
 
         # Tamper with the second entry.
         with open(path, "r") as f:
             lines = f.readlines()
         rec = json.loads(lines[1])
-        rec["event"]["type"] = "TAMPERED"
+        rec["entry_hash"] = "0" * 64
         lines[1] = json.dumps(rec) + "\n"
         with open(path, "w") as f:
             f.writelines(lines)
 
         # Verify detects the tampering.
-        lg2 = Ledger(path)
+        lg2 = HardLedger(path)
         result = lg2.verify_chain()
         assert result["ok"] is False
         assert len(result["errors"]) > 0
 
     def test_broken_chain_link(self, tmp_path):
         path = str(tmp_path / "ledger.jsonl")
-        lg = Ledger(path)
-        lg.append({"type": "A"})
-        lg.append({"type": "B"})
-        lg.append({"type": "C"})
+        lg = HardLedger(path)
+        lg.append(self._rec("A"))
+        lg.append(self._rec("B"))
+        lg.append(self._rec("C"))
 
         # Break the chain by swapping lines 2 and 3.
         with open(path, "r") as f:
@@ -234,6 +250,6 @@ class TestLedgerVerifyChain:
         with open(path, "w") as f:
             f.writelines(lines)
 
-        lg2 = Ledger(path)
+        lg2 = HardLedger(path)
         result = lg2.verify_chain()
         assert result["ok"] is False
