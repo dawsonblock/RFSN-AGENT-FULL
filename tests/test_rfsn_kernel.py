@@ -845,6 +845,45 @@ class TestHardLedger:
             ))
         assert ledger.count == 3
 
+    def test_read_all_filtered_by_run_id(
+        self, tmp_ledger,
+    ):
+        ledger = HardLedger(tmp_ledger)
+        ledger.append(LedgerRecord(
+            proposal_hash="p-a",
+            simulation={},
+            risk={},
+            decision="APPROVE",
+            decision_reason="ok",
+            outcome_hash="o-a",
+            state_hash="s-a",
+            verification={"ok": True},
+            metadata={"run_id": "run-a"},
+        ))
+        ledger.append(LedgerRecord(
+            proposal_hash="p-b",
+            simulation={},
+            risk={},
+            decision="APPROVE",
+            decision_reason="ok",
+            outcome_hash="o-b",
+            state_hash="s-b",
+            verification={"ok": True},
+            metadata={"run_id": "run-b"},
+        ))
+
+        all_recs = ledger.read_all()
+        run_a = ledger.read_all(run_id="run-a")
+        run_b = ledger.read_all(run_id="run-b")
+        run_c = ledger.read_all(run_id="run-c")
+
+        assert len(all_recs) == 2
+        assert len(run_a) == 1
+        assert run_a[0].proposal_hash == "p-a"
+        assert len(run_b) == 1
+        assert run_b[0].proposal_hash == "p-b"
+        assert run_c == []
+
 
 # ══════════════════════════════════════════════════════
 # 9. KERNEL MODULE (FULL PIPELINE)
@@ -1043,6 +1082,169 @@ class TestReplay:
         trace = runner.extract_decision_trace()
         assert isinstance(trace, list)
         assert len(trace) >= 1
+
+    def test_replay_verify_with_run_filter(
+        self, tmp_ledger, default_policy,
+    ):
+        hk = HardKernel(
+            tmp_ledger, policy=default_policy,
+        )
+        hk.kernel_step(
+            {"type": "repo_search",
+             "pattern": "alpha"},
+            execute_fn=lambda s: Outcome(
+                success=True,
+                exit_code=0,
+                payload="ok",
+                logs="",
+                duration_sec=0.1,
+            ),
+            context="ctx-a",
+            intent="search",
+            bundle_id="b-a",
+            run_id="run-a",
+        )
+        hk.kernel_step(
+            {"type": "repo_search",
+             "pattern": "beta"},
+            execute_fn=lambda s: Outcome(
+                success=True,
+                exit_code=0,
+                payload="ok",
+                logs="",
+                duration_sec=0.1,
+            ),
+            context="ctx-b",
+            intent="search",
+            bundle_id="b-b",
+            run_id="run-b",
+        )
+
+        runner = ReplayRunner(tmp_ledger)
+        all_result = runner.replay_verify()
+        a_result = runner.replay_verify(
+            run_id="run-a",
+        )
+        b_result = runner.replay_verify(
+            run_id="run-b",
+        )
+        c_result = runner.replay_verify(
+            run_id="run-c",
+        )
+
+        assert all_result.total_steps == 2
+        assert a_result.ok
+        assert a_result.total_steps == 1
+        assert b_result.ok
+        assert b_result.total_steps == 1
+        assert c_result.ok
+        assert c_result.total_steps == 0
+
+    def test_replay_verify_with_run_filter_interleaved(
+        self, tmp_ledger, default_policy,
+    ):
+        hk = HardKernel(
+            tmp_ledger, policy=default_policy,
+        )
+        # Interleave two runs so per-run replay cannot assume
+        # contiguous prev pointers within filtered records.
+        hk.kernel_step(
+            {"type": "repo_search", "pattern": "a1"},
+            execute_fn=lambda s: Outcome(
+                success=True, exit_code=0,
+                payload="ok", logs="", duration_sec=0.1,
+            ),
+            context="ctx-a1",
+            intent="search",
+            bundle_id="b-a1",
+            run_id="run-a",
+        )
+        hk.kernel_step(
+            {"type": "repo_search", "pattern": "b1"},
+            execute_fn=lambda s: Outcome(
+                success=True, exit_code=0,
+                payload="ok", logs="", duration_sec=0.1,
+            ),
+            context="ctx-b1",
+            intent="search",
+            bundle_id="b-b1",
+            run_id="run-b",
+        )
+        hk.kernel_step(
+            {"type": "repo_search", "pattern": "a2"},
+            execute_fn=lambda s: Outcome(
+                success=True, exit_code=0,
+                payload="ok", logs="", duration_sec=0.1,
+            ),
+            context="ctx-a2",
+            intent="search",
+            bundle_id="b-a2",
+            run_id="run-a",
+        )
+
+        runner = ReplayRunner(tmp_ledger)
+        all_result = runner.replay_verify()
+        run_a = runner.replay_verify(run_id="run-a")
+        run_b = runner.replay_verify(run_id="run-b")
+
+        assert all_result.ok
+        assert all_result.total_steps == 3
+        assert run_a.ok
+        assert run_a.total_steps == 2
+        assert run_b.ok
+        assert run_b.total_steps == 1
+
+    def test_extract_decision_trace_with_run_filter(
+        self, tmp_ledger, default_policy,
+    ):
+        hk = HardKernel(
+            tmp_ledger, policy=default_policy,
+        )
+        hk.kernel_step(
+            {"type": "repo_search",
+             "pattern": "alpha"},
+            execute_fn=lambda s: Outcome(
+                success=True,
+                exit_code=0,
+                payload="ok",
+                logs="",
+                duration_sec=0.1,
+            ),
+            context="ctx-a",
+            intent="search",
+            bundle_id="b-a",
+            run_id="run-a",
+        )
+        hk.kernel_step(
+            {"type": "repo_search",
+             "pattern": "beta"},
+            execute_fn=lambda s: Outcome(
+                success=True,
+                exit_code=0,
+                payload="ok",
+                logs="",
+                duration_sec=0.1,
+            ),
+            context="ctx-b",
+            intent="search",
+            bundle_id="b-b",
+            run_id="run-b",
+        )
+
+        runner = ReplayRunner(tmp_ledger)
+        trace_all = runner.extract_decision_trace()
+        trace_a = runner.extract_decision_trace(
+            run_id="run-a",
+        )
+        trace_b = runner.extract_decision_trace(
+            run_id="run-b",
+        )
+
+        assert len(trace_all) == 2
+        assert len(trace_a) == 1
+        assert len(trace_b) == 1
+        assert trace_a[0]["run_id"] == "run-a"
+        assert trace_b[0]["run_id"] == "run-b"
 
     def test_snapshot_environment(self, tmp_path):
         repo = str(tmp_path / "repo")

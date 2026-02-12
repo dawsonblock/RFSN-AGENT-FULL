@@ -19,9 +19,14 @@ from starlette.middleware.base import (  # type: ignore[import-not-found]
 )
 from starlette.types import ASGIApp  # type: ignore[import-not-found]
 
-# All services share the same token.  If unset, generate a random one
-# (safe default for development; in production set RFSN_SERVICE_TOKEN).
+# Explicit dev mode only. In non-dev mode, token is mandatory.
+RFSN_DEV_MODE: bool = os.getenv("RFSN_DEV_MODE", "0") == "1"
 RFSN_SERVICE_TOKEN: str = os.getenv("RFSN_SERVICE_TOKEN", "")
+
+if not RFSN_SERVICE_TOKEN and not RFSN_DEV_MODE:
+    raise RuntimeError(
+        "RFSN_SERVICE_TOKEN is required unless RFSN_DEV_MODE=1",
+    )
 
 # Paths that bypass auth (health checks, readiness probes)
 _PUBLIC_PATHS = frozenset({
@@ -31,7 +36,7 @@ _PUBLIC_PATHS = frozenset({
 
 
 def get_service_token() -> str:
-    """Return the token, raising if unset in production."""
+    """Return configured service token (may be empty in dev mode)."""
     return RFSN_SERVICE_TOKEN
 
 
@@ -52,8 +57,18 @@ class ServiceAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         if not self.token:
-            # No token configured → open (development mode)
-            return await call_next(request)
+            if RFSN_DEV_MODE:
+                return await call_next(request)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": "server_misconfigured",
+                    "detail": (
+                        "RFSN_SERVICE_TOKEN is required"
+                        " unless RFSN_DEV_MODE=1"
+                    ),
+                },
+            )
 
         auth = request.headers.get("authorization", "")
         if auth == f"Bearer {self.token}":
@@ -72,4 +87,8 @@ def auth_headers() -> dict[str, str]:
     """Return headers dict to attach to outgoing inter-service HTTP calls."""
     if RFSN_SERVICE_TOKEN:
         return {"Authorization": f"Bearer {RFSN_SERVICE_TOKEN}"}
-    return {}
+    if RFSN_DEV_MODE:
+        return {}
+    raise RuntimeError(
+        "RFSN_SERVICE_TOKEN is required unless RFSN_DEV_MODE=1",
+    )

@@ -2,7 +2,6 @@ import hashlib
 import json
 import os
 import random
-import re
 import time
 from typing import Optional
 
@@ -17,8 +16,12 @@ from context_fingerprint import (  # type: ignore[import-not-found]
     compute_dense_reward,
     extract_test_nodes,
 )
-from kernel import Kernel  # type: ignore[import-not-found]
-from ledger import Ledger  # type: ignore[import-not-found]
+try:
+    from phase_tracker import PhaseTracker  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover
+    from services.orchestrator.phase_tracker import (  # type: ignore[import-not-found]
+        PhaseTracker,
+    )
 from prompts import (  # type: ignore[import-not-found]
     SYSTEM,
     USER_TEMPLATE,
@@ -35,10 +38,13 @@ _sys.path.insert(0, os.path.join(
 ))
 try:
     from rfsn_kernel.kernel import (
-        HardKernel, KernelStepResult,
+        HardKernel,
+    )
+    from rfsn_kernel.hard_ledger import (
+        LedgerRecord,
     )
     from rfsn_kernel.state import (
-        SystemState, Outcome,
+        Outcome,
     )
     from rfsn_kernel.planner import (
         HierarchicalPlanner,
@@ -77,6 +83,10 @@ LLM_URL = os.getenv("LLM_URL", "http://llm_service:8001")
 TOOL_GATEWAY_URL = os.getenv("TOOL_GATEWAY_URL", "http://tool_gateway:8002")
 EXECUTOR_URL = os.getenv("EXECUTOR_URL", "http://executor:8003")
 LEARNER_URL = os.getenv("LEARNER_URL", "http://learner_service:8004")
+HARD_LEDGER_PATH = os.getenv(
+    "RFSN_HARD_LEDGER_PATH",
+    "/data/kernel_ledger.jsonl",
+)
 SEED = os.getenv("RFSN_SEED", "1")
 WARM_SANDBOX = os.getenv("RFSN_WARM_SANDBOX", "1") == "1"
 
@@ -96,6 +106,7 @@ def _load_yaml(path: str) -> dict:
 
 DEPS_POLICY = _load_yaml("/policies/deps_policy.yaml")
 TEST_POLICY = _load_yaml("/policies/test_policy.yaml")
+GATE_POLICY = _load_yaml("/policies/gate_policy.yaml")
 
 
 # ── Compiled policy hash (determinism anchor) ─
@@ -133,86 +144,91 @@ _EPISODE_SEED = int(
 )
 random.seed(_EPISODE_SEED)
 
-# ── Robust JSON repair ──────────────────────
+# ── Strict JSON parse (fail-closed) ─────────
 
 _REQUIRED_KEYS = {"step", "done", "intent"}
 
 
 def _repair_json(text: str) -> dict | None:
-    """Best-effort extraction of a JSON object
-    from LLM output that may contain markdown
-    fences, trailing commentary, or minor syntax
-    issues.
-
-    Returns parsed dict or None on failure.
-    """
+    """Strict JSON parser for execution contract."""
     if not text:
         return None
     raw = text.strip()
-
-    # 1. Strip markdown fences.
-    raw = re.sub(
-        r"^```(?:json)?\s*\n?", "", raw,
-    )
-    raw = re.sub(r"\n?```\s*$", "", raw)
-
-    # 2. Try direct parse.
     try:
         obj = json.loads(raw)
         if isinstance(obj, dict):
             return obj
     except json.JSONDecodeError:
-        pass
-
-    # 3. Extract first { ... } block.
-    brace_depth = 0
-    start = -1
-    for i, ch in enumerate(raw):
-        if ch == "{":
-            if brace_depth == 0:
-                start = i
-            brace_depth += 1
-        elif ch == "}":
-            brace_depth -= 1
-            if brace_depth == 0 and start >= 0:
-                candidate = raw[start:i + 1]
-                try:
-                    obj = json.loads(candidate)
-                    if isinstance(obj, dict):
-                        return obj
-                except json.JSONDecodeError:
-                    pass
-                break
-
-    # 4. Try fixing common issues:
-    #    trailing comma, single quotes.
-    if start >= 0:
-        candidate = raw[start:i + 1]
-        # Trailing commas before }
-        fixed = re.sub(
-            r",\s*([}\]])", r"\1", candidate,
-        )
-        try:
-            obj = json.loads(fixed)
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            pass
-
+        return None
     return None
 
 
-kernel = Kernel(
-    "/shared/bundle_schema.json",
-    "/policies/tool_allowlist.yaml",
-    "/policies/gate_policy.yaml",
-)
-ledger = Ledger("/data/ledger.jsonl")
+def _event_hash(event: dict) -> str:
+    blob = json.dumps(
+        event,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _event_record(event: dict) -> "LedgerRecord":
+    event_type = str(event.get("type", "EVENT"))
+    run_id = str(event.get("run_id", ""))
+    ev_hash = _event_hash(event)
+    state_hash = hashlib.sha256(
+        f"event_state:{ev_hash}".encode("utf-8"),
+    ).hexdigest()
+    return LedgerRecord(
+        proposal_hash=ev_hash,
+        simulation={},
+        risk={},
+        decision="REJECT",
+        decision_reason=f"event:{event_type}",
+        outcome_hash=None,
+        state_hash=state_hash,
+        metadata={
+            "record_type": "orchestrator_event",
+            "event_type": event_type,
+            "run_id": run_id,
+            "action": f"event:{event_type}",
+            "intent": "orchestrator_event",
+            "event": event,
+        },
+    )
+
+
+class _LedgerSink:
+    """Route orchestrator events into the hard ledger chain."""
+
+    def __init__(self, kernel: Optional["HardKernel"]):
+        self._kernel = kernel
+
+    def append(self, event: dict) -> None:
+        if not event:
+            return
+        if not (_HAS_HARD_KERNEL and self._kernel):
+            return
+        self._kernel.ledger.append(_event_record(event))
+
+    def verify_chain(self) -> dict:
+        if not (_HAS_HARD_KERNEL and self._kernel):
+            return {
+                "ok": False,
+                "entries": 0,
+                "errors": [{
+                    "line": 0,
+                    "error": "hard kernel unavailable",
+                }],
+            }
+        return self._kernel.ledger.verify_chain()
 
 # ── Hard kernel v2 (simulation + risk + replay) ─
 if _HAS_HARD_KERNEL:
     _hard_kernel = HardKernel(
-        ledger_path="/data/kernel_ledger.jsonl",
+        ledger_path=HARD_LEDGER_PATH,
         policy={
             "risk_max": 0.65,
             "success_min": 0.15,
@@ -240,6 +256,8 @@ else:
     _hard_kernel = None  # type: ignore[assignment]
     _planner = None      # type: ignore[assignment]
     _memory = None       # type: ignore[assignment]
+
+ledger = _LedgerSink(_hard_kernel)
 
 
 def stable_id(
@@ -300,7 +318,10 @@ def health():
     return {
         "ok": all_ok,
         "deps": deps,
-        "kernel_loaded": kernel is not None,
+        "kernel_loaded": (
+            _HAS_HARD_KERNEL
+            and _hard_kernel is not None
+        ),
         "policies": {
             "deps": bool(DEPS_POLICY),
             "test": bool(TEST_POLICY),
@@ -345,21 +366,28 @@ def kernel_stats():
 
 
 @app.get("/kernel/replay/verify")
-def kernel_replay_verify():
+def kernel_replay_verify(run_id: Optional[str] = None):
     """Verify hard kernel ledger chain."""
     if not _HAS_HARD_KERNEL:
         return {"available": False}
-    runner = ReplayRunner("/data/kernel_ledger.jsonl")
-    return runner.replay_verify().to_dict()
+    runner = ReplayRunner(HARD_LEDGER_PATH)
+    out = runner.replay_verify(run_id=run_id).to_dict()
+    out["run_id"] = run_id or ""
+    return out
 
 
 @app.get("/kernel/replay/trace")
-def kernel_replay_trace():
+def kernel_replay_trace(run_id: Optional[str] = None):
     """Extract decision trace from hard kernel."""
     if not _HAS_HARD_KERNEL:
         return {"available": False}
-    runner = ReplayRunner("/data/kernel_ledger.jsonl")
-    return {"trace": runner.extract_decision_trace()}
+    runner = ReplayRunner(HARD_LEDGER_PATH)
+    trace = runner.extract_decision_trace(run_id=run_id)
+    return {
+        "run_id": run_id or "",
+        "count": len(trace),
+        "trace": trace,
+    }
 
 
 def _sandbox_create(run_id: str, repo_id: str):
@@ -421,6 +449,153 @@ def run_step(
     if r.status_code != 200:
         raise HTTPException(r.status_code, r.text)
     return r.json()
+
+
+def execute_approved_step(
+    repo_id: str,
+    it: int,
+    step: dict,
+    run_id: str,
+    *,
+    context_hash: str = "",
+    intent: str = "",
+    bundle_id: str = "",
+    step_num: Optional[int] = None,
+) -> dict:
+    """Execute a kernel-approved step through the hard kernel.
+
+    Returns a dict:
+      {
+        "ok": bool,
+        "out": dict | None,
+        "reason": str,
+        "hard_kernel": bool,
+      }
+    """
+    if _HAS_HARD_KERNEL and _hard_kernel:
+        if _memory:
+            _hard_kernel.state.memory_version = (
+                _memory.memory_version
+            )
+        if _hard_kernel.state.resource_state.get(
+            "run_id", "",
+        ) != run_id:
+            _hard_kernel.state.resource_state[
+                "run_id"
+            ] = run_id
+
+        def _exec_step(s: dict) -> Outcome:
+            """Execution callback for hard kernel."""
+            r = run_step(
+                repo_id, it, s, run_id,
+            )
+            ok = r.get("status", 1) == 0
+            return Outcome(
+                success=ok,
+                exit_code=r.get(
+                    "status", 1,
+                ),
+                payload=str(
+                    r.get("payload", ""),
+                )[:3000],
+                logs=str(
+                    r.get("logs", ""),
+                )[:5000],
+                duration_sec=float(
+                    r.get("seconds", 0),
+                ),
+            )
+
+        kr = _hard_kernel.kernel_step(
+            step,
+            execute_fn=_exec_step,
+            context=context_hash,
+            intent=intent,
+            bundle_id=bundle_id,
+            run_id=run_id,
+        )
+        hard_rec = {
+            "type": "HARD_KERNEL_STEP",
+            "run_id": run_id,
+            "iter": it,
+            "phase": kr.phase,
+            "approved": kr.approved,
+            "success": kr.success,
+            "error": kr.error,
+            "reason": (
+                kr.decision.reason
+                if kr.decision else ""
+            ),
+            "risk": (
+                kr.risk.to_dict()
+                if kr.risk else None
+            ),
+            "simulation": (
+                kr.simulation.to_dict()
+                if kr.simulation else None
+            ),
+        }
+        if step_num is not None:
+            hard_rec["step_num"] = step_num
+        ledger.append(hard_rec)
+
+        if not kr.approved:
+            reason = (
+                kr.decision.reason
+                if kr.decision
+                else (kr.error or "kernel_reject")
+            )
+            return {
+                "ok": False,
+                "out": None,
+                "reason": reason,
+                "hard_kernel": True,
+            }
+
+        out = {
+            "status": (
+                kr.outcome.exit_code
+                if kr.outcome else 1
+            ),
+            "payload": (
+                kr.outcome.payload
+                if kr.outcome else ""
+            ),
+            "logs": (
+                kr.outcome.logs
+                if kr.outcome else ""
+            ),
+            "seconds": (
+                kr.outcome.duration_sec
+                if kr.outcome else 0
+            ),
+        }
+
+        if _memory:
+            _memory.admit(MemoryEntry(
+                content=(
+                    f"action={step.get('type')}"
+                    f" success={kr.success}"
+                    f" risk={kr.risk.total_risk:.2f}"
+                    if kr.risk else ""
+                ),
+                source="kernel",
+                entry_type="action_outcome",
+            ))
+
+        return {
+            "ok": True,
+            "out": out,
+            "reason": "",
+            "hard_kernel": True,
+        }
+
+    return {
+        "ok": False,
+        "out": None,
+        "reason": "hard kernel unavailable",
+        "hard_kernel": False,
+    }
 
 
 def llm_chat(
@@ -632,6 +807,42 @@ def run(req: RunReq):
         "run", SEED, req.repo_id, req.task,
         str(req.max_iters), scenario, n=10,
     )
+    run_seed = int(
+        hashlib.sha256(
+            f"{_EPISODE_SEED}|{run_id}".encode(
+                "utf-8",
+            )
+        ).hexdigest()[:8],
+        16,
+    )
+    if not (_HAS_HARD_KERNEL and _hard_kernel):
+        raise HTTPException(
+            503,
+            "hard kernel required but unavailable",
+        )
+    env_snapshot = (
+        snapshot_environment(
+            repo_path=f"/data/repos/{req.repo_id}",
+            seed=run_seed,
+        )
+        if _HAS_HARD_KERNEL else {"env_hash": ""}
+    )
+    if _HAS_HARD_KERNEL and _hard_kernel:
+        _hard_kernel.reset_for_run(
+            run_id=run_id,
+            rng_seed=run_seed,
+            env_hash=env_snapshot.get(
+                "env_hash", "",
+            ),
+            memory_version=(
+                _memory.memory_version
+                if _memory else "0"
+            ),
+            policy_hash=POLICY_HASH,
+            reset_history=True,
+        )
+    if _HAS_HARD_KERNEL and _planner:
+        _planner.reset()
 
     ledger.append({
         "type": "RUN_START",
@@ -641,6 +852,15 @@ def run(req: RunReq):
         "scenario": scenario,
         "policy_hash": POLICY_HASH,
         "seed": SEED,
+        "episode_seed": run_seed,
+        "env_hash": env_snapshot.get(
+            "env_hash", "",
+        ),
+        "memory_version": (
+            _hard_kernel.state.memory_version
+            if _HAS_HARD_KERNEL and _hard_kernel
+            else ""
+        ),
     })
 
     # ── Warm sandbox lifecycle ─────────────────
@@ -707,25 +927,40 @@ def run(req: RunReq):
             "bundle": bundle,
         })
 
-        decision = kernel.validate_and_plan(bundle)
-        ledger.append({
-            "type": "KERNEL_DECISION",
-            "run_id": run_id,
-            "decision": decision,
-        })
-        if not decision["ok"]:
-            return {
-                "run_id": run_id,
-                "status": "rejected",
-                "errors": decision["errors"],
-            }
-
         results = []
-        for s in decision["approved_steps"]:
-            _METRICS["steps_executed"] += 1
-            out = run_step(
-                req.repo_id, it, s, run_id,
+        for i_step, s in enumerate(
+            steps, start=1,
+        ):
+            ex = execute_approved_step(
+                req.repo_id,
+                it,
+                s,
+                run_id,
+                context_hash="tests_only",
+                intent=bundle["intent"],
+                bundle_id=bundle["bundle_id"],
+                step_num=i_step,
             )
+            if not ex["ok"]:
+                _METRICS["gate_rejections"] += 1
+                _sandbox_destroy(run_id, req.repo_id)
+                ledger.append({
+                    "type": "RUN_END",
+                    "run_id": run_id,
+                    "status": "rejected",
+                    "reason": ex["reason"],
+                })
+                return {
+                    "run_id": run_id,
+                    "status": "rejected",
+                    "errors": [{
+                        "code": "HARD_KERNEL_REJECT",
+                        "msg": ex["reason"],
+                    }],
+                    "results": results,
+                }
+            _METRICS["steps_executed"] += 1
+            out = ex["out"]
             ledger.append({
                 "type": "STEP_RESULT",
                 "run_id": run_id,
@@ -770,7 +1005,7 @@ def run(req: RunReq):
 
     # Per-iteration step budget (hard cap per iter).
     MAX_STEPS_PER_ITER = int(
-        kernel.policy.get(
+        GATE_POLICY.get(
             "max_steps_per_bundle", 15,
         ),
     )
@@ -927,26 +1162,42 @@ def run(req: RunReq):
                     )
                 ),
             }
-            # Validate through kernel
-            dep_bundle = {
-                "intent": "auto deps",
-                "bundle_id": stable_id(
-                    "dep", SEED, req.repo_id,
-                    str(it), scenario, n=8,
-                ),
-                "steps": [dep_step],
-                "acceptance": {},
-            }
-            dep_dec = kernel.validate_and_plan(
-                dep_bundle,
+            dep_bundle_id = stable_id(
+                "dep", SEED, req.repo_id,
+                str(it), scenario, n=8,
             )
-            if dep_dec["ok"]:
+            ex = execute_approved_step(
+                req.repo_id, it, dep_step,
+                run_id,
+                context_hash=sug.get(
+                    "context_key", "",
+                ),
+                intent="auto deps",
+                bundle_id=dep_bundle_id,
+                step_num=0,
+            )
+            if not ex["ok"]:
+                _METRICS["gate_rejections"] += 1
+                last_stage = "gate_reject"
+                last_fail = (
+                    "Auto-deps rejected by"
+                    " hard kernel: "
+                    + ex["reason"]
+                )
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "HARD KERNEL REJECTED"
+                        " auto-deps step:"
+                        f" {ex['reason']}\n"
+                        "Continue with another"
+                        " approach."
+                    ),
+                })
+            else:
                 _METRICS["steps_executed"] += 1
                 total_steps_used += 1
-                dep_out = run_step(
-                    req.repo_id, it, dep_step,
-                    run_id,
-                )
+                dep_out = ex["out"]
                 ledger.append({
                     "type": "STEP_RESULT",
                     "run_id": run_id,
@@ -954,7 +1205,7 @@ def run(req: RunReq):
                     "step": dep_step,
                     "out": dep_out,
                 })
-                # Tell the LLM deps are installed
+                # Tell the LLM deps are installed.
                 messages.append({
                     "role": "assistant",
                     "content": json.dumps({
@@ -1006,7 +1257,6 @@ def run(req: RunReq):
         iter_test_exit = -1
 
         # RFSN phase tracker for this iteration.
-        from kernel import PhaseTracker  # type: ignore[import-not-found]
         phase = PhaseTracker()
 
         while iter_steps_used < MAX_STEPS_PER_ITER:
@@ -1166,40 +1416,31 @@ def run(req: RunReq):
                 })
                 continue
 
-            # Validate through kernel gate.
-            step_bundle = {
-                "intent": resp.get(
-                    "intent", "interactive step",
-                ),
-                "bundle_id": stable_id(
-                    "b", SEED, req.repo_id,
-                    req.task, str(it),
-                    str(iter_steps_used),
-                    scenario, n=8,
-                ),
-                "steps": [step],
-                "acceptance": {},
-            }
-            decision = kernel.validate_and_plan(
-                step_bundle,
+            bundle_id = stable_id(
+                "b", SEED, req.repo_id,
+                req.task, str(it),
+                str(iter_steps_used),
+                scenario, n=8,
             )
+            approved_step = step
 
-            ledger.append({
-                "type": "KERNEL_DECISION",
-                "run_id": run_id,
-                "iter": it,
-                "step_num": iter_steps_used + 1,
-                "decision": decision,
-            })
-
-            if not decision["ok"]:
+            ex = execute_approved_step(
+                req.repo_id,
+                it,
+                approved_step,
+                run_id,
+                context_hash=sug.get(
+                    "context_key", "",
+                ),
+                intent=resp.get(
+                    "intent", "",
+                ),
+                bundle_id=bundle_id,
+                step_num=iter_steps_used + 1,
+            )
+            if not ex["ok"]:
                 _METRICS["gate_rejections"] += 1
                 last_stage = "gate_reject"
-                # Tell the LLM why it was rejected
-                # so it can adapt.
-                err_msg = json.dumps(
-                    decision["errors"],
-                )
                 messages.append({
                     "role": "assistant",
                     "content": content,
@@ -1207,145 +1448,19 @@ def run(req: RunReq):
                 messages.append({
                     "role": "user",
                     "content": (
-                        "KERNEL REJECTED your"
-                        " step:\n"
-                        + err_msg
-                        + "\nFix and try again."
+                        "HARD KERNEL REJECTED"
+                        " (simulation/risk):"
+                        f" {ex['reason']}\n"
+                        "Try a different"
+                        " approach."
                     ),
                 })
                 continue
 
-            # Execute the approved step.
-            approved_step = (
-                decision["approved_steps"][0]
-            )
-
-            # ── Hard kernel v2: simulate + risk
-            # before execution ─────────────────
-            if _HAS_HARD_KERNEL and _hard_kernel:
-                ctx_hash = sug.get(
-                    "context_key", "",
-                )
-
-                def _exec_step(s: dict) -> Outcome:
-                    """Execution callback for
-                    hard kernel."""
-                    r = run_step(
-                        req.repo_id, it, s,
-                        run_id,
-                    )
-                    ok = r.get("status", 1) == 0
-                    return Outcome(
-                        success=ok,
-                        exit_code=r.get(
-                            "status", 1,
-                        ),
-                        payload=str(
-                            r.get("payload", ""),
-                        )[:3000],
-                        logs=str(
-                            r.get("logs", ""),
-                        )[:5000],
-                        duration_sec=float(
-                            r.get("seconds", 0),
-                        ),
-                    )
-
-                kr = _hard_kernel.kernel_step(
-                    approved_step,
-                    execute_fn=_exec_step,
-                    context=ctx_hash,
-                    intent=resp.get(
-                        "intent", "",
-                    ),
-                    bundle_id=step_bundle[
-                        "bundle_id"
-                    ],
-                )
-                ledger.append({
-                    "type": "HARD_KERNEL_STEP",
-                    "run_id": run_id,
-                    "iter": it,
-                    "step_num": (
-                        iter_steps_used + 1
-                    ),
-                    "phase": kr.phase,
-                    "approved": kr.approved,
-                    "success": kr.success,
-                    "risk": (
-                        kr.risk.to_dict()
-                        if kr.risk else None
-                    ),
-                    "simulation": (
-                        kr.simulation.to_dict()
-                        if kr.simulation
-                        else None
-                    ),
-                })
-                # If hard kernel rejected (sim/
-                # risk), tell LLM and skip.
-                if not kr.approved:
-                    _METRICS[
-                        "gate_rejections"
-                    ] += 1
-                    messages.append({
-                        "role": "assistant",
-                        "content": content,
-                    })
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "HARD KERNEL REJECTED"
-                            " (simulation/risk):"
-                            f" {kr.decision.reason}"
-                            "\nTry a different"
-                            " approach."
-                        ),
-                    })
-                    continue
-                # Use hard kernel outcome.
-                _METRICS["steps_executed"] += 1
-                iter_steps_used += 1
-                total_steps_used += 1
-                out = {
-                    "status": (
-                        kr.outcome.exit_code
-                        if kr.outcome else 1
-                    ),
-                    "payload": (
-                        kr.outcome.payload
-                        if kr.outcome else ""
-                    ),
-                    "logs": (
-                        kr.outcome.logs
-                        if kr.outcome else ""
-                    ),
-                    "seconds": (
-                        kr.outcome.duration_sec
-                        if kr.outcome else 0
-                    ),
-                }
-                # Ingest to memory immune system.
-                _memory.admit(MemoryEntry(
-                    content=(
-                        f"action={approved_step.get('type')}"
-                        f" success={kr.success}"
-                        f" risk={kr.risk.total_risk:.2f}"
-                        if kr.risk else ""
-                    ),
-                    source="kernel",
-                    entry_type="action_outcome",
-                ))
-            else:
-                # Fallback: execute without hard
-                # kernel (original path).
-                _METRICS["steps_executed"] += 1
-                iter_steps_used += 1
-                total_steps_used += 1
-                out = run_step(
-                    req.repo_id, it,
-                    approved_step, run_id,
-                )
+            _METRICS["steps_executed"] += 1
+            iter_steps_used += 1
+            total_steps_used += 1
+            out = ex["out"]
 
             ledger.append({
                 "type": "STEP_RESULT",
@@ -1575,51 +1690,70 @@ def run(req: RunReq):
                         "timeout_s": 300,
                     })
                 if sa_steps:
-                    sa_bundle = {
-                        "intent": (
-                            "static analysis"
-                        ),
-                        "bundle_id": stable_id(
-                            "sa", run_id,
-                            str(it), n=8,
-                        ),
-                        "steps": sa_steps,
-                        "acceptance": {},
-                    }
-                    sa_dec = (
-                        kernel.validate_and_plan(
-                            sa_bundle,
-                        )
+                    sa_bundle_id = stable_id(
+                        "sa", run_id,
+                        str(it), n=8,
                     )
-                    ledger.append({
-                        "type": "KERNEL_DECISION",
-                        "run_id": run_id,
-                        "iter": it,
-                        "decision": sa_dec,
-                    })
-                    if sa_dec["ok"]:
-                        for sa_s in sa_dec[
-                            "approved_steps"
-                        ]:
-                            sa_out = run_step(
-                                req.repo_id,
-                                it,
-                                sa_s,
-                                run_id,
+                    for i_sa, sa_s in enumerate(
+                        sa_steps,
+                        start=1,
+                    ):
+                        ex = execute_approved_step(
+                            req.repo_id,
+                            it,
+                            sa_s,
+                            run_id,
+                            context_hash=sug.get(
+                                "context_key", "",
+                            ),
+                            intent="static analysis",
+                            bundle_id=sa_bundle_id,
+                            step_num=1000 + i_sa,
+                        )
+                        if not ex["ok"]:
+                            _METRICS[
+                                "gate_rejections"
+                            ] += 1
+                            last_stage = "gate_reject"
+                            last_fail = (
+                                "Static analysis"
+                                " rejected by"
+                                " hard kernel: "
+                                + ex["reason"]
+                            )
+                            _sandbox_destroy(
+                                run_id, req.repo_id,
                             )
                             ledger.append({
-                                "type": (
-                                    "STEP_RESULT"
-                                ),
+                                "type": "RUN_END",
                                 "run_id": run_id,
-                                "iter": it,
-                                "step": sa_s,
-                                "out": sa_out,
+                                "status": "rejected",
+                                "reason": ex["reason"],
                             })
-                            iter_results.append({
-                                "step": sa_s,
-                                "out": sa_out,
-                            })
+                            return {
+                                "run_id": run_id,
+                                "status": "rejected",
+                                "errors": [{
+                                    "code": "HARD_KERNEL_REJECT",
+                                    "msg": ex["reason"],
+                                }],
+                                "results": iter_results,
+                            }
+                        _METRICS["steps_executed"] += 1
+                        sa_out = ex["out"]
+                        ledger.append({
+                            "type": (
+                                "STEP_RESULT"
+                            ),
+                            "run_id": run_id,
+                            "iter": it,
+                            "step": sa_s,
+                            "out": sa_out,
+                        })
+                        iter_results.append({
+                            "step": sa_s,
+                            "out": sa_out,
+                        })
 
             _sandbox_destroy(run_id, req.repo_id)
             ledger.append({

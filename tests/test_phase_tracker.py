@@ -9,7 +9,7 @@ sys.path.insert(
         "..", "services", "orchestrator",
     ),
 )
-from kernel import (  # noqa: E402
+from phase_tracker import (  # noqa: E402
     PhaseTracker,
     RfsnPhase,
 )

@@ -177,47 +177,16 @@ _REQUIRED_KEYS = {"step", "done", "intent"}
 
 
 def _repair_json(text):
-    """Copy of orchestrator's _repair_json for test."""
+    """Copy of orchestrator's strict _repair_json."""
     if not text:
         return None
     raw = text.strip()
-    raw = re.sub(r"^```(?:json)?\s*\n?", "", raw)
-    raw = re.sub(r"\n?```\s*$", "", raw)
     try:
         obj = json.loads(raw)
         if isinstance(obj, dict):
             return obj
     except json.JSONDecodeError:
-        pass
-    brace_depth = 0
-    start = -1
-    end_idx = -1
-    for i, ch in enumerate(raw):
-        if ch == "{":
-            if brace_depth == 0:
-                start = i
-            brace_depth += 1
-        elif ch == "}":
-            brace_depth -= 1
-            if brace_depth == 0 and start >= 0:
-                end_idx = i
-                candidate = raw[start:i + 1]
-                try:
-                    obj = json.loads(candidate)
-                    if isinstance(obj, dict):
-                        return obj
-                except json.JSONDecodeError:
-                    pass
-                break
-    if start >= 0 and end_idx >= 0:
-        candidate = raw[start:end_idx + 1]
-        fixed = re.sub(r",\s*([}\]])", r"\1", candidate)
-        try:
-            obj = json.loads(fixed)
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            pass
+        return None
     return None
 
 
@@ -232,8 +201,7 @@ class TestRepairJson:
     def test_markdown_fenced(self):
         text = '```json\n{"step": null, "done": true, "intent": "x"}\n```'
         obj = _repair_json(text)
-        assert obj is not None
-        assert obj["done"] is True
+        assert obj is None
 
     def test_trailing_commentary(self):
         text = (
@@ -242,13 +210,12 @@ class TestRepairJson:
             "I'm searching for foo in the repo."
         )
         obj = _repair_json(text)
-        assert obj is not None
-        assert obj["done"] is False
+        assert obj is None
 
     def test_trailing_comma(self):
         text = '{"step": null, "done": true, "intent": "done",}'
         obj = _repair_json(text)
-        assert obj is not None
+        assert obj is None
 
     def test_garbage_returns_none(self):
         assert _repair_json("hello world") is None
@@ -263,8 +230,7 @@ class TestRepairJson:
             '"intent": "search for main"}\n'
         )
         obj = _repair_json(text)
-        assert obj is not None
-        assert obj["step"]["type"] == "repo_search"
+        assert obj is None
 
     def test_required_keys_check(self):
         obj = _repair_json('{"step": null}')
@@ -606,7 +572,7 @@ class TestPhaseTrackerWithNewSteps:
     """
 
     def test_full_cycle(self):
-        from kernel import PhaseTracker, RfsnPhase
+        from phase_tracker import PhaseTracker, RfsnPhase
 
         pt = PhaseTracker()
         assert pt.phase == RfsnPhase.IDLE
@@ -631,7 +597,7 @@ class TestPhaseTrackerWithNewSteps:
         assert ok  # Can loop back from TESTING
 
     def test_done_is_terminal(self):
-        from kernel import PhaseTracker, RfsnPhase
+        from phase_tracker import PhaseTracker, RfsnPhase
 
         pt = PhaseTracker()
         pt.advance("repo_search")
@@ -808,7 +774,12 @@ class TestWarmSandboxWiring:
 
     def test_orchestrator_all_run_step_calls_have_run_id(self):
         """Every run_step() call in the orchestrator
-        passes run_id."""
+        passes run_id.
+
+        The runtime now funnels execution through a
+        narrow helper path, so direct call count is
+        intentionally small.
+        """
         src = self._orch_src()
         lines = src.splitlines()
         call_lines = []
@@ -819,8 +790,8 @@ class TestWarmSandboxWiring:
                 and not stripped.startswith("def ")
             ):
                 call_lines.append(i)
-        assert len(call_lines) >= 4, (
-            f"Expected >=4 run_step calls, found"
+        assert len(call_lines) >= 1, (
+            f"Expected >=1 run_step calls, found"
             f" {len(call_lines)}"
         )
         for idx in call_lines:

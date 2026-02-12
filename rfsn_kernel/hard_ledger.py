@@ -188,8 +188,10 @@ class HardLedger:
 
         return {"ok": len(errors) == 0, "entries": count, "errors": errors}
 
-    def read_all(self) -> List[LedgerRecord]:
-        """Read all records from the ledger (for replay)."""
+    def read_all(
+        self, run_id: Optional[str] = None,
+    ) -> List[LedgerRecord]:
+        """Read ledger records (optionally filtered by run_id)."""
         if not os.path.exists(self.path):
             return []
 
@@ -201,6 +203,9 @@ class HardLedger:
                     continue
                 try:
                     data = json.loads(line)
+                    rec_meta = data.get("metadata", {}) or {}
+                    if run_id and rec_meta.get("run_id") != run_id:
+                        continue
                     records.append(LedgerRecord(
                         proposal_hash=data.get("proposal_hash", ""),
                         simulation=data.get("simulation", {}),

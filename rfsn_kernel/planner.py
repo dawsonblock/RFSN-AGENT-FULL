@@ -135,6 +135,12 @@ class HierarchicalPlanner:
         self._plans: List[TacticalPlan] = []
         self._current_plan: Optional[TacticalPlan] = None
 
+    def reset(self) -> None:
+        """Reset planner state for a new run."""
+        self.state = StrategicState()
+        self._plans = []
+        self._current_plan = None
+
     # ── Strategic Layer ──
 
     def set_goal(

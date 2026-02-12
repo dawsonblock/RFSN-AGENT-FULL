@@ -65,6 +65,15 @@ class ReplayRunner:
     def __init__(self, ledger_path: str) -> None:
         self.ledger = HardLedger(ledger_path)
 
+    @staticmethod
+    def _kernel_records(
+        records: List[LedgerRecord],
+    ) -> List[LedgerRecord]:
+        return [
+            r for r in records
+            if (r.metadata or {}).get("record_type") != "orchestrator_event"
+        ]
+
     def verify_chain(self) -> Dict[str, Any]:
         """Verify the hash chain integrity."""
         return self.ledger.verify_chain()
@@ -72,6 +81,7 @@ class ReplayRunner:
     def replay_verify(
         self,
         expected_state_hashes: Optional[List[str]] = None,
+        run_id: Optional[str] = None,
     ) -> ReplayResult:
         """Read all ledger records and verify consistency.
 
@@ -80,7 +90,9 @@ class ReplayRunner:
         2. State hash continuity
         3. Decision consistency (APPROVE/REJECT recorded correctly)
         """
-        records = self.ledger.read_all()
+        records = self._kernel_records(
+            self.ledger.read_all(run_id=run_id),
+        )
         if not records:
             return ReplayResult(ok=True, total_steps=0, matched_steps=0)
 
@@ -88,13 +100,26 @@ class ReplayRunner:
         divergences: List[Dict[str, Any]] = []
         matched = 0
 
-        prev_state_hash = ""
         for i, rec in enumerate(records):
             step_ok = True
             div_msg: Optional[str] = None
 
-            # Check chain linkage.
-            if i > 0:
+            # Check chain linkage/integrity.
+            if run_id:
+                # In run-filtered mode, records may be interleaved
+                # with other runs in the global ledger. Validate this
+                # record's chain hash against its own prev pointer.
+                computed = hashlib.sha256(
+                    (rec.prev_chain_hash + rec.entry_hash).encode("utf-8"),
+                ).hexdigest()
+                if rec.chain_hash != computed:
+                    div_msg = (
+                        f"Chain hash mismatch at step {i}:"
+                        f" expected={computed[:12]}..."
+                        f" got={rec.chain_hash[:12]}..."
+                    )
+                    step_ok = False
+            elif i > 0:
                 expected_prev = records[i - 1].chain_hash
                 if rec.prev_chain_hash != expected_prev:
                     div_msg = (
@@ -146,19 +171,24 @@ class ReplayRunner:
             steps=steps,
         )
 
-    def extract_decision_trace(self) -> List[Dict[str, Any]]:
+    def extract_decision_trace(
+        self, run_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """Extract a decision trace for analysis.
 
         Returns a list of {action, decision, risk, success_prob}
         for each step in the ledger.
         """
-        records = self.ledger.read_all()
+        records = self._kernel_records(
+            self.ledger.read_all(run_id=run_id),
+        )
         trace: List[Dict[str, Any]] = []
         for rec in records:
             sim = rec.simulation or {}
             risk = rec.risk or {}
             meta = rec.metadata or {}
             trace.append({
+                "run_id": meta.get("run_id", ""),
                 "action": meta.get("action", ""),
                 "intent": meta.get("intent", ""),
                 "decision": rec.decision,

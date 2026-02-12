@@ -101,6 +101,7 @@ class HardKernel:
         context: str = "",
         intent: str = "",
         bundle_id: str = "",
+        run_id: str = "",
     ) -> KernelStepResult:
         """The ONLY path to execution.
 
@@ -131,6 +132,7 @@ class HardKernel:
                 proposal, None, None, "REJECT",
                 f"Validation failed: {validation.errors}",
                 None, None,
+                run_id,
             )
             return KernelStepResult(
                 phase="VALIDATE",
@@ -162,6 +164,7 @@ class HardKernel:
             record = self._commit_ledger(
                 proposal, sim, risk, "REJECT",
                 decision.reason, None, None,
+                run_id,
             )
             return KernelStepResult(
                 phase="DECIDE",
@@ -217,6 +220,7 @@ class HardKernel:
             proposal, sim, risk,
             "APPROVE", decision.reason,
             outcome, verification,
+            run_id,
         )
 
         self._step_count += 1
@@ -242,6 +246,7 @@ class HardKernel:
         reason: str,
         outcome: Optional[Outcome],
         verification: Optional[VerificationResult],
+        run_id: str = "",
     ) -> LedgerRecord:
         """Write an immutable record to the ledger."""
         record = LedgerRecord(
@@ -260,10 +265,56 @@ class HardKernel:
             metadata={
                 "action": proposal.action,
                 "intent": proposal.intent,
+                "run_id": run_id,
+                "bundle_id": proposal.bundle_id,
+                "context_hash": proposal.context_hash,
+                "memory_version": self.state.memory_version,
+                "env_hash": self.state.env_hash,
                 "step_count": self.state.step_count,
             },
         )
         return self.ledger.append(record)
+
+    def reset_for_run(
+        self,
+        *,
+        run_id: str = "",
+        rng_seed: Optional[int] = None,
+        env_hash: str = "",
+        memory_version: str = "0",
+        policy_hash: Optional[str] = None,
+        reset_history: bool = True,
+    ) -> None:
+        """Reset deterministic state for a new run.
+
+        This prevents cross-run state leakage while keeping
+        the immutable ledger intact.
+        """
+        seed = int(
+            rng_seed
+            if rng_seed is not None
+            else self.policy.get("rng_seed", 42)
+        )
+        p_hash = str(
+            policy_hash
+            if policy_hash is not None
+            else self.policy.get("policy_hash", "")
+        )
+        self.state = SystemState(
+            memory_version=str(memory_version),
+            env_hash=str(env_hash),
+            rng_seed=seed,
+            policy_hash=p_hash,
+            resource_state={
+                "run_id": run_id,
+            },
+        )
+        if reset_history:
+            self.history = OutcomeHistory(
+                max_entries=int(
+                    self.policy.get("history_max", 500),
+                ),
+            )
 
     def _adaptive_tighten(self) -> None:
         """Tighten safety envelope after failure cluster.
