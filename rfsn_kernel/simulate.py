@@ -110,8 +110,13 @@ class _ActionStats:
 _BASE_COSTS: Dict[str, float] = {
     "repo_search": 0.05,
     "repo_read_range": 0.03,
+    "read_file": 0.02,
+    "detect_project": 0.03,
+    "detect_workdirs": 0.06,
     "apply_patch": 0.3,
     "run_tests": 0.5,
+    "run_cmd_template": 0.4,
+    "format_fix": 0.35,
     "ensure_deps": 0.2,
 }
 
@@ -221,8 +226,13 @@ def simulate(
     base_probs: Dict[str, float] = {
         "repo_search": 0.85,
         "repo_read_range": 0.95,
+        "read_file": 0.96,
+        "detect_project": 0.95,
+        "detect_workdirs": 0.9,
         "apply_patch": 0.6,
         "run_tests": 0.5,
+        "run_cmd_template": 0.55,
+        "format_fix": 0.7,
         "ensure_deps": 0.8,
     }
     success_prob = base_probs.get(proposal.action, 0.5)

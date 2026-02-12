@@ -4,6 +4,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_PATH = ROOT / "services" / "orchestrator" / "app.py"
+UI_PATH = ROOT / "services" / "orchestrator" / "ui" / "index.html"
 
 
 def _parse_app() -> ast.Module:
@@ -110,8 +111,40 @@ def test_hard_ledger_tail_endpoints_exist():
     assert '@app.get("/ledger/run/{run_id}")' in src
 
 
+def test_ui_endpoints_exist():
+    src = APP_PATH.read_text(encoding="utf-8")
+    assert '@app.get("/", response_class=HTMLResponse)' in src
+    assert '@app.get("/ui", response_class=HTMLResponse)' in src
+
+
+def test_ui_file_exists_and_contains_run_controls():
+    assert UI_PATH.exists()
+    html = UI_PATH.read_text(encoding="utf-8")
+    assert "RFSN Control Surface" in html
+    assert 'id="runForm"' in html
+    assert 'id="ledgerBox"' in html
+    assert 'id="importForm"' in html
+    assert 'id="repoPicker"' in html
+    assert 'id="chatForm"' in html
+    assert 'id="chatBox"' in html
+    assert 'id="textChatForm"' in html
+    assert 'id="textChatBox"' in html
+
+
 def test_llm_response_schema_checks_are_strict():
     src = APP_PATH.read_text(encoding="utf-8")
     assert "SCHEMA ERROR: 'done'" in src
     assert "SCHEMA ERROR: 'intent'" in src
     assert "done=true, step must" in src
+
+
+def test_repo_import_and_chat_endpoints_exist():
+    src = APP_PATH.read_text(encoding="utf-8")
+    assert '@app.get("/repos")' in src
+    assert '@app.post("/repos/import")' in src
+    assert '@app.post("/chat")' in src
+    assert '@app.get("/chat/{thread_id}")' in src
+    assert '@app.delete("/chat/{thread_id}")' in src
+    assert '@app.post("/chat/text")' in src
+    assert '@app.get("/chat/text/{thread_id}")' in src
+    assert '@app.delete("/chat/text/{thread_id}")' in src

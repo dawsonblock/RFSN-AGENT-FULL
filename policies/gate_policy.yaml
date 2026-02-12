@@ -36,6 +36,15 @@ step_budgets:
     max_per_iter: 6
     max_lines_per_read: 300
     timeout_s: 15
+  read_file:
+    max_per_iter: 6
+    timeout_s: 15
+  detect_project:
+    max_per_iter: 2
+    timeout_s: 20
+  detect_workdirs:
+    max_per_iter: 2
+    timeout_s: 30
   apply_patch:
     max_per_iter: 2
     timeout_s: 60
@@ -45,6 +54,12 @@ step_budgets:
   run_tests:
     max_per_iter: 4
     timeout_s: 900
+  run_cmd_template:
+    max_per_iter: 6
+    timeout_s: 300
+  format_fix:
+    max_per_iter: 2
+    timeout_s: 240
 
 # Total steps allowed in a single bundle.
 max_steps_per_bundle: 15

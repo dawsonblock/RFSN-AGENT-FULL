@@ -1,0 +1,748 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RFSN Control Surface</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+    :root {
+      --bg-0: #0f1221;
+      --bg-1: #121832;
+      --bg-2: #17213f;
+      --card: rgba(14, 19, 40, 0.78);
+      --line: rgba(125, 170, 255, 0.26);
+      --ink: #ecf2ff;
+      --ink-dim: #b0c0e6;
+      --ok: #38d39f;
+      --warn: #ffc857;
+      --bad: #ff6b7a;
+      --accent: #6ec3ff;
+      --accent-2: #89ffca;
+      --shadow: 0 20px 60px rgba(3, 8, 24, 0.46);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(72rem 32rem at -8% -12%, #26418f66, transparent 70%),
+        radial-gradient(48rem 24rem at 112% 8%, #1f7f8f55, transparent 70%),
+        linear-gradient(160deg, var(--bg-0), var(--bg-1) 48%, var(--bg-2));
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    .grid-backdrop {
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(to right, rgba(141,169,255,.06) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(141,169,255,.05) 1px, transparent 1px);
+      background-size: 40px 40px;
+      mask-image: radial-gradient(circle at 50% 20%, black 30%, transparent 80%);
+      pointer-events: none;
+    }
+
+    .shell {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 28px 18px 40px;
+      animation: rise .6s ease both;
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(10px) scale(.99); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    .headline {
+      display: flex;
+      gap: 16px;
+      align-items: baseline;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+
+    .headline h1 {
+      margin: 0;
+      font-size: clamp(1.25rem, 2.6vw, 2.2rem);
+      letter-spacing: .01em;
+      font-weight: 700;
+    }
+
+    .headline .sig {
+      font-family: "IBM Plex Mono", monospace;
+      color: var(--ink-dim);
+      font-size: .8rem;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    .panel-grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0,1fr));
+      gap: 14px;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      background: var(--card);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(4px);
+      padding: 14px;
+    }
+
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: .95rem;
+      letter-spacing: .02em;
+      color: var(--accent-2);
+      text-transform: uppercase;
+    }
+
+    .full { grid-column: span 12; }
+    .half { grid-column: span 6; }
+    .third { grid-column: span 4; }
+
+    @media (max-width: 980px) {
+      .half, .third { grid-column: span 12; }
+    }
+
+    .kv { display: grid; gap: 8px; }
+    .kv .row {
+      display: grid;
+      grid-template-columns: 150px 1fr;
+      gap: 10px;
+      font-size: .92rem;
+    }
+    .kv .k { color: var(--ink-dim); }
+    .mono {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .83rem;
+      word-break: break-word;
+    }
+
+    .pill {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 999px;
+      font-size: .75rem;
+      font-weight: 700;
+      font-family: "IBM Plex Mono", monospace;
+    }
+    .pill.ok { background: #143427; color: var(--ok); }
+    .pill.bad { background: #361720; color: var(--bad); }
+    .pill.warn { background: #3f2f11; color: var(--warn); }
+
+    form { display: grid; gap: 10px; }
+    .fgrid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0,1fr));
+      gap: 10px;
+    }
+    .fgrid .fullcol { grid-column: span 2; }
+    @media (max-width: 740px) {
+      .fgrid { grid-template-columns: 1fr; }
+      .fgrid .fullcol { grid-column: span 1; }
+    }
+
+    label {
+      display: grid;
+      gap: 4px;
+      font-size: .8rem;
+      color: var(--ink-dim);
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+
+    input, textarea, select {
+      width: 100%;
+      border: 1px solid #3f558a;
+      background: #0f1733;
+      color: var(--ink);
+      border-radius: 10px;
+      padding: 10px 11px;
+      font: inherit;
+    }
+
+    textarea { min-height: 100px; resize: vertical; }
+
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    button {
+      border: 1px solid #4f75bb;
+      color: #f7fbff;
+      background: linear-gradient(140deg, #21489f, #1b315f);
+      border-radius: 10px;
+      padding: 9px 13px;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .8rem;
+      letter-spacing: .03em;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      border-color: #5f6c92;
+      background: linear-gradient(140deg, #242a43, #1a2038);
+    }
+
+    pre {
+      margin: 0;
+      padding: 10px;
+      border-radius: 10px;
+      background: #0b1126;
+      border: 1px solid #3c4d78;
+      color: #cbdaff;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: .77rem;
+      max-height: 320px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    .tiny { font-size: .75rem; color: var(--ink-dim); }
+  </style>
+</head>
+<body>
+  <div class="grid-backdrop"></div>
+  <main class="shell">
+    <div class="headline">
+      <h1>RFSN Control Surface</h1>
+      <span class="sig" id="sig">Kernel-governed orchestration</span>
+    </div>
+
+    <section class="panel-grid">
+      <article class="card full">
+        <h2>Auth</h2>
+        <div class="fgrid">
+          <label class="fullcol">Service Token (for API calls)
+            <input id="token" type="password" placeholder="Bearer token" />
+          </label>
+        </div>
+        <div class="actions" style="margin-top:8px">
+          <button id="saveToken" class="secondary">Save Token</button>
+          <button id="refreshAll">Refresh All</button>
+          <span class="tiny" id="authState"></span>
+        </div>
+      </article>
+
+      <article class="card half">
+        <h2>Import Public Repo</h2>
+        <form id="importForm">
+          <div class="fgrid">
+            <label class="fullcol">Repo URL
+              <input id="repoUrl" placeholder="https://github.com/owner/repo.git" required />
+            </label>
+            <label>Repo Alias (optional)
+              <input id="repoAlias" placeholder="owner-repo" />
+            </label>
+            <label>Branch/Ref (optional)
+              <input id="repoRef" placeholder="main" />
+            </label>
+            <label>Clone Depth
+              <input id="repoDepth" type="number" min="1" max="200" value="1" />
+            </label>
+            <label>Force Replace Existing
+              <select id="repoForce">
+                <option value="false" selected>No</option>
+                <option value="true">Yes</option>
+              </select>
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit">Import Repo</button>
+            <button type="button" id="refreshRepos" class="secondary">Refresh Repos</button>
+            <span class="tiny" id="repoState"></span>
+          </div>
+        </form>
+      </article>
+
+      <article class="card half">
+        <h2>Repo Picker</h2>
+        <div class="fgrid">
+          <label class="fullcol">Available Repositories
+            <select id="repoPicker"></select>
+          </label>
+          <label>Selected for Run
+            <input id="selectedRepoRun" readonly />
+          </label>
+          <label>Selected for Chat
+            <input id="selectedRepoChat" readonly />
+          </label>
+        </div>
+        <pre id="reposBox">No repositories loaded.</pre>
+      </article>
+
+      <article class="card third">
+        <h2>Health</h2>
+        <div class="kv" id="healthBox"></div>
+      </article>
+
+      <article class="card third">
+        <h2>Metrics</h2>
+        <div class="kv" id="metricsBox"></div>
+      </article>
+
+      <article class="card third">
+        <h2>Kernel Stats</h2>
+        <div class="kv" id="kernelBox"></div>
+      </article>
+
+      <article class="card half">
+        <h2>Run Job</h2>
+        <form id="runForm">
+          <div class="fgrid">
+            <label>Repo ID
+              <input id="repoId" value="demo_failrepo" required />
+            </label>
+            <label>Max Iters
+              <input id="maxIters" type="number" min="1" max="12" value="3" required />
+            </label>
+            <label class="fullcol">Task
+              <textarea id="task" required>Fix failing tests with minimal patch. Keep deterministic behavior.</textarea>
+            </label>
+            <label>Scenario
+              <input id="scenario" placeholder="golden" />
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit">Start Run</button>
+            <span class="tiny" id="runState"></span>
+          </div>
+        </form>
+      </article>
+
+      <article class="card half">
+        <h2>Run Inspector</h2>
+        <div class="fgrid">
+          <label>Run ID
+            <input id="runId" placeholder="run-..." />
+          </label>
+          <label>Ledger Tail N
+            <input id="tailN" type="number" min="10" max="5000" value="150" />
+          </label>
+        </div>
+        <div class="actions" style="margin-top:10px">
+          <button id="loadRun" class="secondary">Load Run Ledger</button>
+          <button id="loadTier" class="secondary">Load Policy Tier</button>
+        </div>
+      </article>
+
+      <article class="card full">
+        <h2>Talk To Repo</h2>
+        <form id="chatForm">
+          <div class="fgrid">
+            <label>Repo ID
+              <input id="chatRepoId" placeholder="owner-repo" required />
+            </label>
+            <label>Thread ID
+              <input id="chatThreadId" placeholder="chat-..." />
+            </label>
+            <label class="fullcol">Message
+              <textarea id="chatMessage" required placeholder="Ask about architecture, files, behavior, or where to patch..."></textarea>
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit">Send Message</button>
+            <button type="button" id="newRepoThread" class="secondary">New Thread</button>
+            <span class="tiny" id="chatState"></span>
+          </div>
+        </form>
+        <pre id="chatBox">No chat messages yet.</pre>
+      </article>
+
+      <article class="card full">
+        <h2>Text Chat</h2>
+        <form id="textChatForm">
+          <div class="fgrid">
+            <label>Thread ID
+              <input id="textThreadId" placeholder="txtchat-..." />
+            </label>
+            <label>Model Mode
+              <input value="general" readonly />
+            </label>
+            <label class="fullcol">Message
+              <textarea id="textChatMessage" required placeholder="Ask anything about the system, implementation, or next steps..."></textarea>
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit">Send Message</button>
+            <button type="button" id="newTextThread" class="secondary">New Thread</button>
+            <span class="tiny" id="textChatState"></span>
+          </div>
+        </form>
+        <pre id="textChatBox">No text chat messages yet.</pre>
+      </article>
+
+      <article class="card full">
+        <h2>Latest Result</h2>
+        <pre id="runResult">No run executed yet.</pre>
+      </article>
+
+      <article class="card full">
+        <h2>Ledger Stream</h2>
+        <pre id="ledgerBox">No events loaded.</pre>
+      </article>
+    </section>
+  </main>
+
+  <script>
+    const tokenInput = document.getElementById('token');
+    const authState = document.getElementById('authState');
+    const runState = document.getElementById('runState');
+    const repoState = document.getElementById('repoState');
+    const chatState = document.getElementById('chatState');
+    const textChatState = document.getElementById('textChatState');
+    const repoPicker = document.getElementById('repoPicker');
+
+    const readToken = () => localStorage.getItem('rfsn_token') || '';
+    const writeToken = (v) => localStorage.setItem('rfsn_token', v || '');
+
+    function headers() {
+      const h = { 'Content-Type': 'application/json' };
+      const tok = readToken();
+      if (tok) h['Authorization'] = `Bearer ${tok}`;
+      return h;
+    }
+
+    async function api(path, opts={}) {
+      const res = await fetch(path, {
+        ...opts,
+        headers: {
+          ...headers(),
+          ...(opts.headers || {}),
+        },
+      });
+      const text = await res.text();
+      let payload = {};
+      try { payload = text ? JSON.parse(text) : {}; } catch { payload = { raw: text }; }
+      if (!res.ok) {
+        const msg = payload?.detail || payload?.error || `${res.status} ${res.statusText}`;
+        throw new Error(msg);
+      }
+      return payload;
+    }
+
+    function row(k, v, cls='mono') {
+      const val = (v === undefined || v === null || v === '') ? '-' : v;
+      return `<div class="row"><div class="k">${k}</div><div class="${cls}">${val}</div></div>`;
+    }
+
+    function badge(ok) {
+      if (ok === true) return '<span class="pill ok">OK</span>';
+      if (ok === false) return '<span class="pill bad">DOWN</span>';
+      return '<span class="pill warn">N/A</span>';
+    }
+
+    function setSelectedRepo(repoId) {
+      if (!repoId) return;
+      document.getElementById('repoId').value = repoId;
+      document.getElementById('chatRepoId').value = repoId;
+      document.getElementById('selectedRepoRun').value = repoId;
+      document.getElementById('selectedRepoChat').value = repoId;
+    }
+
+    function renderChatHistory(lines) {
+      document.getElementById('chatBox').textContent = lines.join('\n\n');
+    }
+
+    function renderTextChatHistory(lines) {
+      document.getElementById('textChatBox').textContent = lines.join('\n\n');
+    }
+
+    async function loadHealth() {
+      const box = document.getElementById('healthBox');
+      try {
+        const h = await api('/health');
+        box.innerHTML = [
+          row('Orchestrator', badge(h.ok), ''),
+          row('LLM', badge(h.deps?.llm_service), ''),
+          row('Gateway', badge(h.deps?.tool_gateway), ''),
+          row('Learner', badge(h.deps?.learner_service), ''),
+          row('Policy Hash', h.policies ? 'loaded' : 'n/a')
+        ].join('');
+      } catch (e) {
+        box.innerHTML = row('Error', e.message);
+      }
+    }
+
+    async function loadMetrics() {
+      const box = document.getElementById('metricsBox');
+      try {
+        const m = await api('/metrics');
+        box.innerHTML = [
+          row('Runs', `${m.runs_ok || 0} ok / ${m.runs_fail || 0} fail`),
+          row('LLM Calls', m.llm_calls),
+          row('Gate Rejects', m.gate_rejections),
+          row('Steps', m.steps_executed),
+          row('Scheduler', `${m.scheduler?.active ?? '-'} / ${m.scheduler?.max_concurrent ?? '-'}`)
+        ].join('');
+      } catch (e) {
+        box.innerHTML = row('Error', e.message);
+      }
+    }
+
+    async function loadKernel() {
+      const box = document.getElementById('kernelBox');
+      try {
+        const ks = await api('/kernel/stats');
+        const k = ks.kernel || {};
+        box.innerHTML = [
+          row('Ledger Entries', k.ledger_entries),
+          row('Safety Level', k.safety_level),
+          row('Risk Max', k.risk_max),
+          row('Success Min', k.success_min),
+          row('Active Runs', Object.keys(k.active_runs || {}).length)
+        ].join('');
+      } catch (e) {
+        box.innerHTML = row('Error', e.message);
+      }
+    }
+
+    async function loadRepos() {
+      try {
+        const out = await api('/repos');
+        const repos = Array.isArray(out.repos) ? out.repos : [];
+        repoPicker.innerHTML = '';
+        for (const r of repos) {
+          const opt = document.createElement('option');
+          opt.value = r.repo_id;
+          opt.textContent = `${r.repo_id}${r.branch ? ` (${r.branch})` : ''}`;
+          repoPicker.appendChild(opt);
+        }
+        if (repos.length > 0) {
+          const current = repoPicker.value || repos[0].repo_id;
+          repoPicker.value = current;
+          setSelectedRepo(current);
+        }
+        document.getElementById('reposBox').textContent = JSON.stringify(out, null, 2);
+        repoState.textContent = `${repos.length} repo(s) loaded`;
+      } catch (e) {
+        document.getElementById('reposBox').textContent = `Repo load failed: ${e.message}`;
+        repoState.textContent = 'Repo load failed';
+      }
+    }
+
+    async function importRepo(e) {
+      e.preventDefault();
+      repoState.textContent = 'Importing...';
+      const body = {
+        repo_url: document.getElementById('repoUrl').value.trim(),
+        depth: parseInt(document.getElementById('repoDepth').value || '1', 10),
+        force: document.getElementById('repoForce').value === 'true',
+      };
+      const alias = document.getElementById('repoAlias').value.trim();
+      const ref = document.getElementById('repoRef').value.trim();
+      if (alias) body.repo_id = alias;
+      if (ref) body.ref = ref;
+      try {
+        const out = await api('/repos/import', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        });
+        repoState.textContent = `Imported: ${out.repo_id}`;
+        if (out.repo_id) {
+          setSelectedRepo(out.repo_id);
+        }
+        await loadRepos();
+      } catch (err) {
+        repoState.textContent = `Import failed: ${err.message}`;
+      }
+    }
+
+    async function loadLedger(runId = '') {
+      const n = parseInt(document.getElementById('tailN').value || '150', 10);
+      const path = runId ? `/ledger/run/${encodeURIComponent(runId)}?n=${n}` : `/ledger/tail?n=${n}`;
+      const out = await api(path);
+      document.getElementById('ledgerBox').textContent = JSON.stringify(out, null, 2);
+    }
+
+    async function loadTier(runId) {
+      if (!runId) return;
+      try {
+        const t = await api(`/policy/tier/${encodeURIComponent(runId)}`);
+        document.getElementById('runResult').textContent = JSON.stringify({ policy_tier: t }, null, 2);
+      } catch (e) {
+        document.getElementById('runResult').textContent = `Tier load failed: ${e.message}`;
+      }
+    }
+
+    async function sendChat(e) {
+      e.preventDefault();
+      const repoId = document.getElementById('chatRepoId').value.trim();
+      const message = document.getElementById('chatMessage').value.trim();
+      if (!repoId || !message) return;
+
+      chatState.textContent = 'Thinking...';
+      const threadInput = document.getElementById('chatThreadId');
+      const threadId = threadInput.value.trim();
+
+      const history = document.getElementById('chatBox').textContent === 'No chat messages yet.'
+        ? []
+        : document.getElementById('chatBox').textContent.split('\n\n').filter(Boolean);
+      history.push(`You: ${message}`);
+      renderChatHistory(history);
+
+      try {
+        const out = await api('/chat', {
+          method: 'POST',
+          body: JSON.stringify({
+            repo_id: repoId,
+            message,
+            thread_id: threadId || undefined,
+            max_files: 5,
+          }),
+        });
+        if (out.thread_id) threadInput.value = out.thread_id;
+        history.push(`Assistant: ${out.reply || ''}`);
+        if (Array.isArray(out.context?.warnings) && out.context.warnings.length > 0) {
+          history.push(`Context warnings: ${out.context.warnings.join(' | ')}`);
+        }
+        renderChatHistory(history);
+        chatState.textContent = 'Replied.';
+      } catch (err) {
+        history.push(`Assistant (error): ${err.message}`);
+        renderChatHistory(history);
+        chatState.textContent = 'Chat failed.';
+      } finally {
+        document.getElementById('chatMessage').value = '';
+      }
+    }
+
+    async function sendTextChat(e) {
+      e.preventDefault();
+      const message = document.getElementById('textChatMessage').value.trim();
+      if (!message) return;
+
+      textChatState.textContent = 'Thinking...';
+      const threadInput = document.getElementById('textThreadId');
+      const threadId = threadInput.value.trim();
+
+      const box = document.getElementById('textChatBox');
+      const history = box.textContent === 'No text chat messages yet.'
+        ? []
+        : box.textContent.split('\n\n').filter(Boolean);
+      history.push(`You: ${message}`);
+      renderTextChatHistory(history);
+
+      try {
+        const out = await api('/chat/text', {
+          method: 'POST',
+          body: JSON.stringify({
+            message,
+            thread_id: threadId || undefined,
+          }),
+        });
+        if (out.thread_id) threadInput.value = out.thread_id;
+        history.push(`Assistant: ${out.reply || ''}`);
+        renderTextChatHistory(history);
+        textChatState.textContent = 'Replied.';
+      } catch (err) {
+        history.push(`Assistant (error): ${err.message}`);
+        renderTextChatHistory(history);
+        textChatState.textContent = 'Chat failed.';
+      } finally {
+        document.getElementById('textChatMessage').value = '';
+      }
+    }
+
+    async function refreshAll() {
+      authState.textContent = readToken() ? 'Token set' : 'No token set';
+      await Promise.allSettled([loadHealth(), loadMetrics(), loadKernel(), loadRepos()]);
+      try { await loadLedger(); } catch {}
+    }
+
+    document.getElementById('saveToken').addEventListener('click', async () => {
+      writeToken(tokenInput.value.trim());
+      await refreshAll();
+    });
+
+    document.getElementById('refreshAll').addEventListener('click', refreshAll);
+    document.getElementById('importForm').addEventListener('submit', importRepo);
+    document.getElementById('refreshRepos').addEventListener('click', loadRepos);
+    document.getElementById('chatForm').addEventListener('submit', sendChat);
+    document.getElementById('textChatForm').addEventListener('submit', sendTextChat);
+
+    repoPicker.addEventListener('change', () => {
+      const v = repoPicker.value;
+      if (v) setSelectedRepo(v);
+    });
+
+    document.getElementById('newRepoThread').addEventListener('click', async () => {
+      const threadInput = document.getElementById('chatThreadId');
+      const tid = threadInput.value.trim();
+      if (tid) {
+        try { await api(`/chat/${encodeURIComponent(tid)}`, { method: 'DELETE' }); } catch {}
+      }
+      threadInput.value = '';
+      document.getElementById('chatBox').textContent = 'No chat messages yet.';
+      chatState.textContent = 'Started new thread.';
+    });
+
+    document.getElementById('newTextThread').addEventListener('click', async () => {
+      const threadInput = document.getElementById('textThreadId');
+      const tid = threadInput.value.trim();
+      if (tid) {
+        try { await api(`/chat/text/${encodeURIComponent(tid)}`, { method: 'DELETE' }); } catch {}
+      }
+      threadInput.value = '';
+      document.getElementById('textChatBox').textContent = 'No text chat messages yet.';
+      textChatState.textContent = 'Started new thread.';
+    });
+
+    document.getElementById('runForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      runState.textContent = 'Running...';
+      const body = {
+        repo_id: document.getElementById('repoId').value.trim(),
+        task: document.getElementById('task').value,
+        max_iters: parseInt(document.getElementById('maxIters').value || '3', 10),
+      };
+      const scenario = document.getElementById('scenario').value.trim();
+      if (scenario) body.scenario = scenario;
+      try {
+        const out = await api('/run', { method: 'POST', body: JSON.stringify(body) });
+        document.getElementById('runResult').textContent = JSON.stringify(out, null, 2);
+        if (out.run_id) {
+          document.getElementById('runId').value = out.run_id;
+          await loadTier(out.run_id);
+          await loadLedger(out.run_id);
+        }
+        runState.textContent = 'Run completed.';
+      } catch (err) {
+        document.getElementById('runResult').textContent = `Run failed: ${err.message}`;
+        runState.textContent = 'Run failed.';
+      }
+    });
+
+    document.getElementById('loadRun').addEventListener('click', async () => {
+      const id = document.getElementById('runId').value.trim();
+      if (!id) return;
+      try { await loadLedger(id); } catch (e) {
+        document.getElementById('ledgerBox').textContent = `Ledger load failed: ${e.message}`;
+      }
+    });
+
+    document.getElementById('loadTier').addEventListener('click', async () => {
+      const id = document.getElementById('runId').value.trim();
+      if (!id) return;
+      await loadTier(id);
+    });
+
+    tokenInput.value = readToken();
+    refreshAll();
+  </script>
+</body>
+</html>

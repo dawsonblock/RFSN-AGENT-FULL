@@ -17,8 +17,13 @@ class RfsnPhase:
 _STEP_TO_PHASE: Dict[str, str] = {
     "repo_search": RfsnPhase.SEARCHING,
     "repo_read_range": RfsnPhase.READING,
+    "read_file": RfsnPhase.READING,
+    "detect_project": RfsnPhase.SEARCHING,
+    "detect_workdirs": RfsnPhase.SEARCHING,
     "apply_patch": RfsnPhase.PATCHING,
     "run_tests": RfsnPhase.TESTING,
+    "run_cmd_template": RfsnPhase.TESTING,
+    "format_fix": RfsnPhase.PATCHING,
     "ensure_deps": RfsnPhase.DEPS,
 }
 

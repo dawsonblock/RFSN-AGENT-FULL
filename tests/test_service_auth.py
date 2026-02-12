@@ -52,3 +52,11 @@ def test_health_not_public_when_auth_enabled(monkeypatch):
     monkeypatch.setenv("RFSN_SERVICE_TOKEN", "secret-token")
     mod = _load_auth_module("auth_health_private_case")
     assert "/health" not in mod._PUBLIC_PATHS
+
+
+def test_ui_paths_public_for_dashboard_bootstrap(monkeypatch):
+    monkeypatch.setenv("RFSN_DEV_MODE", "0")
+    monkeypatch.setenv("RFSN_SERVICE_TOKEN", "secret-token")
+    mod = _load_auth_module("auth_ui_public_case")
+    assert "/ui" in mod._PUBLIC_PATHS
+    assert "/" in mod._PUBLIC_PATHS

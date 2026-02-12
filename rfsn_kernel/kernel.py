@@ -677,9 +677,22 @@ class HardKernel:
             "logs": outcome.logs or "",
             "payload": outcome.payload or "",
         }
-        kinds = extract_failure_kinds(
-            executor_out_like,
-        )
+        kinds = []
+        if outcome.payload:
+            try:
+                parsed_payload = json.loads(
+                    outcome.payload,
+                )
+                if isinstance(parsed_payload, dict):
+                    fk = parsed_payload.get("failure_kind")
+                    if isinstance(fk, str) and fk:
+                        kinds = [fk]
+            except Exception:
+                kinds = []
+        if not kinds:
+            kinds = extract_failure_kinds(
+                executor_out_like,
+            )
         rs.failure_kinds = kinds
         td = pick_next_tier(
             rs.tier, kinds, self.tier_policy,

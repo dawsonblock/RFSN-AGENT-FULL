@@ -29,7 +29,11 @@ if not RFSN_SERVICE_TOKEN and not RFSN_DEV_MODE:
 
 # Paths that bypass auth (docs only)
 _PUBLIC_PATHS = frozenset({
-    "/docs", "/openapi.json",
+    "/",
+    "/ui",
+    "/favicon.ico",
+    "/docs",
+    "/openapi.json",
 })
 
 

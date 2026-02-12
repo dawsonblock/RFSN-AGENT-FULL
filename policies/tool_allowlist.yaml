@@ -2,19 +2,47 @@
 allowed_step_types:
   - repo_search
   - repo_read_range
+  - read_file
+  - detect_project
+  - detect_workdirs
   - apply_patch
   - ensure_deps
   - run_tests
+  - run_cmd_template
+  - format_fix
 
 # Paths are repo-root-relative (src/foo.py, not repo/src/foo.py).
 repo_root_required: true
 
 max_patch_bytes: 200000
 max_read_bytes: 200000
+max_read_file_bytes: 65536
 
 max_read_steps_per_iter: 6
 max_search_steps_per_iter: 4
 max_bytes_returned_per_iter: 250000
+
+# Workdir discovery cap for monorepos.
+max_workdirs: 24
+
+# format_fix becomes available only from this tier onward.
+format_fix_min_tier: 2
+
+# Safe command templates for run_cmd_template / format_fix.
+command_templates:
+  python:pytest: ["python", "-m", "pytest", "-q"]
+  python:unittest: ["python", "-m", "unittest", "-q"]
+  python:ruff: ["python", "-m", "ruff", "check", "."]
+  python:ruff_fix: ["python", "-m", "ruff", "check", ".", "--fix"]
+  python:black: ["python", "-m", "black", "--check", "."]
+  python:black_fix: ["python", "-m", "black", "."]
+  node:test: ["npm", "test", "--silent"]
+  node:lint: ["npm", "run", "lint", "--silent"]
+  node:prettier_fix: ["npx", "prettier", "-w", "."]
+  tsc: ["npx", "tsc", "-p", ".", "--noEmit"]
+  make:test: ["make", "test"]
+  go:test: ["go", "test", "./..."]
+  rust:test: ["cargo", "test"]
 
 allowed_paths:
   - "**"

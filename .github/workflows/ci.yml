@@ -81,6 +81,7 @@ jobs:
           docker compose build
           docker compose up -d
           curl -sf -H "authorization: Bearer dummy" http://localhost:8000/health
+          curl -sf http://localhost:8000/ui > /dev/null
           curl -sf -H "authorization: Bearer dummy" http://localhost:8001/health
           curl -sf -H "authorization: Bearer dummy" http://localhost:8002/health
           curl -sf -H "authorization: Bearer dummy" http://localhost:8003/health

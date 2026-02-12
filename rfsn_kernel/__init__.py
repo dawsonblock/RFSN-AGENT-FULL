@@ -24,6 +24,15 @@ from rfsn_kernel.tier_policy import (
     pick_next_tier,
 )
 from rfsn_kernel.failure_kinds import extract_failure_kinds
+from rfsn_kernel.command_infer import infer_commands
+from rfsn_kernel.repair_loop import (
+    next_phase,
+    should_retry,
+    update_state,
+)
+from rfsn_kernel.patch_minimize import minimize_unified_diff
+from rfsn_kernel.sim_cache import SimCache
+from rfsn_kernel.scheduler import Scheduler, RunBudget
 
 __all__ = [
     "HardKernel",
@@ -48,4 +57,12 @@ __all__ = [
     "tier_allows_step",
     "pick_next_tier",
     "extract_failure_kinds",
+    "infer_commands",
+    "next_phase",
+    "should_retry",
+    "update_state",
+    "minimize_unified_diff",
+    "SimCache",
+    "Scheduler",
+    "RunBudget",
 ]

@@ -1,13 +1,15 @@
 import os
 import re
 from typing import Optional
+import json
 
-from fastapi import FastAPI, HTTPException  # type: ignore[import-not-found]
+from fastapi import FastAPI, HTTPException, Header  # type: ignore[import-not-found]
 from pydantic import BaseModel  # type: ignore[import-not-found]
 import yaml  # type: ignore[import-untyped]
 import requests  # type: ignore[import-untyped]
 
 from policy import validate_repo_path
+from workdir_store import WorkdirStore
 
 import sys
 sys.path.insert(0, "/shared")
@@ -74,6 +76,12 @@ REPO_ROOT_REQUIRED = bool(
 
 MAX_PATCH_BYTES = int(ALLOW.get("max_patch_bytes", 200000))
 MAX_READ_BYTES = int(ALLOW.get("max_read_bytes", 200000))
+MAX_READ_FILE_BYTES = int(ALLOW.get("max_read_file_bytes", 65536))
+MAX_WORKDIRS = int(ALLOW.get("max_workdirs", 24))
+FORMAT_FIX_MIN_TIER = int(ALLOW.get("format_fix_min_tier", 2))
+COMMAND_TEMPLATES = ALLOW.get("command_templates", {}) or {}
+WORKDIR_RE = re.compile(r"^workdir_\d+$")
+_WORKDIRS = WorkdirStore()
 
 MAX_READ_STEPS = int(ALLOW.get("max_read_steps_per_iter", 6))
 MAX_SEARCH_STEPS = int(ALLOW.get("max_search_steps_per_iter", 4))
@@ -131,6 +139,10 @@ class Step(BaseModel):
     manifest: Optional[str] = None
     mode: Optional[str] = None
     timeout_s: Optional[int] = None
+    template: Optional[str] = None
+    workdir_id: Optional[str] = None
+    workdir: Optional[str] = None
+    max_depth: Optional[int] = None
 
 
 class RunStepReq(BaseModel):
@@ -138,6 +150,74 @@ class RunStepReq(BaseModel):
     iter: int
     step: Step
     run_id: Optional[str] = None
+    tier: Optional[int] = None
+
+
+class RunCleanupReq(BaseModel):
+    run_id: str
+
+
+def _effective_tier(
+    body_tier: Optional[int],
+    header_tier: Optional[str],
+) -> int:
+    if body_tier is not None:
+        try:
+            return max(0, int(body_tier))
+        except (TypeError, ValueError):
+            return 0
+    if header_tier:
+        try:
+            return max(0, int(header_tier))
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
+
+def _resolve_workdir(
+    *,
+    run_id: str | None,
+    workdir_id: str,
+) -> str:
+    rel = _WORKDIRS.get_rel(run_id or "", workdir_id)
+    if not rel:
+        raise HTTPException(
+            403,
+            f"unknown workdir_id: {workdir_id}",
+        )
+    return rel
+
+
+def _store_workdirs(
+    run_id: str | None,
+    out: dict,
+) -> None:
+    if not run_id:
+        return
+
+    payload = out.get("payload")
+    parsed = None
+    if isinstance(payload, str) and payload.strip():
+        try:
+            parsed = json.loads(payload)
+        except json.JSONDecodeError:
+            parsed = None
+
+    if not isinstance(parsed, dict):
+        return
+    workdirs = parsed.get("workdirs")
+    if not isinstance(workdirs, list):
+        return
+    mapping = {}
+    for item in workdirs[:MAX_WORKDIRS]:
+        if not isinstance(item, dict):
+            continue
+        wid = item.get("id")
+        rel = item.get("rel")
+        if isinstance(wid, str) and isinstance(rel, str):
+            mapping[wid] = rel
+    if mapping:
+        _WORKDIRS.set_run_workdirs(run_id, mapping)
 
 
 @app.get("/health")
@@ -178,14 +258,24 @@ def _executor(
     return r.json()
 
 
+@app.post("/run_cleanup")
+def run_cleanup(req: RunCleanupReq):
+    _WORKDIRS.clear(req.run_id)
+    return {"ok": True}
+
+
 @app.post("/run_step")
-def run_step(req: RunStepReq):
+def run_step(
+    req: RunStepReq,
+    x_rfsn_tier: Optional[str] = Header(default=None),
+):
     s = req.step.model_dump()
     repo_root = f"/data/repos/{req.repo_id}"
+    tier = _effective_tier(req.tier, x_rfsn_tier)
 
     if s["type"] not in ALLOWED_TYPES:
         raise HTTPException(403, f"step type blocked: {s['type']}")
-    if s["type"] == "repo_search":
+    if s["type"] in ("repo_search", "detect_project", "detect_workdirs"):
         charge(req.repo_id, req.iter, "search")
 
     if s["type"] == "repo_read_range":
@@ -199,6 +289,56 @@ def run_step(req: RunStepReq):
         ):
             raise HTTPException(403, "path blocked")
         charge(req.repo_id, req.iter, "read")
+    if s["type"] == "read_file":
+        p = s.get("path") or ""
+        if not validate_repo_path(
+            p,
+            ALLOWED_PATHS,
+            BLOCKED_GLOBS,
+            repo_root_required=REPO_ROOT_REQUIRED,
+            repo_root=repo_root,
+        ):
+            raise HTTPException(403, "path blocked")
+        charge(req.repo_id, req.iter, "read")
+    if s["type"] == "detect_workdirs":
+        max_depth = int(s.get("max_depth") or 4)
+        if max_depth < 1 or max_depth > 8:
+            raise HTTPException(403, "invalid max_depth")
+    if s["type"] in ("run_cmd_template", "format_fix"):
+        template = str(s.get("template") or "").strip()
+        if not template:
+            raise HTTPException(403, "template required")
+        if template not in COMMAND_TEMPLATES:
+            raise HTTPException(403, f"unknown template: {template}")
+        if "workdir" in s and s.get("workdir"):
+            raise HTTPException(403, "raw workdir is not allowed")
+        if "cwd" in s and s.get("cwd"):
+            raise HTTPException(403, "raw cwd is not allowed")
+        if s["type"] == "format_fix":
+            if tier < FORMAT_FIX_MIN_TIER:
+                raise HTTPException(
+                    403,
+                    f"format_fix requires tier >= {FORMAT_FIX_MIN_TIER}",
+                )
+            if not template.endswith("_fix"):
+                raise HTTPException(
+                    403,
+                    "format_fix requires *_fix template",
+                )
+        else:
+            if template.endswith("_fix"):
+                raise HTTPException(
+                    403,
+                    "fix templates require format_fix step type",
+                )
+        workdir_id = str(s.get("workdir_id") or "").strip()
+        if workdir_id:
+            if not WORKDIR_RE.fullmatch(workdir_id):
+                raise HTTPException(403, "invalid workdir_id")
+            s["workdir"] = _resolve_workdir(
+                run_id=req.run_id,
+                workdir_id=workdir_id,
+            )
 
     if s["type"] == "apply_patch":
         patch_text = s.get("patch") or ""
@@ -325,7 +465,16 @@ def run_step(req: RunStepReq):
         b = 0
     else:
         b = len(str(payload).encode("utf-8", errors="replace"))
-    if s["type"] in ("repo_search", "repo_read_range"):
+    if s["type"] in (
+        "repo_search",
+        "repo_read_range",
+        "read_file",
+        "detect_project",
+        "detect_workdirs",
+    ):
         charge(req.repo_id, req.iter, "bytes", bytes_out=b)
+
+    if s["type"] == "detect_workdirs" and out.get("status", 1) == 0:
+        _store_workdirs(req.run_id, out)
 
     return out

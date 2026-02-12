@@ -104,11 +104,17 @@ export DEEPSEEK_API_KEY="sk-..."
 docker compose up --build -d
 
 # 3. Health check
-curl -s http://localhost:8000/health | python3 -m json.tool
+curl -s -H "Authorization: Bearer ${RFSN_SERVICE_TOKEN}" \
+  http://localhost:8000/health | python3 -m json.tool
 
-# 4. Run a task
+# 4. Open UI dashboard
+#    http://localhost:8000/ui
+#    (enter RFSN_SERVICE_TOKEN in the UI to run API actions)
+
+# 5. Run a task via API
 curl -s http://localhost:8000/run \
   -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer ${RFSN_SERVICE_TOKEN}" \
   -d '{
     "repo_id": "demo_failrepo",
     "task": "Fix the failing test. Minimal diff only.",

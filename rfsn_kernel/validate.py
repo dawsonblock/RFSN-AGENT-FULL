@@ -23,7 +23,10 @@ class ValidationResult:
 # Known action types.
 VALID_ACTIONS = {
     "repo_search", "repo_read_range",
-    "apply_patch", "run_tests", "ensure_deps",
+    "read_file", "detect_project",
+    "detect_workdirs", "apply_patch",
+    "run_tests", "run_cmd_template",
+    "format_fix", "ensure_deps",
 }
 
 # Banned patterns in patch content (plus-lines only).
@@ -105,6 +108,27 @@ def validate(
                 "msg": f"{le - ls + 1} lines > {max_lpr}",
             })
 
+    elif proposal.action == "read_file":
+        path = proposal.params.get("path", "")
+        if not path:
+            errors.append({
+                "code": "MISSING_PATH",
+                "msg": "read_file requires path",
+            })
+        elif ".." in path or path.startswith("/"):
+            errors.append({
+                "code": "PATH_TRAVERSAL",
+                "msg": f"Unsafe path: {path}",
+            })
+
+    elif proposal.action == "detect_workdirs":
+        depth = int(proposal.params.get("max_depth", 4))
+        if depth < 1 or depth > 8:
+            errors.append({
+                "code": "INVALID_DEPTH",
+                "msg": f"max_depth out of bounds: {depth}",
+            })
+
     elif proposal.action == "apply_patch":
         patch = proposal.params.get("patch", "") or ""
         if not patch.strip():
@@ -136,5 +160,41 @@ def validate(
                 "code": "UNKNOWN_TEST_TEMPLATE",
                 "msg": f"Unknown template: {tmpl}",
             })
+
+    elif proposal.action in {
+        "run_cmd_template",
+        "format_fix",
+    }:
+        tmpl = str(
+            proposal.params.get("template", "")
+            or "",
+        ).strip()
+        if not tmpl:
+            errors.append({
+                "code": "MISSING_TEMPLATE",
+                "msg": f"{proposal.action} requires template",
+            })
+        allowed = policy.get("allowed_command_templates")
+        if isinstance(allowed, list) and allowed:
+            if tmpl not in set(str(x) for x in allowed):
+                errors.append({
+                    "code": "UNKNOWN_COMMAND_TEMPLATE",
+                    "msg": f"Unknown command template: {tmpl}",
+                })
+        wid = str(
+            proposal.params.get("workdir_id", "")
+            or "",
+        )
+        if wid and not re.fullmatch(r"workdir_\d+", wid):
+            errors.append({
+                "code": "INVALID_WORKDIR_ID",
+                "msg": f"Invalid workdir_id: {wid}",
+            })
+        if proposal.action == "format_fix" and tmpl:
+            if not tmpl.endswith("_fix"):
+                errors.append({
+                    "code": "FORMAT_FIX_TEMPLATE_REQUIRED",
+                    "msg": "format_fix requires a *_fix template",
+                })
 
     return ValidationResult(ok=len(errors) == 0, errors=errors)

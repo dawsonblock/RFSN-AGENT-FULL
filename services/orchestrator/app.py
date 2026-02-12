@@ -1,11 +1,15 @@
+from __future__ import annotations
+
 import hashlib
 import json
 import os
 import random
+import re
 import time
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException  # type: ignore[import-not-found]
+from fastapi.responses import HTMLResponse  # type: ignore[import-not-found]
 from pydantic import BaseModel  # type: ignore[import-not-found]
 import requests  # type: ignore[import-untyped]
 import yaml  # type: ignore[import-untyped]
@@ -57,6 +61,23 @@ try:
         ReplayRunner,
         snapshot_environment,
     )
+    from rfsn_kernel.command_infer import (
+        infer_commands,
+    )
+    from rfsn_kernel.repair_loop import (
+        next_phase,
+        should_retry,
+        update_state,
+    )
+    from rfsn_kernel.patch_minimize import (
+        minimize_unified_diff,
+    )
+    from rfsn_kernel.sim_cache import (
+        SimCache,
+    )
+    from rfsn_kernel.scheduler import (
+        Scheduler,
+    )
     _HAS_HARD_KERNEL = True
 except ImportError:
     _HAS_HARD_KERNEL = False
@@ -79,6 +100,31 @@ if _HAS_AUTH:
         ServiceAuthMiddleware  # type: ignore[possibly-unbound]
     )
 
+
+def _ui_html() -> str:
+    here = os.path.dirname(os.path.abspath(__file__))
+    ui_path = os.path.join(here, "ui", "index.html")
+    try:
+        with open(ui_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return (
+            "<!doctype html><html><body>"
+            "<h1>RFSN UI unavailable</h1>"
+            "<p>Missing /services/orchestrator/ui/index.html</p>"
+            "</body></html>"
+        )
+
+
+@app.get("/", response_class=HTMLResponse)
+def ui_root():
+    return _ui_html()
+
+
+@app.get("/ui", response_class=HTMLResponse)
+def ui_page():
+    return _ui_html()
+
 LLM_URL = os.getenv("LLM_URL", "http://llm_service:8001")
 TOOL_GATEWAY_URL = os.getenv("TOOL_GATEWAY_URL", "http://tool_gateway:8002")
 EXECUTOR_URL = os.getenv("EXECUTOR_URL", "http://executor:8003")
@@ -89,24 +135,66 @@ HARD_LEDGER_PATH = os.getenv(
 )
 SEED = os.getenv("RFSN_SEED", "1")
 WARM_SANDBOX = os.getenv("RFSN_WARM_SANDBOX", "1") == "1"
-
-
-def _load_yaml(path: str) -> dict:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f) or {}
-    except (FileNotFoundError, PermissionError) as exc:
-        print(
-            f"FATAL: Cannot load policy file {path}:"
-            f" {exc}",
-            flush=True,
+_REPO_ROOT = os.path.dirname(
+    os.path.dirname(
+        os.path.dirname(
+            os.path.abspath(__file__),
         )
-        raise SystemExit(1) from exc
+    )
+)
+_LOCAL_POLICY_DIR = os.path.join(
+    _REPO_ROOT, "policies",
+)
+_POLICY_DIR = os.getenv(
+    "RFSN_POLICY_DIR", "/policies",
+)
 
 
-DEPS_POLICY = _load_yaml("/policies/deps_policy.yaml")
-TEST_POLICY = _load_yaml("/policies/test_policy.yaml")
-GATE_POLICY = _load_yaml("/policies/gate_policy.yaml")
+def _policy_candidates(path_or_name: str) -> list[str]:
+    raw = path_or_name.strip()
+    base = os.path.basename(raw)
+    out: list[str] = []
+    if os.path.isabs(raw):
+        out.append(raw)
+    if raw.startswith("/policies/") and base:
+        out.append(os.path.join(_POLICY_DIR, base))
+    elif base:
+        out.append(os.path.join(_POLICY_DIR, base))
+    if base:
+        out.append(os.path.join(_LOCAL_POLICY_DIR, base))
+    # Preserve order but dedupe.
+    seen = set()
+    ordered = []
+    for p in out:
+        if p not in seen:
+            seen.add(p)
+            ordered.append(p)
+    return ordered
+
+
+def _load_yaml(path_or_name: str) -> dict:
+    last_exc: Exception | None = None
+    for path in _policy_candidates(path_or_name):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+        except (FileNotFoundError, PermissionError) as exc:
+            last_exc = exc
+            continue
+    print(
+        "FATAL: Cannot load policy file"
+        f" {path_or_name}. Tried:"
+        f" {_policy_candidates(path_or_name)}."
+        f" Last error: {last_exc}",
+        flush=True,
+    )
+    raise SystemExit(1)
+
+
+DEPS_POLICY = _load_yaml("deps_policy.yaml")
+TEST_POLICY = _load_yaml("test_policy.yaml")
+GATE_POLICY = _load_yaml("gate_policy.yaml")
+TOOL_ALLOWLIST = _load_yaml("tool_allowlist.yaml")
 
 
 # ── Compiled policy hash (determinism anchor) ─
@@ -125,11 +213,16 @@ def _compile_policy_hash() -> str:
         "test_policy.yaml",
         "tool_allowlist.yaml",
     ]):
-        path = f"/policies/{name}"
-        try:
-            with open(path, "rb") as f:
-                h.update(f.read())
-        except FileNotFoundError:
+        found = False
+        for path in _policy_candidates(name):
+            try:
+                with open(path, "rb") as f:
+                    h.update(f.read())
+                    found = True
+                    break
+            except FileNotFoundError:
+                continue
+        if not found:
             h.update(name.encode())
     return h.hexdigest()[:16]
 
@@ -241,6 +334,14 @@ if _HAS_HARD_KERNEL:
             "rng_seed": _EPISODE_SEED,
             "policy_hash": POLICY_HASH,
             "fail_cluster_threshold": 8,
+            "allowed_command_templates": sorted(
+                list(
+                    (
+                        TOOL_ALLOWLIST.get("command_templates")
+                        or {}
+                    ).keys()
+                )
+            ),
         },
     )
     _planner = HierarchicalPlanner(
@@ -279,9 +380,214 @@ def _policy_tier_for_run(
     return rs.tier, str(cfg.get("name", rs.tier)), cfg
 
 
+def _default_cmd_plan() -> dict:
+    templates = (
+        TOOL_ALLOWLIST.get("command_templates")
+        or {}
+    )
+    default_tests = []
+    for name in (
+        "python:pytest",
+        "python:unittest",
+        "node:test",
+        "make:test",
+    ):
+        if name in templates:
+            default_tests.append(name)
+    return {
+        "workdir_id": "workdir_0",
+        "test_templates": default_tests,
+        "lint_templates": [
+            t for t in (
+                "python:ruff",
+                "node:lint",
+            )
+            if t in templates
+        ],
+        "build_templates": [
+            t for t in ("tsc",)
+            if t in templates
+        ],
+    }
+
+
+def _ensure_run_context(run_id: str) -> dict:
+    ctx = _RUN_CONTEXT.get(run_id)
+    if isinstance(ctx, dict):
+        return ctx
+    ctx = {
+        "cmd_plan": _default_cmd_plan(),
+        "sim_cache": SimCache(),
+        "repair": {
+            "phase": "SEARCH",
+            "attempt": 0,
+            "max_attempts": 3,
+            "last_status": 1,
+        },
+    }
+    _RUN_CONTEXT[run_id] = ctx
+    return ctx
+
+
+def _parse_payload_json(value) -> dict | None:
+    if isinstance(value, str) and value.strip():
+        try:
+            obj = json.loads(value)
+            if isinstance(obj, dict):
+                return obj
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def _is_test_template(template: str) -> bool:
+    t = (template or "").strip()
+    if not t:
+        return False
+    return t.endswith(":test") or t in {
+        "python:pytest",
+        "python:unittest",
+        "make:test",
+        "go:test",
+        "rust:test",
+    }
+
+
+def _is_test_step(step: dict) -> bool:
+    st = str(step.get("type", ""))
+    if st == "run_tests":
+        return True
+    if st == "run_cmd_template":
+        return _is_test_template(
+            str(step.get("template", "")),
+        )
+    return False
+
+
+def _bootstrap_command_plan(
+    *,
+    run_id: str,
+    repo_id: str,
+    scenario: str,
+) -> None:
+    """Discover project/workdirs once and infer deterministic command plan."""
+    ctx = _ensure_run_context(run_id)
+
+    detect_proj_step = {
+        "id": "auto-detect-project",
+        "type": "detect_project",
+        "timeout_s": 20,
+    }
+    detect_wd_step = {
+        "id": "auto-detect-workdirs",
+        "type": "detect_workdirs",
+        "max_depth": 4,
+        "timeout_s": 30,
+    }
+    bundle_id = stable_id(
+        "bootstrap",
+        SEED,
+        repo_id,
+        run_id,
+        scenario,
+        n=8,
+    )
+
+    project_profile = {}
+    workdirs = []
+
+    ex1 = execute_approved_step(
+        repo_id,
+        0,
+        detect_proj_step,
+        run_id,
+        context_hash="bootstrap",
+        intent="detect project",
+        bundle_id=bundle_id,
+        step_num=-2,
+    )
+    if ex1["ok"] and ex1["out"]:
+        _METRICS["steps_executed"] += 1
+        out = ex1["out"]
+        ledger.append({
+            "type": "STEP_RESULT",
+            "run_id": run_id,
+            "iter": 0,
+            "step": detect_proj_step,
+            "out": out,
+        })
+        parsed = _parse_payload_json(out.get("payload"))
+        if parsed and isinstance(parsed.get("profile"), dict):
+            project_profile = parsed.get("profile", {})
+
+    ex2 = execute_approved_step(
+        repo_id,
+        0,
+        detect_wd_step,
+        run_id,
+        context_hash="bootstrap",
+        intent="detect workdirs",
+        bundle_id=bundle_id,
+        step_num=-1,
+    )
+    if ex2["ok"] and ex2["out"]:
+        _METRICS["steps_executed"] += 1
+        out = ex2["out"]
+        ledger.append({
+            "type": "STEP_RESULT",
+            "run_id": run_id,
+            "iter": 0,
+            "step": detect_wd_step,
+            "out": out,
+        })
+        parsed = _parse_payload_json(out.get("payload"))
+        wd = parsed.get("workdirs") if parsed else None
+        if isinstance(wd, list):
+            workdirs = [
+                x for x in wd if isinstance(x, dict)
+            ]
+
+    if not workdirs:
+        workdirs = [{
+            "id": "workdir_0",
+            "rel": ".",
+            "markers": [],
+        }]
+    cmd_plan = infer_commands(
+        project_profile, workdirs,
+    )
+    if not cmd_plan.get("workdir_id"):
+        cmd_plan["workdir_id"] = str(
+            workdirs[0].get("id", "workdir_0")
+        )
+    if not cmd_plan.get("test_templates"):
+        cmd_plan["test_templates"] = _default_cmd_plan().get(
+            "test_templates", [],
+        )
+    ctx["cmd_plan"] = cmd_plan
+
+    ledger.append({
+        "type": "CMD_INFERRED",
+        "run_id": run_id,
+        "plan": cmd_plan,
+    })
+
+
 def _end_kernel_run(run_id: str) -> None:
     if _HAS_HARD_KERNEL and _hard_kernel:
         _hard_kernel.end_run(run_id)
+    _RUN_CONTEXT.pop(run_id, None)
+    if _SCHEDULER:
+        _SCHEDULER.end_run(run_id)
+    try:
+        requests.post(
+            f"{TOOL_GATEWAY_URL}/run_cleanup",
+            json={"run_id": run_id},
+            headers=auth_headers(),
+            timeout=5,
+        )
+    except Exception:
+        pass
 
 
 def stable_id(
@@ -319,6 +625,277 @@ class RunReq(BaseModel):
     task: str
     max_iters: int = 3
     scenario: Optional[str] = None
+
+
+class RepoImportReq(BaseModel):
+    repo_url: str
+    repo_id: Optional[str] = None
+    ref: Optional[str] = None
+    depth: int = 1
+    force: bool = False
+
+
+class RepoChatReq(BaseModel):
+    repo_id: str
+    message: str
+    thread_id: Optional[str] = None
+    max_files: int = 5
+
+
+class TextChatReq(BaseModel):
+    message: str
+    thread_id: Optional[str] = None
+
+
+def _validate_repo_id_local(repo_id: str) -> None:
+    if not _SAFE_REPO_ID.fullmatch(repo_id or ""):
+        raise HTTPException(400, "invalid repo_id format")
+
+
+def _repo_abs_path(repo_id: str) -> str:
+    _validate_repo_id_local(repo_id)
+    root = os.path.abspath("/data/repos")
+    path = os.path.abspath(os.path.join(root, repo_id))
+    if not path.startswith(root + os.sep):
+        raise HTTPException(400, "repo path traversal blocked")
+    if not os.path.isdir(path):
+        raise HTTPException(404, f"repo not found: {repo_id}")
+    return path
+
+
+def _chat_terms(query: str, max_terms: int = 8) -> list[str]:
+    raw = re.findall(r"[A-Za-z_][A-Za-z0-9_:-]{2,}", query or "")
+    out: list[str] = []
+    seen = set()
+    for tok in raw:
+        low = tok.lower()
+        if low in _CHAT_STOPWORDS:
+            continue
+        if low in seen:
+            continue
+        seen.add(low)
+        out.append(tok)
+        if len(out) >= max_terms:
+            break
+    return out
+
+
+def _normalize_repo_rel_path(path: str) -> str:
+    p = (path or "").strip()
+    if p.startswith("./"):
+        p = p[2:]
+    return p
+
+
+def _collect_repo_chat_context(
+    *,
+    repo_id: str,
+    query: str,
+    iter_num: int,
+    max_files: int,
+) -> dict:
+    _ = iter_num
+    profile: dict = {}
+    workdirs: list[dict] = []
+    file_hits: list[str] = []
+    snippets: list[dict] = []
+    warnings: list[str] = []
+
+    repo_path = _repo_abs_path(repo_id)
+    max_files = min(max(int(max_files or 5), 1), 10)
+
+    candidates = [
+        "pyproject.toml",
+        "requirements.txt",
+        "setup.cfg",
+        "setup.py",
+        "package.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "package-lock.json",
+        "go.mod",
+        "Cargo.toml",
+        "Makefile",
+    ]
+    found = {}
+    for rel in candidates:
+        if os.path.exists(os.path.join(repo_path, rel)):
+            found[rel] = True
+    profile = {
+        "has_python": any(
+            k in found for k in [
+                "pyproject.toml",
+                "requirements.txt",
+                "setup.py",
+                "setup.cfg",
+            ]
+        ),
+        "has_node": any(
+            k in found for k in [
+                "package.json",
+                "pnpm-lock.yaml",
+                "yarn.lock",
+                "package-lock.json",
+            ]
+        ),
+        "has_go": "go.mod" in found,
+        "has_rust": "Cargo.toml" in found,
+        "has_make": "Makefile" in found,
+        "found": sorted(list(found.keys())),
+    }
+
+    marker_files = [
+        "pyproject.toml",
+        "requirements.txt",
+        "setup.py",
+        "setup.cfg",
+        "package.json",
+        "go.mod",
+        "Cargo.toml",
+        "Makefile",
+    ]
+    skip_dirs = {
+        ".git",
+        ".venv",
+        "venv",
+        "__pycache__",
+        "node_modules",
+        "dist",
+        "build",
+        ".ruff_cache",
+        ".pytest_cache",
+    }
+    queue: list[tuple[str, int]] = [(".", 0)]
+    max_depth = 4
+    while queue and len(workdirs) < 10:
+        rel, depth = queue.pop(0)
+        abs_dir = repo_path if rel == "." else os.path.join(
+            repo_path, rel,
+        )
+        try:
+            entries = list(os.scandir(abs_dir))
+        except Exception:
+            continue
+        marker_hits = []
+        for m in marker_files:
+            if os.path.exists(os.path.join(abs_dir, m)):
+                marker_hits.append(m)
+        if marker_hits:
+            workdirs.append({
+                "id": f"workdir_{len(workdirs)}",
+                "rel": rel,
+                "markers": sorted(marker_hits),
+            })
+        if depth >= max_depth:
+            continue
+        for entry in entries:
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            if entry.name in skip_dirs:
+                continue
+            child = entry.name if rel == "." else f"{rel}/{entry.name}"
+            queue.append((child, depth + 1))
+
+    terms = _chat_terms(query)
+    pattern = "|".join(
+        re.escape(t) for t in terms
+    ) if terms else "README|setup|pyproject|package|main"
+    try:
+        query_re = re.compile(pattern, re.IGNORECASE)
+    except re.error:
+        query_re = re.compile("README|setup|main", re.IGNORECASE)
+        warnings.append("invalid query regex; fallback applied")
+
+    allowed_exts = {
+        ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java",
+        ".rb", ".c", ".cpp", ".h", ".hpp", ".cs", ".swift", ".kt",
+        ".scala", ".toml", ".yaml", ".yml", ".json", ".cfg", ".ini",
+        ".md", ".rst", ".txt", ".sh",
+    }
+    scan_limit = 1200
+    scanned = 0
+    for root_dir, dirs, files in os.walk(repo_path):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        for fname in files:
+            if scanned >= scan_limit or len(file_hits) >= max_files * 2:
+                break
+            scanned += 1
+            _, ext = os.path.splitext(fname)
+            if ext and ext.lower() not in allowed_exts:
+                continue
+            abs_path = os.path.join(root_dir, fname)
+            rel_path = _normalize_repo_rel_path(
+                os.path.relpath(abs_path, repo_path),
+            )
+            try:
+                with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                    text = f.read(65536)
+            except Exception:
+                continue
+            if query_re.search(text):
+                file_hits.append(rel_path)
+        if scanned >= scan_limit or len(file_hits) >= max_files * 2:
+            break
+    if not file_hits:
+        for candidate in [
+            "README.md",
+            "README.rst",
+            "pyproject.toml",
+            "package.json",
+        ]:
+            if os.path.exists(os.path.join(repo_path, candidate)):
+                file_hits.append(candidate)
+    if scanned >= scan_limit:
+        warnings.append("search scan limit reached")
+
+    dedup_hits: list[str] = []
+    seen = set()
+    for p in file_hits:
+        if p in seen:
+            continue
+        seen.add(p)
+        dedup_hits.append(p)
+
+    for p in dedup_hits[:max_files]:
+        try:
+            abs_path = os.path.join(repo_path, p)
+            with open(abs_path, "rb") as f:
+                data = f.read(65536)
+            content = data.decode("utf-8", errors="replace")[:3500]
+            snippets.append({
+                "path": p,
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "content": content,
+            })
+        except Exception:
+            continue
+
+    return {
+        "repo_id": repo_id,
+        "query_terms": terms,
+        "pattern": pattern,
+        "profile": profile,
+        "workdirs": workdirs,
+        "files": dedup_hits[:max_files],
+        "snippets": snippets,
+        "warnings": warnings,
+    }
+
+
+def _prune_chat_threads(limit: int = 200) -> None:
+    while len(_CHAT_THREADS) > limit:
+        oldest = next(iter(_CHAT_THREADS.keys()))
+        _CHAT_THREADS.pop(oldest, None)
+        _CHAT_CALL_INDEX.pop(oldest, None)
+        _CHAT_ITER.pop(oldest, None)
+
+
+def _prune_text_chat_threads(limit: int = 200) -> None:
+    while len(_TEXT_CHAT_THREADS) > limit:
+        oldest = next(iter(_TEXT_CHAT_THREADS.keys()))
+        _TEXT_CHAT_THREADS.pop(oldest, None)
+        _TEXT_CHAT_CALL_INDEX.pop(oldest, None)
+        _TEXT_CHAT_ITER.pop(oldest, None)
 
 
 @app.get("/health")
@@ -365,10 +942,300 @@ _METRICS: dict = {
     "steps_executed": 0,
 }
 
+_RUN_CONTEXT: dict[str, dict] = {}
+_CHAT_THREADS: dict[str, list[dict[str, str]]] = {}
+_CHAT_CALL_INDEX: dict[str, int] = {}
+_CHAT_ITER: dict[str, int] = {}
+_TEXT_CHAT_THREADS: dict[str, list[dict[str, str]]] = {}
+_TEXT_CHAT_CALL_INDEX: dict[str, int] = {}
+_TEXT_CHAT_ITER: dict[str, int] = {}
+_SAFE_REPO_ID = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+_SAFE_THREAD_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+_CHAT_STOPWORDS = {
+    "the", "and", "for", "with", "this", "that", "what", "where",
+    "when", "from", "into", "about", "repo", "repository", "file",
+    "files", "code", "does", "have", "just", "need", "show", "tell",
+    "please", "there", "their", "your", "ours", "ourselves", "you",
+}
+_MAX_CONCURRENT_RUNS = int(
+    os.getenv("RFSN_MAX_CONCURRENT_RUNS", "2"),
+)
+_RUN_MAX_SECONDS = int(
+    os.getenv("RFSN_RUN_MAX_SECONDS", "900"),
+)
+_SCHEDULER = (
+    Scheduler(max_concurrent=_MAX_CONCURRENT_RUNS)
+    if _HAS_HARD_KERNEL else None
+)
+
 
 @app.get("/metrics")
 def metrics():
-    return _METRICS
+    out = dict(_METRICS)
+    if _SCHEDULER:
+        out["scheduler"] = _SCHEDULER.stats()
+    out["active_run_contexts"] = len(_RUN_CONTEXT)
+    out["active_repo_chat_threads"] = len(_CHAT_THREADS)
+    out["active_text_chat_threads"] = len(_TEXT_CHAT_THREADS)
+    return out
+
+
+@app.get("/repos")
+def repos():
+    try:
+        r = requests.get(
+            f"{EXECUTOR_URL}/repos",
+            headers=auth_headers(),
+            timeout=20,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            502,
+            f"executor /repos unreachable: {exc}",
+        ) from exc
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, r.text)
+    return r.json()
+
+
+@app.post("/repos/import")
+def repos_import(req: RepoImportReq):
+    payload = req.model_dump()
+    try:
+        r = requests.post(
+            f"{EXECUTOR_URL}/repo/import",
+            json=payload,
+            headers=auth_headers(),
+            timeout=(10, 620),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            502,
+            f"executor /repo/import unreachable: {exc}",
+        ) from exc
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, r.text)
+    out = r.json()
+    ledger.append({
+        "type": "REPO_IMPORTED",
+        "run_id": "",
+        "repo_id": out.get("repo_id", ""),
+        "repo_url": out.get("repo_url", ""),
+        "head": out.get("head", ""),
+        "branch": out.get("branch", ""),
+    })
+    return out
+
+
+@app.post("/chat")
+def chat_repo(req: RepoChatReq):
+    repo_id = (req.repo_id or "").strip()
+    message = (req.message or "").strip()
+    if not message:
+        raise HTTPException(400, "message is required")
+    _repo_abs_path(repo_id)
+
+    thread_id = (req.thread_id or "").strip()
+    if thread_id and not _SAFE_THREAD_ID.fullmatch(thread_id):
+        raise HTTPException(400, "invalid thread_id format")
+    if not thread_id:
+        thread_id = stable_id(
+            "chat",
+            SEED,
+            repo_id,
+            str(time.time_ns()),
+            n=12,
+        )
+
+    call_index = _CHAT_CALL_INDEX.get(thread_id, 0) + 1
+    _CHAT_CALL_INDEX[thread_id] = call_index
+    iter_num = _CHAT_ITER.get(thread_id, 0) + 1
+    _CHAT_ITER[thread_id] = iter_num
+
+    context = _collect_repo_chat_context(
+        repo_id=repo_id,
+        query=message,
+        iter_num=iter_num,
+        max_files=req.max_files,
+    )
+    context_blob = json.dumps(
+        context,
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    if len(context_blob) > 24000:
+        context_blob = context_blob[:24000]
+
+    history = _CHAT_THREADS.setdefault(thread_id, [])
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a repository assistant. Use only the provided "
+                "context snippets and be explicit when info is missing."
+            ),
+        },
+        {
+            "role": "system",
+            "content": (
+                f"REPO_CONTEXT repo_id={repo_id}\n"
+                + context_blob
+            ),
+        },
+    ]
+    messages.extend(history[-12:])
+    messages.append({
+        "role": "user",
+        "content": message,
+    })
+
+    llm = llm_chat(
+        messages=messages,
+        run_id=thread_id,
+        call_index=call_index,
+        repo_id=repo_id,
+        scenario="chat",
+    )
+    reply = str(llm.get("content", "")).strip()
+    if not reply:
+        reply = "No response generated."
+
+    history.extend([
+        {"role": "user", "content": message},
+        {"role": "assistant", "content": reply},
+    ])
+    if len(history) > 30:
+        del history[:-30]
+    _prune_chat_threads()
+
+    ledger.append({
+        "type": "CHAT_TURN",
+        "run_id": thread_id,
+        "repo_id": repo_id,
+        "iter": iter_num,
+        "files": context.get("files", []),
+    })
+
+    return {
+        "ok": True,
+        "thread_id": thread_id,
+        "repo_id": repo_id,
+        "reply": reply,
+        "context": {
+            "files": context.get("files", []),
+            "workdirs": context.get("workdirs", []),
+            "profile": context.get("profile", {}),
+            "warnings": context.get("warnings", []),
+        },
+    }
+
+
+@app.post("/chat/text")
+def chat_text(req: TextChatReq):
+    message = (req.message or "").strip()
+    if not message:
+        raise HTTPException(400, "message is required")
+
+    thread_id = (req.thread_id or "").strip()
+    if thread_id and not _SAFE_THREAD_ID.fullmatch(thread_id):
+        raise HTTPException(400, "invalid thread_id format")
+    if not thread_id:
+        thread_id = stable_id(
+            "txtchat",
+            SEED,
+            str(time.time_ns()),
+            n=12,
+        )
+
+    call_index = _TEXT_CHAT_CALL_INDEX.get(thread_id, 0) + 1
+    _TEXT_CHAT_CALL_INDEX[thread_id] = call_index
+    iter_num = _TEXT_CHAT_ITER.get(thread_id, 0) + 1
+    _TEXT_CHAT_ITER[thread_id] = iter_num
+
+    history = _TEXT_CHAT_THREADS.setdefault(thread_id, [])
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a concise technical assistant for the RFSN "
+                "control surface. Keep responses direct and actionable."
+            ),
+        },
+    ]
+    messages.extend(history[-16:])
+    messages.append({
+        "role": "user",
+        "content": message,
+    })
+
+    llm = llm_chat(
+        messages=messages,
+        run_id=thread_id,
+        call_index=call_index,
+        repo_id="text-chat",
+        scenario="text_chat",
+    )
+    reply = str(llm.get("content", "")).strip()
+    if not reply:
+        reply = "No response generated."
+
+    history.extend([
+        {"role": "user", "content": message},
+        {"role": "assistant", "content": reply},
+    ])
+    if len(history) > 40:
+        del history[:-40]
+    _prune_text_chat_threads()
+
+    ledger.append({
+        "type": "TEXT_CHAT_TURN",
+        "run_id": thread_id,
+        "iter": iter_num,
+    })
+
+    return {
+        "ok": True,
+        "thread_id": thread_id,
+        "reply": reply,
+    }
+
+
+@app.get("/chat/{thread_id}")
+def chat_thread(thread_id: str):
+    history = _CHAT_THREADS.get(thread_id, [])
+    return {
+        "thread_id": thread_id,
+        "count": len(history),
+        "messages": history,
+    }
+
+
+@app.delete("/chat/{thread_id}")
+def chat_thread_delete(thread_id: str):
+    existed = thread_id in _CHAT_THREADS
+    _CHAT_THREADS.pop(thread_id, None)
+    _CHAT_CALL_INDEX.pop(thread_id, None)
+    _CHAT_ITER.pop(thread_id, None)
+    return {"ok": True, "deleted": bool(existed), "thread_id": thread_id}
+
+
+@app.get("/chat/text/{thread_id}")
+def chat_text_thread(thread_id: str):
+    history = _TEXT_CHAT_THREADS.get(thread_id, [])
+    return {
+        "thread_id": thread_id,
+        "count": len(history),
+        "messages": history,
+    }
+
+
+@app.delete("/chat/text/{thread_id}")
+def chat_text_thread_delete(thread_id: str):
+    existed = thread_id in _TEXT_CHAT_THREADS
+    _TEXT_CHAT_THREADS.pop(thread_id, None)
+    _TEXT_CHAT_CALL_INDEX.pop(thread_id, None)
+    _TEXT_CHAT_ITER.pop(thread_id, None)
+    return {"ok": True, "deleted": bool(existed), "thread_id": thread_id}
 
 
 @app.get("/policy/tier/{run_id}")
@@ -678,6 +1545,7 @@ def _sandbox_destroy(run_id: str, repo_id: str):
 def run_step(
     repo_id: str, it: int, step: dict,
     run_id: str | None = None,
+    tier: int | None = None,
 ):
     payload = {
         "repo_id": repo_id,
@@ -686,11 +1554,16 @@ def run_step(
     }
     if run_id and WARM_SANDBOX:
         payload["run_id"] = run_id
+    if tier is not None:
+        payload["tier"] = int(tier)
+    headers = dict(auth_headers())
+    if tier is not None:
+        headers["X-RFSN-Tier"] = str(int(tier))
     r = requests.post(
         f"{TOOL_GATEWAY_URL}/run_step",
         json=payload,
-        headers=auth_headers(),
-        timeout=300,
+        headers=headers,
+        timeout=(10, 300),
     )
     if r.status_code != 200:
         raise HTTPException(r.status_code, r.text)
@@ -720,6 +1593,8 @@ def execute_approved_step(
       }
     """
     if _HAS_HARD_KERNEL and _hard_kernel:
+        run_ctx = _ensure_run_context(run_id)
+        tier_now, _, _ = _policy_tier_for_run(run_id)
         if _memory:
             _hard_kernel.state.memory_version = (
                 _memory.memory_version
@@ -730,21 +1605,66 @@ def execute_approved_step(
             _hard_kernel.state.resource_state[
                 "run_id"
             ] = run_id
+        exec_meta: dict = {
+            "cache_hit": False,
+            "cache_key": "",
+        }
 
         def _exec_step(s: dict) -> Outcome:
             """Execution callback for hard kernel."""
-            r = run_step(
-                repo_id, it, s, run_id,
-            )
+            cache = run_ctx.get("sim_cache")
+            cache_key = ""
+            r: dict
+            if isinstance(cache, SimCache):
+                cache_key = cache.key(
+                    s, str(s.get("workdir_id") or ""),
+                )
+                hit = cache.get(cache_key)
+                if isinstance(hit, dict):
+                    exec_meta["cache_hit"] = True
+                    exec_meta["cache_key"] = cache_key
+                    r = hit
+                    ledger.append({
+                        "type": "SIM_CACHE_HIT",
+                        "run_id": run_id,
+                        "iter": it,
+                        "cache_key": cache_key,
+                        "step_type": s.get("type", ""),
+                    })
+                else:
+                    r = run_step(
+                        repo_id,
+                        it,
+                        s,
+                        run_id,
+                        tier=tier_now,
+                    )
+                    cache.put(cache_key, r)
+            else:
+                r = run_step(
+                    repo_id,
+                    it,
+                    s,
+                    run_id,
+                    tier=tier_now,
+                )
             ok = r.get("status", 1) == 0
+            payload = ""
+            try:
+                payload = json.dumps(
+                    r,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                )
+            except Exception:
+                payload = str(r)
             return Outcome(
                 success=ok,
                 exit_code=r.get(
                     "status", 1,
                 ),
-                payload=str(
-                    r.get("payload", ""),
-                )[:3000],
+                payload=payload[:30000],
                 logs=str(
                     r.get("logs", ""),
                 )[:5000],
@@ -777,6 +1697,8 @@ def execute_approved_step(
                 kr.decision.reason
                 if kr.decision else ""
             ),
+            "sim_cache_hit": bool(exec_meta.get("cache_hit", False)),
+            "sim_cache_key": str(exec_meta.get("cache_key", "")),
             "risk": (
                 kr.risk.to_dict()
                 if kr.risk else None
@@ -803,24 +1725,35 @@ def execute_approved_step(
                 "hard_kernel": True,
             }
 
-        out = {
-            "status": (
-                kr.outcome.exit_code
-                if kr.outcome else 1
-            ),
-            "payload": (
-                kr.outcome.payload
-                if kr.outcome else ""
-            ),
-            "logs": (
-                kr.outcome.logs
-                if kr.outcome else ""
-            ),
-            "seconds": (
-                kr.outcome.duration_sec
-                if kr.outcome else 0
-            ),
-        }
+        out = {}
+        if kr.outcome and kr.outcome.payload:
+            try:
+                parsed_out = json.loads(
+                    kr.outcome.payload,
+                )
+                if isinstance(parsed_out, dict):
+                    out = parsed_out
+            except json.JSONDecodeError:
+                out = {}
+        if not out:
+            out = {
+                "status": (
+                    kr.outcome.exit_code
+                    if kr.outcome else 1
+                ),
+                "payload": (
+                    kr.outcome.payload
+                    if kr.outcome else ""
+                ),
+                "logs": (
+                    kr.outcome.logs
+                    if kr.outcome else ""
+                ),
+                "seconds": (
+                    kr.outcome.duration_sec
+                    if kr.outcome else 0
+                ),
+            }
 
         if _memory:
             _memory.admit(MemoryEntry(
@@ -1081,6 +2014,15 @@ def run(req: RunReq):
             503,
             "hard kernel required but unavailable",
         )
+    if _SCHEDULER and not _SCHEDULER.start_run(
+        run_id,
+        max_seconds=_RUN_MAX_SECONDS,
+    ):
+        raise HTTPException(
+            429,
+            "too many active runs",
+        )
+    _ensure_run_context(run_id)
     env_snapshot = (
         snapshot_environment(
             repo_path=f"/data/repos/{req.repo_id}",
@@ -1122,6 +2064,10 @@ def run(req: RunReq):
             if _HAS_HARD_KERNEL and _hard_kernel
             else ""
         ),
+        "scheduler": (
+            _SCHEDULER.stats()
+            if _SCHEDULER else {}
+        ),
     })
 
     # ── Warm sandbox lifecycle ─────────────────
@@ -1137,6 +2083,13 @@ def run(req: RunReq):
                 "image_hash",
             ),
         })
+
+    # Deterministic repo introspection + command inference.
+    _bootstrap_command_plan(
+        run_id=run_id,
+        repo_id=req.repo_id,
+        scenario=scenario,
+    )
 
     # tests-only fast path
     if is_tests_only_task(req.task):
@@ -1279,6 +2232,14 @@ def run(req: RunReq):
     total_steps_used = 0
 
     for it in range(1, req.max_iters + 1):
+        if _SCHEDULER and not _SCHEDULER.budget_ok(run_id):
+            ledger.append({
+                "type": "RUN_BUDGET_EXCEEDED",
+                "run_id": run_id,
+                "iter": it,
+            })
+            last_fail = "run budget exceeded"
+            break
         fail_ctx = (
             "\n\nLast iteration failure:\n"
             + last_fail
@@ -1416,6 +2377,21 @@ def run(req: RunReq):
             },
             {"role": "user", "content": prompt},
         ]
+        cmd_plan = _ensure_run_context(run_id).get(
+            "cmd_plan", _default_cmd_plan(),
+        )
+        messages.insert(
+            2,
+            {
+                "role": "system",
+                "content": (
+                    "DETERMINISTIC_CMD_PLAN="
+                    + json.dumps(cmd_plan, sort_keys=True)
+                    + " Use workdir_id from this plan;"
+                    " do not invent workdirs."
+                ),
+            },
+        )
 
         # Auto-inject ensure_deps if needed.
         if (
@@ -1537,6 +2513,9 @@ def run(req: RunReq):
         phase = PhaseTracker()
 
         while iter_steps_used < MAX_STEPS_PER_ITER:
+            if _SCHEDULER and not _SCHEDULER.budget_ok(run_id):
+                last_fail = "run budget exceeded"
+                break
             if total_steps_used >= MAX_TOTAL_STEPS:
                 last_fail = (
                     "Total step budget exhausted"
@@ -1706,6 +2685,51 @@ def run(req: RunReq):
                 step["id"] = (
                     f"s{iter_steps_used + 1}"
                 )
+            run_ctx = _ensure_run_context(run_id)
+            cmd_plan = run_ctx.get(
+                "cmd_plan", _default_cmd_plan(),
+            )
+
+            # Deterministic command selection: convert run_tests
+            # into run_cmd_template using inferred templates/workdir.
+            if (
+                step.get("type") == "run_tests"
+                and isinstance(cmd_plan, dict)
+            ):
+                tests = cmd_plan.get("test_templates")
+                if isinstance(tests, list) and tests:
+                    step = {
+                        "id": step.get("id"),
+                        "type": "run_cmd_template",
+                        "template": str(tests[0]),
+                        "workdir_id": str(
+                            cmd_plan.get(
+                                "workdir_id",
+                                "workdir_0",
+                            )
+                        ),
+                        "timeout_s": int(
+                            step.get("timeout_s") or 240
+                        ),
+                    }
+
+            if step.get("type") == "apply_patch":
+                patch = str(step.get("patch", ""))
+                if patch:
+                    step["patch"] = minimize_unified_diff(
+                        patch,
+                    )
+            if step.get("type") in {
+                "run_cmd_template",
+                "format_fix",
+            }:
+                if not step.get("workdir_id") and isinstance(cmd_plan, dict):
+                    step["workdir_id"] = str(
+                        cmd_plan.get(
+                            "workdir_id",
+                            "workdir_0",
+                        )
+                    )
 
             # ── RFSN phase transition check ──
             step_type = step.get("type", "")
@@ -1810,6 +2834,43 @@ def run(req: RunReq):
                 "ok" if step_status == 0
                 else f"FAILED (exit {step_status})"
             )
+            repair_state = run_ctx.get(
+                "repair", {
+                    "phase": "SEARCH",
+                    "attempt": 0,
+                    "max_attempts": 3,
+                    "last_status": 1,
+                },
+            )
+            if isinstance(repair_state, dict):
+                cur_phase = str(
+                    repair_state.get("phase", "SEARCH")
+                )
+                updated = update_state(
+                    repair_state,
+                    cur_phase,
+                    int(step_status),
+                )
+                nxt = next_phase(updated)
+                updated["phase"] = nxt
+                updated["can_retry"] = should_retry(
+                    updated,
+                )
+                run_ctx["repair"] = updated
+                ledger.append({
+                    "type": "REPAIR_PHASE",
+                    "run_id": run_id,
+                    "iter": it,
+                    "phase": cur_phase,
+                    "next_phase": nxt,
+                    "status": int(step_status),
+                    "attempt": int(
+                        updated.get("attempt", 0)
+                    ),
+                    "can_retry": bool(
+                        updated.get("can_retry", True)
+                    ),
+                })
 
             # Extract payload for feedback.
             payload = out.get("payload")
@@ -1861,7 +2922,7 @@ def run(req: RunReq):
                     })
 
             # Track test counts for dense reward.
-            if approved_step.get("type") == "run_tests":
+            if _is_test_step(approved_step):
                 iter_test_exit = step_status
                 log_text = out.get("logs", "")
                 parsed_sig = parse_failure_signature(
@@ -1961,11 +3022,7 @@ def run(req: RunReq):
 
             # If tests passed, hint the LLM to
             # either declare done or continue.
-            if (
-                approved_step.get("type")
-                == "run_tests"
-                and step_status == 0
-            ):
+            if _is_test_step(approved_step) and step_status == 0:
                 messages.append({
                     "role": "user",
                     "content": DONE_PROMPT,
@@ -1975,7 +3032,7 @@ def run(req: RunReq):
         # Check if this iteration succeeded.
         test_results = [
             r for r in iter_results
-            if r["step"].get("type") == "run_tests"
+            if _is_test_step(r["step"])
         ]
         tests_passed = (
             test_results

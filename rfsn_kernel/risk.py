@@ -53,8 +53,13 @@ class RiskBreakdown:
 _ACTION_RISK: Dict[str, float] = {
     "repo_search": 0.05,     # read-only, safe
     "repo_read_range": 0.02, # read-only, safe
+    "read_file": 0.02,       # read-only, safe
+    "detect_project": 0.03,  # read-only, safe
+    "detect_workdirs": 0.05, # read-only directory walk
     "apply_patch": 0.6,      # mutates repo
     "run_tests": 0.15,       # runs subprocess
+    "run_cmd_template": 0.2, # constrained command templates
+    "format_fix": 0.25,      # mutates files via constrained templates
     "ensure_deps": 0.3,      # installs packages
 }
 
