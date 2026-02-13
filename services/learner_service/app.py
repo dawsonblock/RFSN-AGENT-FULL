@@ -138,6 +138,40 @@ class IngestReq(BaseModel):
     failure_signature_hash: str = ""
 
 
+_FORBIDDEN_PATCH_PATH_HINTS = (
+    ".github/workflows/",
+    "ci/",
+    "scripts/",
+    ".env",
+    ".pem",
+    "dockerfile",
+    "docker-compose",
+)
+
+
+def _should_reject_ingest(req: IngestReq, task_hash: str) -> tuple[bool, str]:
+    patch_files_low = (req.patch_files or "").lower()
+    for marker in _FORBIDDEN_PATCH_PATH_HINTS:
+        if marker in patch_files_low:
+            return True, f"forbidden_patch_area:{marker}"
+    if req.patch_hash:
+        prev = store.latest_outcome(task_hash)
+        if prev:
+            if (
+                prev.get("patch_hash") == req.patch_hash
+                and prev.get("failure_signature", "")
+                == (req.failure_signature or "")
+            ):
+                return True, "duplicate_patch_fingerprint"
+            if req.tests_total and prev.get("tests_total", 0):
+                if int(req.tests_total) < int(prev.get("tests_total", 0)):
+                    return True, "tests_reduced"
+            if req.tests_failed and prev.get("tests_failed", 0):
+                if int(req.tests_failed) > int(prev.get("tests_failed", 0)):
+                    return True, "failures_increased"
+    return False, ""
+
+
 @app.get("/health")
 def health():
     return {"ok": True}
@@ -288,6 +322,16 @@ def ingest(req: IngestReq):
         meta["stage"] = req.stage
     ck = context_key(meta)
 
+    th = _task_hash(req.repo_id, req.task)
+    reject, reason = _should_reject_ingest(req, th)
+    if reject:
+        return {
+            "ok": True,
+            "ignored": True,
+            "reason": reason,
+            "patch_fingerprint": req.patch_hash or "",
+        }
+
     # Record episode for Thompson sampling.
     store.record_episode(
         run_id=req.run_id,
@@ -299,7 +343,6 @@ def ingest(req: IngestReq):
 
     # Record outcome mapping if we have patch data.
     if req.patch_hash:
-        th = _task_hash(req.repo_id, req.task)
         store.record_outcome(
             run_id=req.run_id,
             repo_id=req.repo_id,
@@ -346,7 +389,11 @@ def ingest(req: IngestReq):
             best_win_rate=best_wr,
         )
 
-    return {"ok": True}
+    return {
+        "ok": True,
+        "ignored": False,
+        "patch_fingerprint": req.patch_hash or "",
+    }
 
 
 # ── Query endpoints for outcome intelligence ──

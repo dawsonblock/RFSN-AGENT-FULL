@@ -258,6 +258,31 @@ class DuckStore:
             for r in rows
         ]
 
+    def latest_outcome(
+        self,
+        task_hash: str,
+    ) -> Optional[dict]:
+        rows = self.con.execute(
+            """
+            SELECT patch_hash, failure_signature,
+                   tests_failed, tests_total
+            FROM outcome_map
+            WHERE task_hash = ?
+            ORDER BY ts DESC
+            LIMIT 1
+            """,
+            [task_hash],
+        ).fetchall()
+        if not rows:
+            return None
+        r = rows[0]
+        return {
+            "patch_hash": str(r[0] or ""),
+            "failure_signature": str(r[1] or ""),
+            "tests_failed": int(r[2] or 0),
+            "tests_total": int(r[3] or 0),
+        }
+
     def get_strategy_win_rates(
         self,
         context_key: str,

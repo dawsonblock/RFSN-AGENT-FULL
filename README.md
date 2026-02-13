@@ -97,21 +97,25 @@ python -m rfsn_swebench.cli \
 
 ```bash
 # 1. Build the blessed sandbox image
-docker build -t rfsn-blessed:0.2 -f blessed.Dockerfile .
+docker compose --profile build-blessed build blessed
 
-# 2. Start all services
+# 2. Resolve and export digest-pinned image ref (required in strict mode)
+export BLESSED_IMAGE="$(docker image inspect ${BLESSED_BUILD_TAG:-rfsn-blessed:0.2} --format '{{index .RepoDigests 0}}')"
+export RFSN_STRICT_IMAGE_DIGEST=1
+
+# 3. Start all services
 export DEEPSEEK_API_KEY="sk-..."
 docker compose up --build -d
 
-# 3. Health check
+# 4. Health check
 curl -s -H "Authorization: Bearer ${RFSN_SERVICE_TOKEN}" \
   http://localhost:8000/health | python3 -m json.tool
 
-# 4. Open UI dashboard
+# 5. Open UI dashboard
 #    http://localhost:8000/ui
 #    (enter RFSN_SERVICE_TOKEN in the UI to run API actions)
 
-# 5. Run a task via API
+# 6. Run a task via API
 curl -s http://localhost:8000/run \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer ${RFSN_SERVICE_TOKEN}" \

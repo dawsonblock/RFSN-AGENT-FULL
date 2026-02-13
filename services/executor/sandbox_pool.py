@@ -5,12 +5,13 @@ startup each time), we keep a long-lived container per run_id
 and `docker exec` into it.  The container is destroyed when
 the run ends (success, fail, or timeout).
 
-Security model is identical to the ephemeral path:
-  - --user 1000:1000 (non-root)
-  - --security-opt no-new-privileges:true
-  - --memory 2g / --cpus 2 / --pids-limit 256
-  - --cap-drop ALL
-  - network disabled by default
+    Security model is identical to the ephemeral path:
+      - --user 1000:1000 (non-root)
+      - --security-opt no-new-privileges:true
+      - --read-only + tmpfs /tmp
+      - --memory 2g / --cpus 2 / --pids-limit 256
+      - --cap-drop ALL
+      - network disabled by default
 """
 
 from __future__ import annotations
@@ -26,11 +27,23 @@ from typing import Dict, Optional
 
 
 BLESSED_IMAGE = os.getenv(
-    "BLESSED_IMAGE", "rfsn-blessed:0.2",
+    "BLESSED_IMAGE",
+    "rfsn-blessed@sha256:208a2c2dac42ed9b3ca023b30cd815518070930274592844511aa34de21b6360",
 )
 
 # Max idle time before auto-reap (seconds).
 _IDLE_TTL = int(os.getenv("SANDBOX_IDLE_TTL", "600"))
+_MAX_STEP_LOG_BYTES = int(
+    os.getenv("RFSN_MAX_STEP_LOG_BYTES", "200000"),
+)
+
+
+def _truncate_text_bytes(text: str, max_bytes: int) -> tuple[str, bool]:
+    raw = (text or "").encode("utf-8", errors="replace")
+    if max_bytes <= 0 or len(raw) <= max_bytes:
+        return text or "", False
+    trimmed = raw[:max_bytes].decode("utf-8", errors="ignore")
+    return trimmed, True
 
 
 @dataclass
@@ -177,13 +190,18 @@ class SandboxPool:
                         timeout=timeout_s,
                         text=True,
                     )
-                    out = p.stdout.replace(
+                    raw_logs = (p.stdout or "").replace(
                         "\r\n", "\n",
-                    )[-200_000:]
+                    )
+                    out, trunc = _truncate_text_bytes(
+                        raw_logs,
+                        _MAX_STEP_LOG_BYTES,
+                    )
                     return {
                         "status": p.returncode,
                         "seconds": time.time() - start,
                         "logs": out,
+                        "logs_truncated": trunc,
                     }
                 except subprocess.TimeoutExpired as e:
                     raw_out = e.stdout or ""
@@ -191,13 +209,15 @@ class SandboxPool:
                         raw_out = raw_out.decode(
                             "utf-8", errors="replace",
                         )
-                    raw_str: str = str(raw_out)
+                    out, trunc = _truncate_text_bytes(
+                        str(raw_out) + "\n[TIMEOUT]\n",
+                        _MAX_STEP_LOG_BYTES,
+                    )
                     return {
                         "status": 124,
                         "seconds": time.time() - start,
-                        "logs": (
-                            raw_str + "\n[TIMEOUT]\n"
-                        )[-200_000:],
+                        "logs": out,
+                        "logs_truncated": trunc,
                     }
 
             finally:
@@ -271,10 +291,13 @@ class SandboxPool:
             "--network", network,
             "--user", "1000:1000",
             "--security-opt", "no-new-privileges:true",
+            "--read-only",
+            "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=256m",
             "--memory", "2g",
             "--cpus", "2",
             "--pids-limit", "256",
             "--cap-drop", "ALL",
+            "-e", "HOME=/tmp",
             "-v", f"{repo_host}:/work/repo:rw",
             "-v", f"{art_host}:/work/artifacts:rw",
             "-v", f"{venv_host}:/work/venv:rw",

@@ -28,12 +28,18 @@ if _HAS_AUTH:
         ServiceAuthMiddleware  # type: ignore[possibly-unbound]
     )
 
-BLESSED_IMAGE = os.getenv("BLESSED_IMAGE", "rfsn-blessed:0.2")
+BLESSED_IMAGE = os.getenv(
+    "BLESSED_IMAGE",
+    "rfsn-blessed@sha256:208a2c2dac42ed9b3ca023b30cd815518070930274592844511aa34de21b6360",
+)
 HOST_DATA_DIR = os.getenv("HOST_DATA_DIR", "/data")
 USE_DOCKER_SANDBOX = os.getenv(
     "RFSN_EXEC_USE_DOCKER", "1",
 ) == "1"
 DEV_MODE = os.getenv("RFSN_DEV_MODE", "0") == "1"
+STRICT_IMAGE_DIGEST = os.getenv(
+    "RFSN_STRICT_IMAGE_DIGEST", "1",
+) == "1"
 ALLOW_LOCAL_EXEC = os.getenv(
     "RFSN_ALLOW_LOCAL_EXEC", "0",
 ) == "1"
@@ -41,6 +47,10 @@ ALLOW_LOCAL_EXEC = os.getenv(
 
 def _local_exec_allowed() -> bool:
     return DEV_MODE and ALLOW_LOCAL_EXEC
+
+
+def _is_digest_image_ref(ref: str) -> bool:
+    return "@sha256:" in str(ref or "").strip()
 
 
 def _docker_runtime_available() -> bool:
@@ -63,6 +73,11 @@ DOCKER_RUNTIME_AVAILABLE = (
     _docker_runtime_available()
     if USE_DOCKER_SANDBOX else False
 )
+if STRICT_IMAGE_DIGEST and not DEV_MODE and not _is_digest_image_ref(BLESSED_IMAGE):
+    raise SystemExit(
+        "BLESSED_IMAGE must be digest-pinned (@sha256:...)"
+        " when RFSN_STRICT_IMAGE_DIGEST=1",
+    )
 if USE_DOCKER_SANDBOX and not DOCKER_RUNTIME_AVAILABLE:
     if _local_exec_allowed():
         print(
@@ -132,6 +147,24 @@ NETWORK_MIN_TIER = int(
         str(GATE_POLICY.get("network_min_tier", 2)),
     )
 )
+MAX_STEP_LOG_BYTES = int(
+    os.getenv(
+        "RFSN_MAX_STEP_LOG_BYTES",
+        str(GATE_POLICY.get("max_step_log_bytes", 200000)),
+    )
+)
+MAX_ARTIFACT_DIR_BYTES = int(
+    os.getenv(
+        "RFSN_MAX_ARTIFACT_DIR_BYTES",
+        str(GATE_POLICY.get("max_artifact_dir_bytes", 1000000000)),
+    )
+)
+MAX_ARTIFACT_DELTA_BYTES = int(
+    os.getenv(
+        "RFSN_MAX_ARTIFACT_DELTA_BYTES",
+        str(GATE_POLICY.get("max_artifact_delta_bytes", 200000000)),
+    )
+)
 
 _SAFE_REPO_ID = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 _SAFE_REF = re.compile(r"^[A-Za-z0-9._/-]{1,128}$")
@@ -195,6 +228,59 @@ def _coerce_int(value, default: int = 0) -> int:
         return default
 
 
+def _truncate_text_bytes(text: str, max_bytes: int) -> tuple[str, bool]:
+    raw = (text or "").encode("utf-8", errors="replace")
+    if max_bytes <= 0 or len(raw) <= max_bytes:
+        return text or "", False
+    truncated = raw[:max_bytes].decode("utf-8", errors="ignore")
+    return truncated, True
+
+
+def _dir_size_bytes(path: str, max_files: int = 200000) -> int:
+    total = 0
+    seen = 0
+    if not os.path.isdir(path):
+        return 0
+    for root, _, files in os.walk(path):
+        for name in files:
+            seen += 1
+            if seen > max_files:
+                return total
+            fp = os.path.join(root, name)
+            try:
+                total += os.path.getsize(fp)
+            except OSError:
+                continue
+    return total
+
+
+def _apply_artifact_quota(
+    out: dict,
+    *,
+    before_size: int,
+    after_size: int,
+) -> None:
+    delta = max(0, after_size - before_size)
+    out["artifact_bytes_before"] = int(before_size)
+    out["artifact_bytes_after"] = int(after_size)
+    out["artifact_bytes_delta"] = int(delta)
+    if after_size > MAX_ARTIFACT_DIR_BYTES:
+        out["status"] = 1
+        out["failure_kind"] = "artifact_quota_exceeded"
+        out["logs"] = str(out.get("logs") or "") + (
+            "\n[ARTIFACT_QUOTA] artifact dir exceeds max"
+            f" ({after_size} > {MAX_ARTIFACT_DIR_BYTES})"
+        )
+        return
+    if delta > MAX_ARTIFACT_DELTA_BYTES:
+        out["status"] = 1
+        out["failure_kind"] = "artifact_quota_exceeded"
+        out["logs"] = str(out.get("logs") or "") + (
+            "\n[ARTIFACT_QUOTA] step artifact growth exceeds max"
+            f" ({delta} > {MAX_ARTIFACT_DELTA_BYTES})"
+        )
+
+
 def _require_network_tier(step: dict) -> None:
     tier = _coerce_int(step.get("_rfsn_tier"), 0)
     allow_network = bool(step.get("_rfsn_allow_network"))
@@ -230,21 +316,43 @@ def _result(
     payload=None,
     command: list[str] | None = None,
     workdir: str | None = None,
+    network_mode: str = "none",
+    allow_network: bool = False,
+    tier: int = 0,
+    network_reason: str = "",
 ):
     status_raw = out.get("status", 1)
     if status_raw is None:
         status = 1
     else:
         status = int(status_raw)
-    logs = str(out.get("logs", "") or "")
+    logs, trunc = _truncate_text_bytes(
+        str(out.get("logs", "") or ""),
+        MAX_STEP_LOG_BYTES,
+    )
+    explicit_failure_kind = out.get("failure_kind")
+    if isinstance(explicit_failure_kind, str) and explicit_failure_kind:
+        failure_kind = explicit_failure_kind
+    else:
+        failure_kind = _classify_failure(logs, status)
     return {
         "status": status,
         "seconds": float(out.get("seconds", 0.0) or 0.0),
         "logs": logs,
+        "logs_truncated": bool(
+            out.get("logs_truncated", False) or trunc
+        ),
         "payload": payload,
-        "failure_kind": _classify_failure(logs, status),
+        "failure_kind": failure_kind,
         "command": command,
         "workdir": workdir or ".",
+        "network_mode": network_mode,
+        "allow_network": bool(allow_network),
+        "tier": int(tier),
+        "network_reason": network_reason or "",
+        "artifact_bytes_before": int(out.get("artifact_bytes_before", 0) or 0),
+        "artifact_bytes_after": int(out.get("artifact_bytes_after", 0) or 0),
+        "artifact_bytes_delta": int(out.get("artifact_bytes_delta", 0) or 0),
     }
 
 
@@ -257,11 +365,75 @@ def health():
     return {
         "ok": True,
         "image": BLESSED_IMAGE,
+        "strict_image_digest": STRICT_IMAGE_DIGEST,
         "mode": "docker" if USE_DOCKER_SANDBOX else "local",
         "docker_runtime_available": DOCKER_RUNTIME_AVAILABLE,
         "local_exec_allowed": _local_exec_allowed(),
         "sandbox_pool": pool_stats,
     }
+
+
+def _safe_cmd_output(cmd: list[str], timeout: int = 5) -> str:
+    try:
+        p = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        return (p.stdout or "").strip()
+    except Exception:
+        return ""
+
+
+def _os_release() -> dict:
+    out: dict[str, str] = {}
+    path = "/etc/os-release"
+    if not os.path.exists(path):
+        return out
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                out[k] = v.strip().strip('"')
+    except Exception:
+        return {}
+    return out
+
+
+@app.get("/env_manifest")
+def env_manifest(run_id: str, repo_id: str):
+    _validate_repo_id(repo_id)
+    safe_run = re.sub(r"[^A-Za-z0-9_.-]", "_", run_id)[:128]
+    replay_dir = os.path.abspath(
+        f"/data/artifacts/{repo_id}/replay/{safe_run}",
+    )
+    os.makedirs(replay_dir, exist_ok=True)
+    out_path = os.path.join(replay_dir, "env.json")
+
+    manifest = {
+        "run_id": run_id,
+        "repo_id": repo_id,
+        "blessed_image": BLESSED_IMAGE,
+        "strict_image_digest": bool(STRICT_IMAGE_DIGEST),
+        "mode": "docker" if USE_DOCKER_SANDBOX else "local",
+        "docker_runtime_available": bool(DOCKER_RUNTIME_AVAILABLE),
+        "python_version": _safe_cmd_output(["python", "--version"]),
+        "uname": _safe_cmd_output(["uname", "-a"]),
+        "os_release": _os_release(),
+        "lang": os.getenv("LANG", ""),
+        "lc_all": os.getenv("LC_ALL", ""),
+        "tz": os.getenv("TZ", ""),
+        "captured_at": time.time(),
+    }
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+    return {"ok": True, "path": out_path, "manifest": manifest}
 
 
 def _normalize_repo_url(repo_url: str) -> str:
@@ -540,11 +712,6 @@ def run_warm(req: WarmExecReq):
         _paths(req.repo_id)
     )
 
-    sb = _sandbox_pool.get_or_create(
-        req.run_id, repo_host, art_host,
-        venv_host, wheels_host,
-    )
-
     step = req.step
     t: str = step.get("type") or ""
     timeout_s = int(step.get("timeout_s") or 300)
@@ -562,14 +729,26 @@ def run_warm(req: WarmExecReq):
             )
         )
 
+    sb = _sandbox_pool.get_or_create(
+        req.run_id, repo_host, art_host,
+        venv_host, wheels_host,
+    )
+
     # Build script + data files for this step
     # (reuse the same logic as cold path).
     script, data_files = _build_step_script(
         t, step, req.repo_id,
     )
+    artifact_before = _dir_size_bytes(art_host)
 
     out = _sandbox_pool.exec_in(
         sb, script, data_files, timeout_s,
+    )
+    artifact_after = _dir_size_bytes(art_host)
+    _apply_artifact_quota(
+        out,
+        before_size=artifact_before,
+        after_size=artifact_after,
     )
 
     # For apply_patch, add verification.
@@ -589,6 +768,10 @@ def run_warm(req: WarmExecReq):
         payload = out.get("logs", "").strip()
     command = None
     workdir = str(req.step.get("workdir") or ".")
+    allow_network = bool(req.step.get("_rfsn_allow_network"))
+    tier = _coerce_int(req.step.get("_rfsn_tier"), 0)
+    network_reason = str(req.step.get("_rfsn_network_reason") or "")
+    network_mode = str(out.get("network_mode") or "none")
     if t in ("run_cmd_template", "format_fix"):
         tmpl = str(req.step.get("template") or "")
         try:
@@ -600,6 +783,10 @@ def run_warm(req: WarmExecReq):
         payload=payload,
         command=command,
         workdir=workdir,
+        network_mode=network_mode,
+        allow_network=allow_network,
+        tier=tier,
+        network_reason=network_reason,
     )
 
 
@@ -698,10 +885,13 @@ def _run_docker_with_data(
             "--network", net,
             "--user", "1000:1000",
             "--security-opt", "no-new-privileges:true",
+            "--read-only",
+            "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=256m",
             "--memory", "2g",
             "--cpus", "2",
             "--pids-limit", "256",
             "--cap-drop", "ALL",
+            "-e", "HOME=/tmp",
         ] + extra_mounts + [
             "-v", f"{repo_host}:/work/repo:rw",
             "-v", f"{art_host}:/work/artifacts:rw",
@@ -721,11 +911,17 @@ def _run_docker_with_data(
                 timeout=timeout_s,
                 text=True,
             )
-            out = p.stdout.replace("\r\n", "\n")[-200000:]
+            raw_logs = (p.stdout or "").replace("\r\n", "\n")
+            out, truncated = _truncate_text_bytes(
+                raw_logs,
+                MAX_STEP_LOG_BYTES,
+            )
             return {
                 "status": p.returncode,
                 "seconds": time.time() - start,
                 "logs": out,
+                "logs_truncated": truncated,
+                "network_mode": net,
             }
         except subprocess.TimeoutExpired as e:
             raw = e.stdout or ""
@@ -733,13 +929,16 @@ def _run_docker_with_data(
                 raw = raw.decode(
                     "utf-8", errors="replace"
                 )
-            out = raw + "\n[TIMEOUT]\n"
+            out, truncated = _truncate_text_bytes(
+                str(raw) + "\n[TIMEOUT]\n",
+                MAX_STEP_LOG_BYTES,
+            )
             return {
                 "status": 124,
                 "seconds": time.time() - start,
-                "logs": out.replace(
-                    "\r\n", "\n"
-                )[-200000:],
+                "logs": out.replace("\r\n", "\n"),
+                "logs_truncated": truncated,
+                "network_mode": net,
             }
         except FileNotFoundError:
             if _local_exec_allowed():
@@ -827,11 +1026,17 @@ def _run_local_with_data(
             timeout=timeout_s,
             text=True,
         )
-        out = p.stdout.replace("\r\n", "\n")[-200000:]
+        raw_logs = (p.stdout or "").replace("\r\n", "\n")
+        out, truncated = _truncate_text_bytes(
+            raw_logs,
+            MAX_STEP_LOG_BYTES,
+        )
         return {
             "status": p.returncode,
             "seconds": time.time() - start,
             "logs": out,
+            "logs_truncated": truncated,
+            "network_mode": "local",
         }
     except subprocess.TimeoutExpired as e:
         raw = e.stdout or ""
@@ -839,13 +1044,16 @@ def _run_local_with_data(
             raw = raw.decode(
                 "utf-8", errors="replace",
             )
-        out = raw + "\n[TIMEOUT]\n"
+        out, truncated = _truncate_text_bytes(
+            str(raw) + "\n[TIMEOUT]\n",
+            MAX_STEP_LOG_BYTES,
+        )
         return {
             "status": 124,
             "seconds": time.time() - start,
-            "logs": out.replace(
-                "\r\n", "\n",
-            )[-200000:],
+            "logs": out.replace("\r\n", "\n"),
+            "logs_truncated": truncated,
+            "network_mode": "local",
         }
 
 
@@ -1113,13 +1321,26 @@ def _run_tests(
     safe_target = shlex.quote(target) if target else ""
     cmd_str = " ".join([shlex.quote(x) for x in cmd])
     cmd_str = cmd_str.replace("{target}", safe_target)
+    # Run tests from a scratch copy so tests cannot
+    # mutate canonical /work/repo state.
+    cmd_str = cmd_str.replace("cd repo", "cd scratch_repo")
     script = (
         "#!/bin/bash\nset -euo pipefail\n"
+        "cd /work\n"
+        "rm -rf /work/scratch_repo\n"
+        "mkdir -p /work/scratch_repo\n"
+        "cp -a /work/repo/. /work/scratch_repo/\n"
+        "BEFORE_TRACKED=\"$(cd /work/repo && git status --porcelain 2>/dev/null || true)\"\n"
         'if [ ! -f /work/venv/bin/activate ]; then\n'
         '  echo "Missing venv; ensure_deps first"\n'
         '  exit 39\n'
         'fi\n'
         f"{cmd_str}\n"
+        "AFTER_TRACKED=\"$(cd /work/repo && git status --porcelain 2>/dev/null || true)\"\n"
+        "if [ \"$AFTER_TRACKED\" != \"$BEFORE_TRACKED\" ]; then\n"
+        "  echo \"tracked files mutated during tests\"\n"
+        "  exit 42\n"
+        "fi\n"
     )
     return _run_docker_with_data(
         script, {},
@@ -1623,14 +1844,25 @@ def _build_step_script(
         cmd_str = cmd_str.replace(
             "{target}", safe_target,
         )
+        cmd_str = cmd_str.replace("cd repo", "cd scratch_repo")
         script = (
             "#!/bin/bash\nset -euo pipefail\n"
+            "cd /work\n"
+            "rm -rf /work/scratch_repo\n"
+            "mkdir -p /work/scratch_repo\n"
+            "cp -a /work/repo/. /work/scratch_repo/\n"
+            "BEFORE_TRACKED=\"$(cd /work/repo && git status --porcelain 2>/dev/null || true)\"\n"
             "if [ ! -f"
             " /work/venv/bin/activate ]; then\n"
             '  echo "Missing venv;'
             ' ensure_deps first"\n'
             "  exit 39\nfi\n"
             f"{cmd_str}\n"
+            "AFTER_TRACKED=\"$(cd /work/repo && git status --porcelain 2>/dev/null || true)\"\n"
+            "if [ \"$AFTER_TRACKED\" != \"$BEFORE_TRACKED\" ]; then\n"
+            "  echo \"tracked files mutated during tests\"\n"
+            "  exit 42\n"
+            "fi\n"
         )
         return script, data_files
 
@@ -1648,41 +1880,87 @@ def run(req: ExecReq):
     repo_host, art_host, venv_host, wheels_host = _paths(req.repo_id)
     step = req.step
     t = step.get("type")
+    allow_network = bool(step.get("_rfsn_allow_network"))
+    tier = _coerce_int(step.get("_rfsn_tier"), 0)
+    network_reason = str(step.get("_rfsn_network_reason") or "")
 
     if t == "ensure_deps":
         _require_network_tier(step)
+        allow_network = True
         timeout_s = int(
             step.get("timeout_s")
             or DEPS.get("max_install_seconds", 420)
         )
+        artifact_before = _dir_size_bytes(art_host)
         out = _ensure_deps(
             req.repo_id, repo_host, art_host,
             venv_host, wheels_host, timeout_s,
         )
-        return _result(out=out, payload=None)
+        artifact_after = _dir_size_bytes(art_host)
+        _apply_artifact_quota(
+            out,
+            before_size=artifact_before,
+            after_size=artifact_after,
+        )
+        return _result(
+            out=out,
+            payload=None,
+            network_mode=str(out.get("network_mode") or "bridge"),
+            allow_network=allow_network,
+            tier=tier,
+            network_reason=network_reason,
+        )
 
     if t == "repo_search":
         pattern = step.get("pattern") or ""
         timeout_s = int(step.get("timeout_s") or 30)
+        artifact_before = _dir_size_bytes(art_host)
         out = _repo_search(
             pattern, repo_host, art_host,
             venv_host, wheels_host, timeout_s,
         )
+        artifact_after = _dir_size_bytes(art_host)
+        _apply_artifact_quota(
+            out,
+            before_size=artifact_before,
+            after_size=artifact_after,
+        )
         payload = out["logs"].strip()
-        return _result(out=out, payload=payload)
+        return _result(
+            out=out,
+            payload=payload,
+            network_mode=str(out.get("network_mode") or "none"),
+            allow_network=allow_network,
+            tier=tier,
+            network_reason=network_reason,
+        )
 
     if t == "repo_read_range":
         path = step.get("path") or ""
         ls = int(step.get("line_start") or 1)
         le = int(step.get("line_end") or ls)
         timeout_s = int(step.get("timeout_s") or 30)
+        artifact_before = _dir_size_bytes(art_host)
         out = _repo_read_range(
             path, ls, le,
             repo_host, art_host,
             venv_host, wheels_host, timeout_s,
         )
+        artifact_after = _dir_size_bytes(art_host)
+        _apply_artifact_quota(
+            out,
+            before_size=artifact_before,
+            after_size=artifact_after,
+        )
         payload = out["logs"]
-        return _result(out=out, payload=payload)
+        return _result(
+            out=out,
+            payload=payload,
+            network_mode=str(out.get("network_mode") or "none"),
+            allow_network=allow_network,
+            tier=tier,
+            network_reason=network_reason,
+        )
 
     if t in (
         "read_file",
@@ -1693,6 +1971,7 @@ def run(req: ExecReq):
         script, data_files = _build_step_script(
             t, step, req.repo_id,
         )
+        artifact_before = _dir_size_bytes(art_host)
         out = _run_docker_with_data(
             script,
             data_files,
@@ -1703,17 +1982,44 @@ def run(req: ExecReq):
             timeout_s,
             network_disabled=True,
         )
+        artifact_after = _dir_size_bytes(art_host)
+        _apply_artifact_quota(
+            out,
+            before_size=artifact_before,
+            after_size=artifact_after,
+        )
         payload = out.get("logs", "").strip()
-        return _result(out=out, payload=payload)
+        return _result(
+            out=out,
+            payload=payload,
+            network_mode=str(out.get("network_mode") or "none"),
+            allow_network=allow_network,
+            tier=tier,
+            network_reason=network_reason,
+        )
 
     if t == "apply_patch":
         patch = step.get("patch") or ""
         timeout_s = int(step.get("timeout_s") or 60)
+        artifact_before = _dir_size_bytes(art_host)
         out = _apply_patch(
             patch, repo_host, art_host,
             venv_host, wheels_host, timeout_s,
         )
-        return _result(out=out, payload=None)
+        artifact_after = _dir_size_bytes(art_host)
+        _apply_artifact_quota(
+            out,
+            before_size=artifact_before,
+            after_size=artifact_after,
+        )
+        return _result(
+            out=out,
+            payload=None,
+            network_mode=str(out.get("network_mode") or "none"),
+            allow_network=allow_network,
+            tier=tier,
+            network_reason=network_reason,
+        )
 
     if t == "run_tests":
         template_id = step.get("template_id") or ""
@@ -1725,10 +2031,17 @@ def run(req: ExecReq):
                 template_id, {}
             ).get("max_seconds", 240)
         )
+        artifact_before = _dir_size_bytes(art_host)
         out = _run_tests(
             template_id, target, repo_host,
             art_host, venv_host, wheels_host,
             timeout_s,
+        )
+        artifact_after = _dir_size_bytes(art_host)
+        _apply_artifact_quota(
+            out,
+            before_size=artifact_before,
+            after_size=artifact_after,
         )
         tmpl_cmd = (
             CMD_TEMPLATES.get(template_id, {})
@@ -1742,6 +2055,10 @@ def run(req: ExecReq):
             out=out,
             payload=None,
             command=command,
+            network_mode=str(out.get("network_mode") or "none"),
+            allow_network=allow_network,
+            tier=tier,
+            network_reason=network_reason,
         )
 
     if t in ("run_cmd_template", "format_fix"):
@@ -1749,6 +2066,7 @@ def run(req: ExecReq):
         script, data_files = _build_step_script(
             t, step, req.repo_id,
         )
+        artifact_before = _dir_size_bytes(art_host)
         out = _run_docker_with_data(
             script,
             data_files,
@@ -1758,6 +2076,12 @@ def run(req: ExecReq):
             wheels_host,
             timeout_s,
             network_disabled=True,
+        )
+        artifact_after = _dir_size_bytes(art_host)
+        _apply_artifact_quota(
+            out,
+            before_size=artifact_before,
+            after_size=artifact_after,
         )
         template = str(step.get("template") or "")
         command = None
@@ -1770,6 +2094,10 @@ def run(req: ExecReq):
             payload=None,
             command=command,
             workdir=str(step.get("workdir") or "."),
+            network_mode=str(out.get("network_mode") or "none"),
+            allow_network=allow_network,
+            tier=tier,
+            network_reason=network_reason,
         )
 
     raise HTTPException(400, f"unknown step type: {t}")

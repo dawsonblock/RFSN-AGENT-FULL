@@ -19,6 +19,10 @@ enforce_tests: true
 
 # Risk scoring thresholds
 reject_risk_score: 60
+risk_max: 0.6
+success_min: 0.15
+loop_max: 0.8
+drift_max: 0.85
 network_min_tier: 2
 
 # λ controls risk vs expected-value balance:
@@ -64,6 +68,14 @@ step_budgets:
 
 # Total steps allowed in a single bundle.
 max_steps_per_bundle: 15
+
+# Patch verification contract.
+patch_verify_window_steps: 4
+
+# Executor output/storage guardrails.
+max_step_log_bytes: 200000
+max_artifact_dir_bytes: 1000000000
+max_artifact_delta_bytes: 200000000
 
 # repo_read_range path policy: block traversal and
 # sensitive paths inside the repo.

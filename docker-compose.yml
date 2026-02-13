@@ -96,11 +96,14 @@ services:
       - ./policies:/policies:ro
       - ./shared:/shared:ro
     environment:
-      BLESSED_IMAGE: ${BLESSED_IMAGE:-rfsn-blessed:0.2}
+      BLESSED_IMAGE: ${BLESSED_IMAGE:-rfsn-blessed@sha256:208a2c2dac42ed9b3ca023b30cd815518070930274592844511aa34de21b6360}
       HOST_DATA_DIR: ${HOST_DATA_DIR:-${PWD}/data}
       RFSN_EXEC_USE_DOCKER: ${RFSN_EXEC_USE_DOCKER:-1}
       RFSN_ALLOW_LOCAL_EXEC: ${RFSN_ALLOW_LOCAL_EXEC:-0}
       RFSN_NETWORK_MIN_TIER: ${RFSN_NETWORK_MIN_TIER:-2}
+      RFSN_STRICT_IMAGE_DIGEST: ${RFSN_STRICT_IMAGE_DIGEST:-1}
+      RFSN_MAX_ARTIFACT_DIR_BYTES: ${RFSN_MAX_ARTIFACT_DIR_BYTES:-1000000000}
+      RFSN_MAX_ARTIFACT_DELTA_BYTES: ${RFSN_MAX_ARTIFACT_DELTA_BYTES:-200000000}
       RFSN_SERVICE_TOKEN: ${RFSN_SERVICE_TOKEN:-}
       RFSN_DEV_MODE: ${RFSN_DEV_MODE:-0}
     deploy:
@@ -140,12 +143,14 @@ services:
   # Blessed sandbox image — build once:
   #   docker compose --profile build-blessed build blessed
   # or directly:
-  #   docker build -t rfsn-blessed:0.2 -f blessed.Dockerfile .
+  #   docker build -t ${BLESSED_BUILD_TAG:-rfsn-blessed:0.2} -f blessed.Dockerfile .
+  # then set:
+  #   BLESSED_IMAGE=$(docker image inspect ${BLESSED_BUILD_TAG:-rfsn-blessed:0.2} --format '{{index .RepoDigests 0}}')
   blessed:
     build:
       context: .
       dockerfile: blessed.Dockerfile
-    image: rfsn-blessed:0.2
+    image: ${BLESSED_BUILD_TAG:-rfsn-blessed:0.2}
     profiles: ["build-blessed"]
     entrypoint: ["echo", "blessed image built"]
 

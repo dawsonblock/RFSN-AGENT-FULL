@@ -14,6 +14,31 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 NC='\033[0m'
+BLESSED_BUILD_TAG="${BLESSED_BUILD_TAG:-rfsn-blessed:0.2}"
+
+upsert_env_kv() {
+    local key="$1"
+    local value="$2"
+    local file=".env"
+    local tmp
+    tmp="$(mktemp)"
+    awk -v k="$key" -v v="$value" -F= '
+        BEGIN { updated = 0 }
+        $1 == k && updated == 0 {
+            print k "=" v
+            updated = 1
+            next
+        }
+        $1 == k { next }
+        { print }
+        END {
+            if (updated == 0) {
+                print k "=" v
+            }
+        }
+    ' "$file" > "$tmp"
+    mv "$tmp" "$file"
+}
 
 # Check .env
 if [[ ! -f .env ]]; then
@@ -43,7 +68,24 @@ fi
 
 # Build blessed sandbox image
 echo -e "${CYAN}Building blessed sandbox image...${NC}"
-docker build -t rfsn-blessed:0.2 -f blessed.Dockerfile . -q
+docker build -t "$BLESSED_BUILD_TAG" -f blessed.Dockerfile . -q
+
+# Resolve a digest-pinned ref for strict runtime mode.
+BLESSED_IMAGE_REF="$(docker image inspect "$BLESSED_BUILD_TAG" --format '{{index .RepoDigests 0}}' 2>/dev/null || true)"
+if [[ -z "${BLESSED_IMAGE_REF:-}" ]]; then
+    IMAGE_ID="$(docker image inspect "$BLESSED_BUILD_TAG" --format '{{.Id}}' 2>/dev/null || true)"
+    if [[ "$IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+        BLESSED_IMAGE_REF="rfsn-blessed@${IMAGE_ID}"
+    fi
+fi
+if [[ -z "${BLESSED_IMAGE_REF:-}" ]]; then
+    echo -e "${RED}ERROR: Could not resolve blessed image digest ref${NC}"
+    exit 1
+fi
+echo -e "${GREEN}Using blessed image ref:${NC} ${BLESSED_IMAGE_REF}"
+upsert_env_kv "BLESSED_IMAGE" "${BLESSED_IMAGE_REF}"
+upsert_env_kv "RFSN_STRICT_IMAGE_DIGEST" "${RFSN_STRICT_IMAGE_DIGEST:-1}"
+export BLESSED_IMAGE="${BLESSED_IMAGE_REF}"
 
 # Ensure data dirs exist
 mkdir -p data/repos data/venv data/wheels data/artifacts data/cassettes data/results data/logs

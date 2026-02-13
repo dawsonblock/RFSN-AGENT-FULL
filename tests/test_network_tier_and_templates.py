@@ -27,6 +27,13 @@ def test_gateway_tier_gates_network_for_ensure_deps():
     assert "ensure_deps requires network tier" in src
     assert "s[\"_rfsn_tier\"]" in src
     assert "s[\"_rfsn_allow_network\"]" in src
+    assert "s[\"_rfsn_network_reason\"]" in src
+
+
+def test_gateway_fails_fast_on_template_registry_drift():
+    src = GW_APP.read_text(encoding="utf-8")
+    assert "Template registry drift detected" in src
+    assert "_check_template_registry_drift()" in src
 
 
 def test_executor_enforces_network_tier_for_ensure_deps():

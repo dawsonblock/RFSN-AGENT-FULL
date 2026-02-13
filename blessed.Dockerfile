@@ -1,8 +1,8 @@
-# blessed.Dockerfile — builds the rfsn-blessed:0.2 sandbox image
+# blessed.Dockerfile — builds the blessed sandbox image
 # used by the Executor service to run steps inside isolated containers.
 #
 # Build:
-#   docker build -t rfsn-blessed:0.2 -f blessed.Dockerfile .
+#   docker build -t ${BLESSED_BUILD_TAG:-rfsn-blessed:0.2} -f blessed.Dockerfile .
 #
 # This image is intentionally minimal: Python 3.11 + git + common build
 # tools.  No repo code is baked in — repos, venvs, and wheels are mounted

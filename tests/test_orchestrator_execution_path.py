@@ -172,6 +172,29 @@ def test_replay_manifest_endpoints_and_events_exist():
     assert "REPLAY_MANIFEST_UPDATED" in src
 
 
+def test_replay_manifest_captures_repo_env_and_lock_artifacts():
+    src = APP_PATH.read_text(encoding="utf-8")
+    assert "repo_snapshot_start" in src
+    assert "repo_snapshot_end" in src
+    assert "requirements_lock" in src
+    assert "executor_env_manifest_path" in src
+    assert "_capture_repo_snapshot(" in src
+    assert "_capture_requirements_lock(" in src
+    assert "_capture_executor_env_manifest(" in src
+
+
+def test_replay_mode_forces_cold_sandbox_execution():
+    src = APP_PATH.read_text(encoding="utf-8")
+    assert "force_cold_sandbox" in src
+    assert "SANDBOX_WARM_DISABLED" in src
+
+
+def test_replay_mode_disables_networked_ensure_deps():
+    src = APP_PATH.read_text(encoding="utf-8")
+    assert "REPLAY_POLICY: ensure_deps disabled in replay mode" in src
+    assert "replay_network_disabled" in src
+
+
 def test_repo_head_fallback_without_git_binary_exists():
     src = APP_PATH.read_text(encoding="utf-8")
     assert 'os.path.join(repo_path, ".git")' in src

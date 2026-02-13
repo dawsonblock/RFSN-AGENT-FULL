@@ -6,6 +6,7 @@ import os
 import random
 import re
 import subprocess
+import tarfile
 import time
 from typing import Optional
 
@@ -331,6 +332,81 @@ def _replay_manifest_path(run_id: str) -> str:
     )
 
 
+def _replay_bundle_dir(repo_id: str, run_id: str) -> str:
+    safe_repo = re.sub(r"[^A-Za-z0-9_.-]", "_", repo_id)[:128]
+    safe_run = re.sub(r"[^A-Za-z0-9_.-]", "_", run_id)[:128]
+    out = os.path.abspath(
+        os.path.join("/data/artifacts", safe_repo, "replay", safe_run),
+    )
+    os.makedirs(out, exist_ok=True)
+    return out
+
+
+def _capture_repo_snapshot(repo_id: str, run_id: str, label: str) -> str:
+    repo_path = _repo_abs_path(repo_id)
+    if not os.path.isdir(repo_path):
+        return ""
+    out_dir = _replay_bundle_dir(repo_id, run_id)
+    out_path = os.path.join(out_dir, f"repo_{label}.tar.gz")
+    try:
+        with tarfile.open(out_path, "w:gz") as tf:
+            tf.add(repo_path, arcname="repo")
+        return out_path
+    except Exception:
+        return ""
+
+
+def _capture_requirements_lock(repo_id: str, run_id: str) -> str:
+    out_dir = _replay_bundle_dir(repo_id, run_id)
+    out_path = os.path.join(out_dir, "requirements.lock")
+    pip_bin = os.path.abspath(f"/data/venv/{repo_id}/bin/pip")
+    if not os.path.isfile(pip_bin):
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write("# missing venv pip\n")
+            return out_path
+        except Exception:
+            return ""
+    try:
+        p = subprocess.run(
+            [pip_bin, "freeze"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        text = p.stdout or ""
+        if p.returncode != 0 and not text.strip():
+            text = "# pip freeze failed\n"
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        return out_path
+    except Exception:
+        return ""
+
+
+def _capture_executor_env_manifest(run_id: str, repo_id: str) -> dict:
+    try:
+        r = requests.get(
+            f"{EXECUTOR_URL}/env_manifest",
+            params={"run_id": run_id, "repo_id": repo_id},
+            headers=auth_headers(),
+            timeout=20,
+        )
+        if r.status_code != 200:
+            return {
+                "ok": False,
+                "error": f"status_{r.status_code}",
+            }
+        payload = r.json()
+        if isinstance(payload, dict):
+            return payload
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": False, "error": "unknown"}
+
+
 def _write_replay_manifest(run_id: str, manifest: dict) -> None:
     path = _replay_manifest_path(run_id)
     try:
@@ -365,6 +441,14 @@ def _replay_manifest_check(manifest: dict) -> dict:
         "repo_head",
         "learner_db_hash",
     ]
+    status = str(manifest.get("status", "running"))
+    if status != "running":
+        required_nonempty.extend([
+            "repo_snapshot_start",
+            "repo_snapshot_end",
+            "requirements_lock",
+            "executor_env_manifest_path",
+        ])
     missing: list[str] = []
     for k in required_nonempty:
         v = manifest.get(k)
@@ -413,12 +497,21 @@ def _init_replay_manifest(
         "env_snapshot": env_snapshot,
         "ledger_path": HARD_LEDGER_PATH,
         "executor_image": os.getenv(
-            "BLESSED_IMAGE", "rfsn-blessed:0.2",
+            "BLESSED_IMAGE",
+            "rfsn-blessed@sha256:208a2c2dac42ed9b3ca023b30cd815518070930274592844511aa34de21b6360",
+        ),
+        "strict_image_digest": os.getenv(
+            "RFSN_STRICT_IMAGE_DIGEST", "1",
         ),
         "sandbox_mode": "warm" if WARM_SANDBOX else "cold",
         "sandbox_image_hash": str(
             (sandbox_info or {}).get("image_hash", ""),
         ),
+        "repo_snapshot_start": "",
+        "repo_snapshot_end": "",
+        "requirements_lock": "",
+        "executor_env_manifest_path": "",
+        "executor_env_manifest": {},
         "repo_head": _repo_head(repo_id) or "unknown",
         "learner_db_path": LEARNER_DB_PATH,
         "learner_db_hash": (
@@ -448,6 +541,29 @@ def _finalize_replay_manifest(
     manifest["reason"] = reason
     manifest["ended_at"] = time.time()
     manifest["results_count"] = int(max(0, results_count))
+    repo_id = str(manifest.get("repo_id", "") or "")
+    if repo_id:
+        if not str(manifest.get("repo_snapshot_end", "")).strip():
+            manifest["repo_snapshot_end"] = _capture_repo_snapshot(
+                repo_id,
+                run_id,
+                "end",
+            )
+        if not str(manifest.get("requirements_lock", "")).strip():
+            manifest["requirements_lock"] = _capture_requirements_lock(
+                repo_id,
+                run_id,
+            )
+        if not str(manifest.get("executor_env_manifest_path", "")).strip():
+            env_manifest = _capture_executor_env_manifest(
+                run_id,
+                repo_id,
+            )
+            if isinstance(env_manifest, dict):
+                if isinstance(env_manifest.get("path"), str):
+                    manifest["executor_env_manifest_path"] = env_manifest["path"]
+                if isinstance(env_manifest.get("manifest"), dict):
+                    manifest["executor_env_manifest"] = env_manifest["manifest"]
     try:
         runner = ReplayRunner(HARD_LEDGER_PATH)
         manifest["replay_verify"] = runner.replay_verify(
@@ -1955,12 +2071,14 @@ def run_step(
     repo_id: str, it: int, step: dict,
     run_id: str | None = None,
     tier: int | None = None,
+    warm_sandbox: bool | None = None,
 ):
+    use_warm = WARM_SANDBOX if warm_sandbox is None else bool(warm_sandbox)
     payload = {
         "repo_id": repo_id,
         "iter": it,
         "step": step,
-        "warm_sandbox": bool(WARM_SANDBOX),
+        "warm_sandbox": bool(use_warm),
     }
     if run_id:
         payload["run_id"] = run_id
@@ -2023,6 +2141,35 @@ def execute_approved_step(
         def _exec_step(s: dict) -> Outcome:
             """Execution callback for hard kernel."""
             cache = run_ctx.get("sim_cache")
+            use_warm_step = not bool(
+                run_ctx.get("force_cold_sandbox", False),
+            )
+            if (
+                bool(run_ctx.get("force_cold_sandbox", False))
+                and str(s.get("type") or "") == "ensure_deps"
+            ):
+                # Replay mode is network-off. ensure_deps
+                # would require network for package resolution.
+                r = {
+                    "status": 1,
+                    "seconds": 0.0,
+                    "logs": "REPLAY_POLICY: ensure_deps disabled in replay mode",
+                    "failure_kind": "replay_network_disabled",
+                    "network_mode": "none",
+                    "allow_network": False,
+                    "tier": int(tier_now),
+                    "network_reason": "",
+                }
+                payload = json.dumps(
+                    r, sort_keys=True, separators=(",", ":"),
+                )
+                return Outcome(
+                    success=False,
+                    exit_code=1,
+                    payload=payload[:3000],
+                    logs=str(r.get("logs", "")),
+                    duration_sec=0.0,
+                )
             cache_key = ""
             r: dict
             if isinstance(cache, SimCache):
@@ -2048,6 +2195,7 @@ def execute_approved_step(
                         s,
                         run_id,
                         tier=tier_now,
+                        warm_sandbox=use_warm_step,
                     )
                     cache.put(cache_key, r)
             else:
@@ -2057,6 +2205,7 @@ def execute_approved_step(
                     s,
                     run_id,
                     tier=tier_now,
+                    warm_sandbox=use_warm_step,
                 )
             ok = r.get("status", 1) == 0
             payload = ""
@@ -2440,6 +2589,9 @@ def run(req: RunReq):
             "too many active runs",
         )
     run_ctx = _ensure_run_context(run_id)
+    run_ctx["force_cold_sandbox"] = (
+        str(scenario).strip().lower() == "replay"
+    )
     env_snapshot = (
         snapshot_environment(
             repo_path=f"/data/repos/{req.repo_id}",
@@ -2488,7 +2640,14 @@ def run(req: RunReq):
     })
 
     # ── Warm sandbox lifecycle ─────────────────
-    sb_info = _sandbox_create(run_id, req.repo_id)
+    force_cold = bool(run_ctx.get("force_cold_sandbox", False))
+    sb_info = None if force_cold else _sandbox_create(run_id, req.repo_id)
+    if force_cold:
+        ledger.append({
+            "type": "SANDBOX_WARM_DISABLED",
+            "run_id": run_id,
+            "reason": "replay_mode",
+        })
     if sb_info:
         ledger.append({
             "type": "SANDBOX_CREATED",
@@ -2500,7 +2659,7 @@ def run(req: RunReq):
                 "image_hash",
             ),
         })
-    run_ctx["replay_manifest"] = _init_replay_manifest(
+    replay_manifest = _init_replay_manifest(
         run_id=run_id,
         repo_id=req.repo_id,
         task=req.task,
@@ -2509,6 +2668,26 @@ def run(req: RunReq):
         env_snapshot=env_snapshot,
         sandbox_info=sb_info if isinstance(sb_info, dict) else None,
     )
+    start_snapshot = _capture_repo_snapshot(
+        req.repo_id,
+        run_id,
+        "start",
+    )
+    if start_snapshot:
+        replay_manifest["repo_snapshot_start"] = start_snapshot
+    env_manifest = _capture_executor_env_manifest(
+        run_id,
+        req.repo_id,
+    )
+    if isinstance(env_manifest, dict):
+        if isinstance(env_manifest.get("path"), str):
+            replay_manifest["executor_env_manifest_path"] = env_manifest["path"]
+        if isinstance(env_manifest.get("manifest"), dict):
+            replay_manifest["executor_env_manifest"] = env_manifest["manifest"]
+    replay_manifest["completeness"] = _replay_manifest_check(
+        replay_manifest,
+    )
+    run_ctx["replay_manifest"] = replay_manifest
     _write_replay_manifest(
         run_id, run_ctx["replay_manifest"],
     )
@@ -2529,7 +2708,15 @@ def run(req: RunReq):
     if is_tests_only_task(req.task):
         it = 1
         steps = []
-        if DEPS_POLICY.get("enabled", True) and not venv_exists(req.repo_id):
+        tier_now, _, _ = _policy_tier_for_run(run_id)
+        deps_needed = (
+            DEPS_POLICY.get("enabled", True)
+            and not venv_exists(req.repo_id)
+        )
+        deps_tier_ok = tier_now >= int(
+            GATE_POLICY.get("network_min_tier", 2),
+        )
+        if deps_needed and deps_tier_ok:
             steps.append({
                 "id": "auto-deps",
                 "type": "ensure_deps",
@@ -2540,6 +2727,17 @@ def run(req: RunReq):
                     DEPS_POLICY.get(
                         "max_install_seconds", 420
                     )
+                ),
+            })
+        elif deps_needed:
+            ledger.append({
+                "type": "AUTO_DEPS_SKIPPED",
+                "run_id": run_id,
+                "iter": it,
+                "reason": "tier_below_network_min_tier",
+                "tier": tier_now,
+                "network_min_tier": int(
+                    GATE_POLICY.get("network_min_tier", 2),
                 ),
             })
         steps.append({
@@ -2857,10 +3055,14 @@ def run(req: RunReq):
         )
 
         # Auto-inject ensure_deps if needed.
-        if (
+        deps_needed = (
             DEPS_POLICY.get("enabled", True)
             and not venv_exists(req.repo_id)
-        ):
+        )
+        deps_tier_ok = tier >= int(
+            GATE_POLICY.get("network_min_tier", 2),
+        )
+        if deps_needed and deps_tier_ok:
             dep_step = {
                 "id": "auto-deps",
                 "type": "ensure_deps",
@@ -2956,6 +3158,17 @@ def run(req: RunReq):
                         )
                     ),
                 })
+        elif deps_needed:
+            ledger.append({
+                "type": "AUTO_DEPS_SKIPPED",
+                "run_id": run_id,
+                "iter": it,
+                "reason": "tier_below_network_min_tier",
+                "tier": tier,
+                "network_min_tier": int(
+                    GATE_POLICY.get("network_min_tier", 2),
+                ),
+            })
 
         # ── Inner step loop for this iteration ──
         iter_steps_used = 0

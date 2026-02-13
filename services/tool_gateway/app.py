@@ -120,6 +120,36 @@ MAX_BYTES_PER_ITER = int(ALLOW.get("max_bytes_returned_per_iter", 250000))
 ITER_USAGE: dict[tuple[str, str, int], dict] = {}
 
 
+def _norm_template_cmd(value) -> list[str] | None:
+    if isinstance(value, list) and value:
+        out = [str(x) for x in value if isinstance(x, str)]
+        return out if out else None
+    if isinstance(value, dict):
+        cmd = value.get("cmd")
+        if isinstance(cmd, list) and cmd:
+            out = [str(x) for x in cmd if isinstance(x, str)]
+            return out if out else None
+    return None
+
+
+def _check_template_registry_drift() -> None:
+    overlap = set(COMMAND_TEMPLATES.keys()) & set(RUN_TEST_TEMPLATES.keys())
+    for name in sorted(overlap):
+        a = _norm_template_cmd(COMMAND_TEMPLATES.get(name))
+        b = _norm_template_cmd(RUN_TEST_TEMPLATES.get(name))
+        if a is None or b is None:
+            continue
+        if a != b:
+            raise SystemExit(
+                "Template registry drift detected for"
+                f" '{name}': tool_allowlist.yaml and"
+                " command_templates.yaml differ",
+            )
+
+
+_check_template_registry_drift()
+
+
 def usage_key(
     repo_id: str,
     it: int,
@@ -404,6 +434,7 @@ def run_step(
     # Attach tier metadata for executor defense-in-depth.
     s["_rfsn_tier"] = int(tier)
     s["_rfsn_allow_network"] = False
+    s["_rfsn_network_reason"] = ""
     if s["type"] == "ensure_deps":
         if tier < NETWORK_MIN_TIER:
             raise HTTPException(
@@ -412,6 +443,7 @@ def run_step(
                 f" >= {NETWORK_MIN_TIER}",
             )
         s["_rfsn_allow_network"] = True
+        s["_rfsn_network_reason"] = "ensure_deps"
 
     if s["type"] == "apply_patch":
         patch_text = s.get("patch") or ""
