@@ -108,6 +108,45 @@ def test_validate_format_fix_requires_fix_template():
     assert not result.ok
 
 
+def test_validate_blocks_read_paths_via_policy_prefix_suffix():
+    proposal = normalize({
+        "type": "repo_read_range",
+        "path": "scripts/bootstrap.sh",
+        "line_start": 1,
+        "line_end": 5,
+    })
+    result = validate(
+        proposal,
+        SystemState(),
+        {
+            "blocked_read_prefixes": ["scripts/"],
+            "blocked_read_suffixes": [".pem"],
+        },
+    )
+    assert not result.ok
+    assert any(
+        e.get("code") == "PATH_BLOCKED_BY_POLICY"
+        for e in result.errors
+    )
+    proposal2 = normalize({
+        "type": "read_file",
+        "path": ".env",
+    })
+    result2 = validate(
+        proposal2,
+        SystemState(),
+        {
+            "blocked_read_prefixes": ["scripts/"],
+            "blocked_read_suffixes": [".env"],
+        },
+    )
+    assert not result2.ok
+    assert any(
+        e.get("code") == "PATH_BLOCKED_BY_POLICY"
+        for e in result2.errors
+    )
+
+
 def test_kernel_prefers_structured_failure_kind(tmp_path):
     ledger = tmp_path / "ledger.jsonl"
     hk = HardKernel(

@@ -40,6 +40,30 @@ _BANNED_PATCH_PATTERNS = [
 ]
 
 
+def _blocked_read_path(
+    path: str,
+    policy: Dict[str, Any],
+) -> bool:
+    norm = (path or "").replace("\\", "/")
+    while norm.startswith("./"):
+        norm = norm[2:]
+    norm = norm.lstrip("/")
+    prefixes = policy.get("blocked_read_prefixes", []) or []
+    suffixes = policy.get("blocked_read_suffixes", []) or []
+    for pref in prefixes:
+        p = str(pref or "").replace("\\", "/")
+        while p.startswith("./"):
+            p = p[2:]
+        p = p.lstrip("/")
+        if p and norm.startswith(p):
+            return True
+    for suff in suffixes:
+        s = str(suff or "")
+        if s and norm.endswith(s):
+            return True
+    return False
+
+
 def validate(
     proposal: Proposal,
     state: SystemState,
@@ -99,6 +123,11 @@ def validate(
                 "code": "PATH_TRAVERSAL",
                 "msg": f"Unsafe path: {path}",
             })
+        elif _blocked_read_path(path, policy):
+            errors.append({
+                "code": "PATH_BLOCKED_BY_POLICY",
+                "msg": f"Path blocked by read policy: {path}",
+            })
         ls = int(proposal.params.get("line_start", 1))
         le = int(proposal.params.get("line_end", ls))
         max_lpr = int(policy.get("max_lines_per_read", 300))
@@ -119,6 +148,11 @@ def validate(
             errors.append({
                 "code": "PATH_TRAVERSAL",
                 "msg": f"Unsafe path: {path}",
+            })
+        elif _blocked_read_path(path, policy):
+            errors.append({
+                "code": "PATH_BLOCKED_BY_POLICY",
+                "msg": f"Path blocked by read policy: {path}",
             })
 
     elif proposal.action == "detect_workdirs":

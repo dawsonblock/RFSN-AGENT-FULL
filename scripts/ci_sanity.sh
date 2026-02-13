@@ -13,6 +13,12 @@ if grep -R "RFSN_DEV_MODE: \${RFSN_DEV_MODE:-1}" -n docker-compose.yml >/dev/nul
   exit 1
 fi
 
+echo "[sanity] checking executor defaults to docker sandbox..."
+if ! grep -R "RFSN_EXEC_USE_DOCKER: \${RFSN_EXEC_USE_DOCKER:-1}" -n docker-compose.yml >/dev/null 2>&1; then
+  echo "ERROR: executor does not default to docker sandbox mode"
+  exit 1
+fi
+
 echo "[sanity] checking legacy kernel gate not used..."
 if grep -R "validate_and_plan" -n services/orchestrator/app.py >/dev/null 2>&1; then
   echo "ERROR: legacy kernel validate_and_plan still referenced in orchestrator"

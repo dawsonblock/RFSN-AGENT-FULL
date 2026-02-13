@@ -5,6 +5,7 @@ import json
 import os
 import random
 import re
+import subprocess
 import time
 from typing import Optional
 
@@ -228,6 +229,239 @@ def _compile_policy_hash() -> str:
 
 
 POLICY_HASH = _compile_policy_hash()
+REPLAY_BASE_DIR = os.getenv(
+    "RFSN_REPLAY_DIR", "/data/replay",
+)
+REPLAY_MANIFEST_DIR = os.path.join(
+    REPLAY_BASE_DIR, "manifests",
+)
+LEARNER_DB_PATH = os.getenv(
+    "RFSN_LEARNER_DB_PATH",
+    "/data/learner.duckdb",
+)
+DETERMINISTIC_RUN_ID = os.getenv(
+    "RFSN_DETERMINISTIC_RUN_ID", "0",
+) == "1"
+
+
+def _file_sha256(path: str) -> str:
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return ""
+
+
+def _policy_file_hash(name: str) -> str:
+    for path in _policy_candidates(name):
+        digest = _file_sha256(path)
+        if digest:
+            return digest[:16]
+    return ""
+
+
+def _repo_head(repo_id: str) -> str:
+    repo_path = f"/data/repos/{repo_id}"
+    try:
+        p = subprocess.run(
+            ["git", "-C", repo_path, "rev-parse", "HEAD"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except Exception:
+        p = None
+    if p is not None:
+        head = (p.stdout or "").strip()
+        if head:
+            return head
+
+    # Fallback when git binary is unavailable in container:
+    # read .git/HEAD + refs directly.
+    git_dir = os.path.join(repo_path, ".git")
+    head_path = os.path.join(git_dir, "HEAD")
+    try:
+        with open(head_path, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+        if not raw:
+            return ""
+        if not raw.startswith("ref: "):
+            return raw
+        ref = raw[5:].strip()
+        if not ref:
+            return ""
+        ref_path = os.path.join(git_dir, ref)
+        if os.path.exists(ref_path):
+            with open(ref_path, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        packed = os.path.join(git_dir, "packed-refs")
+        if os.path.exists(packed):
+            with open(packed, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if (
+                        not line
+                        or line.startswith("#")
+                        or line.startswith("^")
+                    ):
+                        continue
+                    parts = line.split(" ", 1)
+                    if (
+                        len(parts) == 2
+                        and parts[1].strip() == ref
+                    ):
+                        return parts[0].strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def _replay_manifest_path(run_id: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", run_id)[:128]
+    return os.path.join(
+        REPLAY_MANIFEST_DIR, f"{safe}.json",
+    )
+
+
+def _write_replay_manifest(run_id: str, manifest: dict) -> None:
+    path = _replay_manifest_path(run_id)
+    try:
+        os.makedirs(REPLAY_MANIFEST_DIR, exist_ok=True)
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(
+                manifest, f,
+                sort_keys=True,
+                ensure_ascii=False,
+                indent=2,
+            )
+        os.replace(tmp, path)
+    except Exception:
+        return
+
+
+def _replay_manifest_check(manifest: dict) -> dict:
+    def _present(v) -> bool:
+        if not isinstance(v, str):
+            return False
+        s = v.strip().lower()
+        return bool(s) and s not in {"unknown", "missing", "n/a"}
+
+    required_nonempty = [
+        "run_id",
+        "repo_id",
+        "policy_hash",
+        "env_hash",
+        "ledger_path",
+        "executor_image",
+        "repo_head",
+        "learner_db_hash",
+    ]
+    missing: list[str] = []
+    for k in required_nonempty:
+        v = manifest.get(k)
+        if not _present(v):
+            missing.append(k)
+    for k in ("started_at", "ended_at", "seed", "episode_seed", "status"):
+        if k not in manifest:
+            missing.append(k)
+    return {
+        "ok": len(missing) == 0,
+        "missing": missing,
+        "required_count": len(required_nonempty) + 5,
+    }
+
+
+def _init_replay_manifest(
+    *,
+    run_id: str,
+    repo_id: str,
+    task: str,
+    scenario: str,
+    run_seed: int,
+    env_snapshot: dict,
+    sandbox_info: dict | None,
+) -> dict:
+    manifest = {
+        "run_id": run_id,
+        "repo_id": repo_id,
+        "task": task,
+        "scenario": scenario,
+        "status": "running",
+        "reason": "",
+        "seed": SEED,
+        "episode_seed": run_seed,
+        "deterministic_run_id": DETERMINISTIC_RUN_ID,
+        "started_at": time.time(),
+        "ended_at": 0.0,
+        "policy_hash": POLICY_HASH,
+        "policy_hashes": {
+            "gate_policy": _policy_file_hash("gate_policy.yaml"),
+            "tool_allowlist": _policy_file_hash("tool_allowlist.yaml"),
+            "tier_policy": _policy_file_hash("gate_policy_tiers.yaml"),
+            "llm_cassette": _policy_file_hash("llm_cassette.yaml"),
+        },
+        "env_hash": str(env_snapshot.get("env_hash", "")),
+        "env_snapshot": env_snapshot,
+        "ledger_path": HARD_LEDGER_PATH,
+        "executor_image": os.getenv(
+            "BLESSED_IMAGE", "rfsn-blessed:0.2",
+        ),
+        "sandbox_mode": "warm" if WARM_SANDBOX else "cold",
+        "sandbox_image_hash": str(
+            (sandbox_info or {}).get("image_hash", ""),
+        ),
+        "repo_head": _repo_head(repo_id) or "unknown",
+        "learner_db_path": LEARNER_DB_PATH,
+        "learner_db_hash": (
+            _file_sha256(LEARNER_DB_PATH) or "missing"
+        ),
+        "results_count": 0,
+        "replay_verify": {},
+    }
+    manifest["completeness"] = _replay_manifest_check(manifest)
+    return manifest
+
+
+def _finalize_replay_manifest(
+    *,
+    run_id: str,
+    status: str,
+    reason: str = "",
+    results_count: int = 0,
+) -> None:
+    ctx = _RUN_CONTEXT.get(run_id)
+    if not isinstance(ctx, dict):
+        return
+    manifest = ctx.get("replay_manifest")
+    if not isinstance(manifest, dict):
+        return
+    manifest["status"] = status
+    manifest["reason"] = reason
+    manifest["ended_at"] = time.time()
+    manifest["results_count"] = int(max(0, results_count))
+    try:
+        runner = ReplayRunner(HARD_LEDGER_PATH)
+        manifest["replay_verify"] = runner.replay_verify(
+            run_id=run_id,
+        ).to_dict()
+    except Exception:
+        manifest["replay_verify"] = {
+            "ok": False,
+            "error": "replay_verify_failed",
+        }
+    manifest["completeness"] = _replay_manifest_check(manifest)
+    ctx["replay_manifest"] = manifest
+    _RUN_CONTEXT[run_id] = ctx
+    _write_replay_manifest(run_id, manifest)
 
 # ── Episode determinism ──────────────────────
 # Seed Python random from RFSN_SEED so that any
@@ -320,20 +554,61 @@ class _LedgerSink:
         return self._kernel.ledger.verify_chain()
 
 # ── Hard kernel v2 (simulation + risk + replay) ─
+_KERNEL_REJECT_RISK_SCORE = float(
+    GATE_POLICY.get("reject_risk_score", 65),
+)
+_KERNEL_RISK_MAX = float(
+    GATE_POLICY.get(
+        "risk_max",
+        max(
+            0.0,
+            min(1.0, _KERNEL_REJECT_RISK_SCORE / 100.0),
+        ),
+    )
+)
+_READ_BUDGET = (
+    GATE_POLICY.get("step_budgets", {})
+    .get("repo_read_range", {})
+    if isinstance(GATE_POLICY.get("step_budgets", {}), dict)
+    else {}
+)
 if _HAS_HARD_KERNEL:
     _hard_kernel = HardKernel(
         ledger_path=HARD_LEDGER_PATH,
         policy={
-            "risk_max": 0.65,
-            "success_min": 0.15,
-            "loop_max": 0.8,
-            "drift_max": 0.85,
-            "risk_lambda": 0.7,
-            "max_total_steps": 200,
+            "risk_max": _KERNEL_RISK_MAX,
+            "success_min": float(
+                GATE_POLICY.get("success_min", 0.15),
+            ),
+            "loop_max": float(
+                GATE_POLICY.get("loop_max", 0.8),
+            ),
+            "drift_max": float(
+                GATE_POLICY.get("drift_max", 0.85),
+            ),
+            "risk_lambda": float(
+                GATE_POLICY.get("risk_lambda", 0.7),
+            ),
+            "max_total_steps": int(
+                GATE_POLICY.get("max_total_steps", 200),
+            ),
             "history_max": 500,
             "rng_seed": _EPISODE_SEED,
             "policy_hash": POLICY_HASH,
             "fail_cluster_threshold": 8,
+            "max_lines_per_read": int(
+                _READ_BUDGET.get(
+                    "max_lines_per_read", 300,
+                )
+            ),
+            "blocked_read_prefixes": (
+                GATE_POLICY.get("blocked_read_prefixes", [])
+                or []
+            ),
+            "blocked_read_suffixes": (
+                GATE_POLICY.get("blocked_read_suffixes", [])
+                or []
+            ),
             "allowed_command_templates": sorted(
                 list(
                     (
@@ -417,6 +692,7 @@ def _ensure_run_context(run_id: str) -> dict:
         return ctx
     ctx = {
         "cmd_plan": _default_cmd_plan(),
+        "baseline_test_template": "",
         "sim_cache": SimCache(),
         "repair": {
             "phase": "SEARCH",
@@ -462,6 +738,43 @@ def _is_test_step(step: dict) -> bool:
             str(step.get("template", "")),
         )
     return False
+
+
+def _test_template_key(step: dict) -> str:
+    st = str(step.get("type", ""))
+    if st == "run_tests":
+        tmpl = str(step.get("template_id", "")).strip()
+        return f"run_tests:{tmpl}" if tmpl else ""
+    if st == "run_cmd_template":
+        tmpl = str(step.get("template", "")).strip()
+        if _is_test_template(tmpl):
+            return f"run_cmd_template:{tmpl}"
+    return ""
+
+
+def _test_step_variant(step: dict) -> str:
+    """Classify test step into targeted/suite/generic."""
+    st = str(step.get("type", ""))
+    if st == "run_tests":
+        tmpl = str(step.get("template_id", "")).lower()
+        if "targeted" in tmpl:
+            return "targeted"
+        if "suite" in tmpl:
+            return "suite"
+        return "generic"
+    if st == "run_cmd_template" and _is_test_template(
+        str(step.get("template", "")),
+    ):
+        return "generic"
+    return ""
+
+
+def _patch_verify_ok(state: dict) -> bool:
+    if bool(state.get("targeted_ok")) and bool(
+        state.get("suite_ok"),
+    ):
+        return True
+    return int(state.get("generic_ok_count", 0)) >= 2
 
 
 def _bootstrap_command_plan(
@@ -1089,16 +1402,53 @@ def chat_repo(req: RepoChatReq):
         "content": message,
     })
 
-    llm = llm_chat(
-        messages=messages,
-        run_id=thread_id,
-        call_index=call_index,
-        repo_id=repo_id,
-        scenario="chat",
-    )
-    reply = str(llm.get("content", "")).strip()
-    if not reply:
-        reply = "No response generated."
+    fallback_reason = ""
+    try:
+        llm = llm_chat(
+            messages=messages,
+            run_id=thread_id,
+            call_index=call_index,
+            repo_id=repo_id,
+            scenario="chat",
+        )
+        reply = str(llm.get("content", "")).strip()
+        if not reply:
+            reply = "No response generated."
+    except HTTPException as exc:
+        fallback_reason = str(exc.detail)
+        files = context.get("files", []) or []
+        profile = context.get("profile", {}) or {}
+        workdirs = context.get("workdirs", []) or []
+        lines = [
+            "LLM unavailable; returning context-only summary.",
+        ]
+        if files:
+            lines.append(
+                "Relevant files: "
+                + ", ".join(files[:6]),
+            )
+        if profile:
+            lines.append(
+                "Project profile: "
+                + json.dumps(
+                    profile,
+                    sort_keys=True,
+                ),
+            )
+        if workdirs:
+            lines.append(
+                "Detected workdirs: "
+                + ", ".join(
+                    str(w.get("id", ""))
+                    for w in workdirs[:6]
+                    if isinstance(w, dict)
+                ),
+            )
+        if not files:
+            lines.append(
+                "No matching files found for this query yet."
+            )
+        reply = "\n".join(lines)
 
     history.extend([
         {"role": "user", "content": message},
@@ -1121,6 +1471,8 @@ def chat_repo(req: RepoChatReq):
         "thread_id": thread_id,
         "repo_id": repo_id,
         "reply": reply,
+        "fallback": bool(fallback_reason),
+        "fallback_reason": fallback_reason,
         "context": {
             "files": context.get("files", []),
             "workdirs": context.get("workdirs", []),
@@ -1168,16 +1520,25 @@ def chat_text(req: TextChatReq):
         "content": message,
     })
 
-    llm = llm_chat(
-        messages=messages,
-        run_id=thread_id,
-        call_index=call_index,
-        repo_id="text-chat",
-        scenario="text_chat",
-    )
-    reply = str(llm.get("content", "")).strip()
-    if not reply:
-        reply = "No response generated."
+    fallback_reason = ""
+    try:
+        llm = llm_chat(
+            messages=messages,
+            run_id=thread_id,
+            call_index=call_index,
+            repo_id="text-chat",
+            scenario="text_chat",
+        )
+        reply = str(llm.get("content", "")).strip()
+        if not reply:
+            reply = "No response generated."
+    except HTTPException as exc:
+        fallback_reason = str(exc.detail)
+        reply = (
+            "LLM unavailable for text chat right now. "
+            "If you are using cassette replay mode, add a matching cassette "
+            "entry or switch cassette mode to record."
+        )
 
     history.extend([
         {"role": "user", "content": message},
@@ -1197,6 +1558,8 @@ def chat_text(req: TextChatReq):
         "ok": True,
         "thread_id": thread_id,
         "reply": reply,
+        "fallback": bool(fallback_reason),
+        "fallback_reason": fallback_reason,
     }
 
 
@@ -1503,6 +1866,52 @@ def kernel_replay_trace(run_id: Optional[str] = None):
     }
 
 
+@app.get("/kernel/replay/manifest/{run_id}")
+def kernel_replay_manifest(run_id: str):
+    path = _replay_manifest_path(run_id)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return {
+                "run_id": run_id,
+                "path": path,
+                "manifest": data,
+            }
+        except Exception as exc:
+            raise HTTPException(
+                500, f"manifest read failed: {exc}",
+            ) from exc
+    ctx = _RUN_CONTEXT.get(run_id)
+    if isinstance(ctx, dict) and isinstance(
+        ctx.get("replay_manifest"), dict,
+    ):
+        return {
+            "run_id": run_id,
+            "path": path,
+            "manifest": ctx["replay_manifest"],
+        }
+    raise HTTPException(404, "manifest not found")
+
+
+@app.get("/kernel/replay/manifest/check/{run_id}")
+def kernel_replay_manifest_check(run_id: str):
+    m = kernel_replay_manifest(run_id).get(
+        "manifest", {},
+    )
+    check = _replay_manifest_check(
+        m if isinstance(m, dict) else {},
+    )
+    return {
+        "run_id": run_id,
+        "ok": check.get("ok", False),
+        "missing": check.get("missing", []),
+        "required_count": check.get(
+            "required_count", 0,
+        ),
+    }
+
+
 def _sandbox_create(run_id: str, repo_id: str):
     """Ask executor to spin up a warm sandbox."""
     if not WARM_SANDBOX:
@@ -1551,8 +1960,9 @@ def run_step(
         "repo_id": repo_id,
         "iter": it,
         "step": step,
+        "warm_sandbox": bool(WARM_SANDBOX),
     }
-    if run_id and WARM_SANDBOX:
+    if run_id:
         payload["run_id"] = run_id
     if tier is not None:
         payload["tier"] = int(tier)
@@ -1997,10 +2407,17 @@ def learner_ingest(
 def run(req: RunReq):
     _METRICS["runs_total"] += 1
     scenario = req.scenario or "golden"
-    run_id = stable_id(
-        "run", SEED, req.repo_id, req.task,
-        str(req.max_iters), scenario, n=10,
-    )
+    if DETERMINISTIC_RUN_ID:
+        run_id = stable_id(
+            "run", SEED, req.repo_id, req.task,
+            str(req.max_iters), scenario, n=10,
+        )
+    else:
+        run_id = stable_id(
+            "run", SEED, req.repo_id, req.task,
+            str(req.max_iters), scenario,
+            str(time.time_ns()), n=12,
+        )
     run_seed = int(
         hashlib.sha256(
             f"{_EPISODE_SEED}|{run_id}".encode(
@@ -2022,7 +2439,7 @@ def run(req: RunReq):
             429,
             "too many active runs",
         )
-    _ensure_run_context(run_id)
+    run_ctx = _ensure_run_context(run_id)
     env_snapshot = (
         snapshot_environment(
             repo_path=f"/data/repos/{req.repo_id}",
@@ -2083,6 +2500,23 @@ def run(req: RunReq):
                 "image_hash",
             ),
         })
+    run_ctx["replay_manifest"] = _init_replay_manifest(
+        run_id=run_id,
+        repo_id=req.repo_id,
+        task=req.task,
+        scenario=scenario,
+        run_seed=run_seed,
+        env_snapshot=env_snapshot,
+        sandbox_info=sb_info if isinstance(sb_info, dict) else None,
+    )
+    _write_replay_manifest(
+        run_id, run_ctx["replay_manifest"],
+    )
+    ledger.append({
+        "type": "REPLAY_MANIFEST_UPDATED",
+        "run_id": run_id,
+        "status": "running",
+    })
 
     # Deterministic repo introspection + command inference.
     _bootstrap_command_plan(
@@ -2164,6 +2598,12 @@ def run(req: RunReq):
                     "status": "rejected",
                     "reason": ex["reason"],
                 })
+                _finalize_replay_manifest(
+                    run_id=run_id,
+                    status="rejected",
+                    reason=str(ex["reason"]),
+                    results_count=len(results),
+                )
                 _end_kernel_run(run_id)
                 return {
                     "run_id": run_id,
@@ -2191,6 +2631,12 @@ def run(req: RunReq):
                     "run_id": run_id,
                     "status": "fail",
                 })
+                _finalize_replay_manifest(
+                    run_id=run_id,
+                    status="fail",
+                    reason="tests-only fast-path step failed",
+                    results_count=len(results),
+                )
                 _end_kernel_run(run_id)
                 return {
                     "run_id": run_id,
@@ -2204,6 +2650,12 @@ def run(req: RunReq):
             "status": "ok",
         })
         _METRICS["runs_ok"] += 1
+        _finalize_replay_manifest(
+            run_id=run_id,
+            status="ok",
+            reason="tests-only fast-path succeeded",
+            results_count=len(results),
+        )
         _end_kernel_run(run_id)
         return {
             "run_id": run_id,
@@ -2224,6 +2676,17 @@ def run(req: RunReq):
     MAX_STEPS_PER_ITER = int(
         GATE_POLICY.get(
             "max_steps_per_bundle", 15,
+        ),
+    )
+    ENFORCE_TESTS = bool(
+        GATE_POLICY.get("enforce_tests", True),
+    )
+    PATCH_VERIFY_WINDOW_STEPS = max(
+        1,
+        int(
+            GATE_POLICY.get(
+                "patch_verify_window_steps", 4,
+            )
         ),
     )
     # Total steps across all iterations.
@@ -2511,6 +2974,13 @@ def run(req: RunReq):
 
         # RFSN phase tracker for this iteration.
         phase = PhaseTracker()
+        patch_verify = {
+            "pending": False,
+            "steps_since_patch": 0,
+            "targeted_ok": False,
+            "suite_ok": False,
+            "generic_ok_count": 0,
+        }
 
         while iter_steps_used < MAX_STEPS_PER_ITER:
             if _SCHEDULER and not _SCHEDULER.budget_ok(run_id):
@@ -2731,6 +3201,66 @@ def run(req: RunReq):
                         )
                     )
 
+            # Test template lock:
+            # keep test execution contract stable for this run.
+            test_key = _test_template_key(step)
+            if test_key:
+                reset_baseline = bool(
+                    step.pop("reset_test_baseline", False),
+                )
+                baseline_key = str(
+                    run_ctx.get(
+                        "baseline_test_template", "",
+                    )
+                )
+                if baseline_key and test_key != baseline_key:
+                    if (
+                        reset_baseline
+                        and not bool(patch_verify.get("pending"))
+                    ):
+                        run_ctx["baseline_test_template"] = test_key
+                        ledger.append({
+                            "type": "BASELINE_TEST_TEMPLATE_RESET",
+                            "run_id": run_id,
+                            "iter": it,
+                            "baseline": baseline_key,
+                            "new_template": test_key,
+                        })
+                    else:
+                        messages.append({
+                            "role": "assistant",
+                            "content": content,
+                        })
+                        messages.append({
+                            "role": "user",
+                            "content": (
+                                "TEMPLATE LOCK: test template must remain stable."
+                                f" baseline={baseline_key}"
+                                f" attempted={test_key}."
+                                " To reset baseline explicitly, set"
+                                " step.reset_test_baseline=true"
+                                " on a test step (only when no pending"
+                                " post-patch verification is active)."
+                            ),
+                        })
+                        ledger.append({
+                            "type": "TEMPLATE_LOCK_REJECT",
+                            "run_id": run_id,
+                            "iter": it,
+                            "baseline": baseline_key,
+                            "attempted": test_key,
+                            "reset_requested": bool(reset_baseline),
+                        })
+                        continue
+                if not baseline_key:
+                    run_ctx["baseline_test_template"] = test_key
+                    ledger.append({
+                        "type": "BASELINE_TEST_TEMPLATE_SET",
+                        "run_id": run_id,
+                        "iter": it,
+                        "template": test_key,
+                    })
+
             # ── RFSN phase transition check ──
             step_type = step.get("type", "")
             phase_ok, phase_err = (
@@ -2834,6 +3364,93 @@ def run(req: RunReq):
                 "ok" if step_status == 0
                 else f"FAILED (exit {step_status})"
             )
+            if (
+                approved_step.get("type") == "apply_patch"
+                and int(step_status) == 0
+            ):
+                patch_verify = {
+                    "pending": True,
+                    "steps_since_patch": 0,
+                    "targeted_ok": False,
+                    "suite_ok": False,
+                    "generic_ok_count": 0,
+                }
+                ledger.append({
+                    "type": "PATCH_APPLIED_AWAITING_TESTS",
+                    "run_id": run_id,
+                    "iter": it,
+                    "window_steps": PATCH_VERIFY_WINDOW_STEPS,
+                })
+            elif bool(patch_verify.get("pending")):
+                patch_verify["steps_since_patch"] = int(
+                    patch_verify.get("steps_since_patch", 0),
+                ) + 1
+
+            if (
+                bool(patch_verify.get("pending"))
+                and _is_test_step(approved_step)
+                and int(step_status) == 0
+            ):
+                variant = _test_step_variant(approved_step)
+                if variant == "targeted":
+                    patch_verify["targeted_ok"] = True
+                elif variant == "suite":
+                    patch_verify["suite_ok"] = True
+                else:
+                    patch_verify["generic_ok_count"] = int(
+                        patch_verify.get("generic_ok_count", 0),
+                    ) + 1
+                if _patch_verify_ok(patch_verify):
+                    patch_verify["pending"] = False
+                    ledger.append({
+                        "type": "PATCH_VERIFIED_BY_TESTS",
+                        "run_id": run_id,
+                        "iter": it,
+                        "variant": variant or "generic",
+                        "counts": {
+                            "targeted_ok": bool(
+                                patch_verify.get("targeted_ok"),
+                            ),
+                            "suite_ok": bool(
+                                patch_verify.get("suite_ok"),
+                            ),
+                            "generic_ok_count": int(
+                                patch_verify.get("generic_ok_count", 0),
+                            ),
+                        },
+                    })
+
+            if (
+                ENFORCE_TESTS
+                and bool(patch_verify.get("pending"))
+                and int(
+                    patch_verify.get("steps_since_patch", 0),
+                ) >= PATCH_VERIFY_WINDOW_STEPS
+                and not _patch_verify_ok(patch_verify)
+            ):
+                last_stage = "tests"
+                last_fail = (
+                    "Patch verification invariant failed:"
+                    " require targeted+suite tests"
+                    " (or two deterministic test passes)"
+                    f" within {PATCH_VERIFY_WINDOW_STEPS} steps after apply_patch."
+                )
+                ledger.append({
+                    "type": "PATCH_VERIFY_TIMEOUT",
+                    "run_id": run_id,
+                    "iter": it,
+                    "steps_since_patch": int(
+                        patch_verify.get("steps_since_patch", 0),
+                    ),
+                })
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "PATCH VERIFY INVARIANT: you applied a patch but did not"
+                        " complete required post-patch test verification in time."
+                    ),
+                })
+                break
             repair_state = run_ctx.get(
                 "repair", {
                     "phase": "SEARCH",
@@ -3050,6 +3667,37 @@ def run(req: RunReq):
             and r["out"].get("status", 1) == 0
             for r in iter_results
         )
+        if (
+            ENFORCE_TESTS
+            and patch_applied
+            and bool(patch_verify.get("pending"))
+            and not _patch_verify_ok(patch_verify)
+        ):
+            tests_passed = False
+            if not last_fail:
+                last_fail = (
+                    "Patch applied without required post-patch verification"
+                    " tests (targeted+suite or two deterministic passes)."
+                )
+            ledger.append({
+                "type": "PATCH_VERIFY_MISSING",
+                "run_id": run_id,
+                "iter": it,
+                "details": {
+                    "steps_since_patch": int(
+                        patch_verify.get("steps_since_patch", 0),
+                    ),
+                    "targeted_ok": bool(
+                        patch_verify.get("targeted_ok"),
+                    ),
+                    "suite_ok": bool(
+                        patch_verify.get("suite_ok"),
+                    ),
+                    "generic_ok_count": int(
+                        patch_verify.get("generic_ok_count", 0),
+                    ),
+                },
+            })
 
         if tests_passed and (
             not has_patch or patch_applied
@@ -3115,6 +3763,12 @@ def run(req: RunReq):
                                 "status": "rejected",
                                 "reason": ex["reason"],
                             })
+                            _finalize_replay_manifest(
+                                run_id=run_id,
+                                status="rejected",
+                                reason=str(ex["reason"]),
+                                results_count=len(iter_results),
+                            )
                             _end_kernel_run(run_id)
                             return {
                                 "run_id": run_id,
@@ -3175,6 +3829,12 @@ def run(req: RunReq):
                 stage="success",
             )
             _METRICS["runs_ok"] += 1
+            _finalize_replay_manifest(
+                run_id=run_id,
+                status="ok",
+                reason="iteration converged to success",
+                results_count=len(iter_results),
+            )
             _end_kernel_run(run_id)
             return {
                 "run_id": run_id,
@@ -3254,6 +3914,12 @@ def run(req: RunReq):
         stage=last_stage,
     )
     _METRICS["runs_fail"] += 1
+    _finalize_replay_manifest(
+        run_id=run_id,
+        status="fail",
+        reason=last_fail or "run failed",
+        results_count=0,
+    )
     _end_kernel_run(run_id)
     return {
         "run_id": run_id,

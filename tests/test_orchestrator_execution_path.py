@@ -138,6 +138,19 @@ def test_llm_response_schema_checks_are_strict():
     assert "done=true, step must" in src
 
 
+def test_post_patch_test_invariant_and_template_lock_present():
+    src = APP_PATH.read_text(encoding="utf-8")
+    assert "baseline_test_template" in src
+    assert "TEMPLATE_LOCK_REJECT" in src
+    assert "BASELINE_TEST_TEMPLATE_RESET" in src
+    assert "reset_test_baseline" in src
+    assert "PATCH_APPLIED_AWAITING_TESTS" in src
+    assert "PATCH_VERIFIED_BY_TESTS" in src
+    assert "PATCH_VERIFY_TIMEOUT" in src
+    assert "PATCH_VERIFY_MISSING" in src
+    assert "enforce_tests" in src
+
+
 def test_repo_import_and_chat_endpoints_exist():
     src = APP_PATH.read_text(encoding="utf-8")
     assert '@app.get("/repos")' in src
@@ -148,3 +161,19 @@ def test_repo_import_and_chat_endpoints_exist():
     assert '@app.post("/chat/text")' in src
     assert '@app.get("/chat/text/{thread_id}")' in src
     assert '@app.delete("/chat/text/{thread_id}")' in src
+    assert "LLM unavailable; returning context-only summary." in src
+    assert "\"fallback_reason\": fallback_reason" in src
+
+
+def test_replay_manifest_endpoints_and_events_exist():
+    src = APP_PATH.read_text(encoding="utf-8")
+    assert '@app.get("/kernel/replay/manifest/{run_id}")' in src
+    assert '@app.get("/kernel/replay/manifest/check/{run_id}")' in src
+    assert "REPLAY_MANIFEST_UPDATED" in src
+
+
+def test_repo_head_fallback_without_git_binary_exists():
+    src = APP_PATH.read_text(encoding="utf-8")
+    assert 'os.path.join(repo_path, ".git")' in src
+    assert '"packed-refs"' in src
+    assert "ref: " in src

@@ -8,7 +8,10 @@ from pydantic import BaseModel  # type: ignore[import-not-found]
 import yaml  # type: ignore[import-untyped]
 import requests  # type: ignore[import-untyped]
 
-from policy import validate_repo_path
+from policy import (
+    validate_repo_path,
+    extract_patch_touched_paths,
+)
 from workdir_store import WorkdirStore
 
 import sys
@@ -66,6 +69,24 @@ _EFFECTIVE_MAX_ADDED = int(
 _EFFECTIVE_MAX_DELETED = int(
     GATE_POLICY.get("max_deleted_lines", 40),
 )
+_EFFECTIVE_MAX_TOTAL = int(
+    GATE_POLICY.get(
+        "max_patch_total_lines",
+        _EFFECTIVE_MAX_ADDED + _EFFECTIVE_MAX_DELETED,
+    ),
+)
+_BLOCKED_READ_PREFIXES = tuple(
+    str(x) for x in (
+        GATE_POLICY.get("blocked_read_prefixes", [])
+        or []
+    ) if isinstance(x, str) and x.strip()
+)
+_BLOCKED_READ_SUFFIXES = tuple(
+    str(x) for x in (
+        GATE_POLICY.get("blocked_read_suffixes", [])
+        or []
+    ) if isinstance(x, str) and x.strip()
+)
 
 ALLOWED_TYPES = set(ALLOW.get("allowed_step_types", []))
 ALLOWED_PATHS = ALLOW.get("allowed_paths", ["**"])
@@ -87,19 +108,25 @@ MAX_READ_STEPS = int(ALLOW.get("max_read_steps_per_iter", 6))
 MAX_SEARCH_STEPS = int(ALLOW.get("max_search_steps_per_iter", 4))
 MAX_BYTES_PER_ITER = int(ALLOW.get("max_bytes_returned_per_iter", 250000))
 
-# (repo_id, iter) -> usage
-ITER_USAGE: dict[tuple[str, int], dict] = {}
+# (repo_id, run_scope, iter) -> usage
+ITER_USAGE: dict[tuple[str, str, int], dict] = {}
 
 
-def usage_key(repo_id: str, it: int):
-    return (repo_id, it)
+def usage_key(
+    repo_id: str,
+    it: int,
+    run_id: str | None = None,
+):
+    scope = run_id or f"repo:{repo_id}"
+    return (repo_id, scope, it)
 
 
 def charge(
     repo_id: str, it: int,
     kind: str, bytes_out: int = 0,
+    run_id: str | None = None,
 ):
-    k = usage_key(repo_id, it)
+    k = usage_key(repo_id, it, run_id)
     u = ITER_USAGE.setdefault(
         k, {"reads": 0, "searches": 0, "bytes": 0}
     )
@@ -116,13 +143,20 @@ def charge(
         if u["bytes"] > MAX_BYTES_PER_ITER:
             raise HTTPException(429, "bytes budget exceeded")
 
-    # prune old iters per repo (keep last 5)
-    keys = [kk for kk in ITER_USAGE.keys() if kk[0] == repo_id]
-    iters = sorted({kk[1] for kk in keys})
+    # prune old iters per run-scope (keep last 5)
+    keys = [
+        kk for kk in ITER_USAGE.keys()
+        if kk[0] == repo_id and kk[1] == k[1]
+    ]
+    iters = sorted({kk[2] for kk in keys})
     if len(iters) > 5:
         drop = set(iters[:-5])
         for kk in list(ITER_USAGE.keys()):
-            if kk[0] == repo_id and kk[1] in drop:
+            if (
+                kk[0] == repo_id
+                and kk[1] == k[1]
+                and kk[2] in drop
+            ):
                 del ITER_USAGE[kk]
 
 
@@ -151,6 +185,7 @@ class RunStepReq(BaseModel):
     step: Step
     run_id: Optional[str] = None
     tier: Optional[int] = None
+    warm_sandbox: Optional[bool] = None
 
 
 class RunCleanupReq(BaseModel):
@@ -228,8 +263,9 @@ def health():
 def _executor(
     step: dict, repo_id: str, it: int,
     run_id: str | None = None,
+    run_warm: bool = False,
 ):
-    if run_id:
+    if run_id and run_warm:
         # Route through warm sandbox.
         r = requests.post(
             f"{EXECUTOR_URL}/run_warm",
@@ -276,7 +312,7 @@ def run_step(
     if s["type"] not in ALLOWED_TYPES:
         raise HTTPException(403, f"step type blocked: {s['type']}")
     if s["type"] in ("repo_search", "detect_project", "detect_workdirs"):
-        charge(req.repo_id, req.iter, "search")
+        charge(req.repo_id, req.iter, "search", run_id=req.run_id)
 
     if s["type"] == "repo_read_range":
         p = s.get("path") or ""
@@ -286,9 +322,11 @@ def run_step(
             BLOCKED_GLOBS,
             repo_root_required=REPO_ROOT_REQUIRED,
             repo_root=repo_root,
+            blocked_prefixes=_BLOCKED_READ_PREFIXES,
+            blocked_suffixes=_BLOCKED_READ_SUFFIXES,
         ):
             raise HTTPException(403, "path blocked")
-        charge(req.repo_id, req.iter, "read")
+        charge(req.repo_id, req.iter, "read", run_id=req.run_id)
     if s["type"] == "read_file":
         p = s.get("path") or ""
         if not validate_repo_path(
@@ -297,9 +335,11 @@ def run_step(
             BLOCKED_GLOBS,
             repo_root_required=REPO_ROOT_REQUIRED,
             repo_root=repo_root,
+            blocked_prefixes=_BLOCKED_READ_PREFIXES,
+            blocked_suffixes=_BLOCKED_READ_SUFFIXES,
         ):
             raise HTTPException(403, "path blocked")
-        charge(req.repo_id, req.iter, "read")
+        charge(req.repo_id, req.iter, "read", run_id=req.run_id)
     if s["type"] == "detect_workdirs":
         max_depth = int(s.get("max_depth") or 4)
         if max_depth < 1 or max_depth > 8:
@@ -377,23 +417,16 @@ def run_step(
             r'\.netrc$', r'Dockerfile', r'docker-compose',
         ]
 
-        header_paths = set(re.findall(
-            r"^[+]{3} b/(.+)$|^--- a/(.+)$",
-            patch_text, flags=re.MULTILINE,
-        ))
-        flat = set()
-        for a, b in header_paths:
-            if a:
-                flat.add(a.strip())
-            if b:
-                flat.add(b.strip())
-        for f in flat:
+        touched_paths = extract_patch_touched_paths(patch_text)
+        for f in touched_paths:
             if not validate_repo_path(
                 f,
                 ALLOWED_PATHS,
                 BLOCKED_GLOBS,
                 repo_root_required=REPO_ROOT_REQUIRED,
                 repo_root=repo_root,
+                blocked_prefixes=_BLOCKED_READ_PREFIXES,
+                blocked_suffixes=_BLOCKED_READ_SUFFIXES,
             ):
                 raise HTTPException(
                     403,
@@ -408,17 +441,11 @@ def run_step(
                     )
 
         # --- diff-guard: max_changed_files ---
-        files_touched = set()
-        for line in patch_text.splitlines():
-            if line.startswith("diff --git "):
-                parts = line.split()
-                if len(parts) >= 4:
-                    files_touched.add(parts[2].replace("a/", "", 1))
-        if len(files_touched) > _EFFECTIVE_MAX_FILES:
+        if len(touched_paths) > _EFFECTIVE_MAX_FILES:
             raise HTTPException(
                 403,
                 "diff guard: too many files changed"
-                f" ({len(files_touched)} > {_EFFECTIVE_MAX_FILES})",
+                f" ({len(touched_paths)} > {_EFFECTIVE_MAX_FILES})",
             )
 
         # --- diff-guard: max_added_lines / max_deleted_lines ---
@@ -441,6 +468,13 @@ def run_step(
                 "diff guard: too many deleted lines"
                 f" ({deleted_lines} > {_EFFECTIVE_MAX_DELETED})",
             )
+        total_changed = added_lines + deleted_lines
+        if total_changed > _EFFECTIVE_MAX_TOTAL:
+            raise HTTPException(
+                403,
+                "diff guard: too many total changed lines"
+                f" ({total_changed} > {_EFFECTIVE_MAX_TOTAL})",
+            )
 
     # Enforce per-step budgets from kernel
     # gate policy (unified source of truth).
@@ -454,7 +488,11 @@ def run_step(
         s["timeout_s"] = min(cur, max_t)
 
     out = _executor(
-        s, req.repo_id, req.iter, req.run_id,
+        s,
+        req.repo_id,
+        req.iter,
+        req.run_id,
+        run_warm=bool(req.run_id and req.warm_sandbox),
     )
 
     # charge output bytes (stable cap) for reads/searches
@@ -472,7 +510,13 @@ def run_step(
         "detect_project",
         "detect_workdirs",
     ):
-        charge(req.repo_id, req.iter, "bytes", bytes_out=b)
+        charge(
+            req.repo_id,
+            req.iter,
+            "bytes",
+            bytes_out=b,
+            run_id=req.run_id,
+        )
 
     if s["type"] == "detect_workdirs" and out.get("status", 1) == 0:
         _store_workdirs(req.run_id, out)

@@ -31,8 +31,58 @@ if _HAS_AUTH:
 BLESSED_IMAGE = os.getenv("BLESSED_IMAGE", "rfsn-blessed:0.2")
 HOST_DATA_DIR = os.getenv("HOST_DATA_DIR", "/data")
 USE_DOCKER_SANDBOX = os.getenv(
-    "RFSN_EXEC_USE_DOCKER", "0",
+    "RFSN_EXEC_USE_DOCKER", "1",
 ) == "1"
+DEV_MODE = os.getenv("RFSN_DEV_MODE", "0") == "1"
+ALLOW_LOCAL_EXEC = os.getenv(
+    "RFSN_ALLOW_LOCAL_EXEC", "0",
+) == "1"
+
+
+def _local_exec_allowed() -> bool:
+    return DEV_MODE and ALLOW_LOCAL_EXEC
+
+
+def _docker_runtime_available() -> bool:
+    """Best-effort runtime availability check for strict sandbox mode."""
+    try:
+        p = subprocess.run(
+            ["docker", "version", "--format", "{{.Server.Version}}"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except Exception:
+        return False
+    return p.returncode == 0 and bool((p.stdout or "").strip())
+
+
+DOCKER_RUNTIME_AVAILABLE = (
+    _docker_runtime_available()
+    if USE_DOCKER_SANDBOX else False
+)
+if USE_DOCKER_SANDBOX and not DOCKER_RUNTIME_AVAILABLE:
+    if _local_exec_allowed():
+        print(
+            "WARN: Docker runtime unavailable; "
+            "falling back to dev-only local execution",
+            flush=True,
+        )
+        USE_DOCKER_SANDBOX = False
+    else:
+        raise SystemExit(
+            "RFSN_EXEC_USE_DOCKER=1 but docker runtime is unavailable. "
+            "Use a sandbox runtime, or set RFSN_DEV_MODE=1 and "
+            "RFSN_ALLOW_LOCAL_EXEC=1 for dev-only local mode.",
+        )
+
+if not USE_DOCKER_SANDBOX and not _local_exec_allowed():
+    raise SystemExit(
+        "RFSN_EXEC_USE_DOCKER=0 is disabled unless "
+        "RFSN_DEV_MODE=1 and RFSN_ALLOW_LOCAL_EXEC=1",
+    )
 
 # ── Warm sandbox pool ─────────────────────────
 try:
@@ -154,7 +204,11 @@ def _result(
     command: list[str] | None = None,
     workdir: str | None = None,
 ):
-    status = int(out.get("status", 1) or 1)
+    status_raw = out.get("status", 1)
+    if status_raw is None:
+        status = 1
+    else:
+        status = int(status_raw)
     logs = str(out.get("logs", "") or "")
     return {
         "status": status,
@@ -176,6 +230,9 @@ def health():
     return {
         "ok": True,
         "image": BLESSED_IMAGE,
+        "mode": "docker" if USE_DOCKER_SANDBOX else "local",
+        "docker_runtime_available": DOCKER_RUNTIME_AVAILABLE,
+        "local_exec_allowed": _local_exec_allowed(),
         "sandbox_pool": pool_stats,
     }
 
@@ -531,11 +588,19 @@ def _paths(repo_id: str):
     os.makedirs(wheels_local, exist_ok=True)
     if not os.path.isdir(repo_local):
         raise HTTPException(404, f"repo not found at /data/repos/{repo_id}")
-    repo_host = os.path.join(HOST_DATA_DIR, "repos", repo_id)
-    art_host = os.path.join(HOST_DATA_DIR, "artifacts", repo_id)
-    venv_host = os.path.join(HOST_DATA_DIR, "venv", repo_id)
-    wheels_host = os.path.join(HOST_DATA_DIR, "wheels", repo_id)
-    return repo_host, art_host, venv_host, wheels_host
+    if USE_DOCKER_SANDBOX:
+        # Nested docker mode mounts host paths into blessed containers.
+        repo_exec = os.path.join(HOST_DATA_DIR, "repos", repo_id)
+        art_exec = os.path.join(HOST_DATA_DIR, "artifacts", repo_id)
+        venv_exec = os.path.join(HOST_DATA_DIR, "venv", repo_id)
+        wheels_exec = os.path.join(HOST_DATA_DIR, "wheels", repo_id)
+    else:
+        # Local mode runs inside this container and must use container paths.
+        repo_exec = repo_local
+        art_exec = art_local
+        venv_exec = venv_local
+        wheels_exec = wheels_local
+    return repo_exec, art_exec, venv_exec, wheels_exec
 
 
 def _write_data_file(data: str, suffix: str = ".txt") -> str:
@@ -559,19 +624,26 @@ def _run_docker_with_data(
 
     Security features:
     - --user 1000:1000 (non-root)
-    - --no-new-privileges
+    - --security-opt no-new-privileges:true
     - --memory 2g / --cpus 2 / --pids-limit 256
     - --cap-drop ALL
     """
     if not USE_DOCKER_SANDBOX:
-        return _run_local_with_data(
-            script,
-            data_files,
-            repo_host,
-            art_host,
-            venv_host,
-            wheels_host,
-            timeout_s,
+        if _local_exec_allowed():
+            return _run_local_with_data(
+                script,
+                data_files,
+                repo_host,
+                art_host,
+                venv_host,
+                wheels_host,
+                timeout_s,
+            )
+        raise HTTPException(
+            503,
+            "docker sandbox is required"
+            " (set RFSN_DEV_MODE=1 and"
+            " RFSN_ALLOW_LOCAL_EXEC=1 for dev-only local mode)",
         )
 
     script_path = _write_data_file(script, suffix=".sh")
@@ -585,7 +657,7 @@ def _run_docker_with_data(
             "docker", "run", "--rm",
             "--network", net,
             "--user", "1000:1000",
-            "--no-new-privileges",
+            "--security-opt", "no-new-privileges:true",
             "--memory", "2g",
             "--cpus", "2",
             "--pids-limit", "256",
@@ -630,14 +702,19 @@ def _run_docker_with_data(
                 )[-200000:],
             }
         except FileNotFoundError:
-            return _run_local_with_data(
-                script,
-                data_files,
-                repo_host,
-                art_host,
-                venv_host,
-                wheels_host,
-                timeout_s,
+            if _local_exec_allowed():
+                return _run_local_with_data(
+                    script,
+                    data_files,
+                    repo_host,
+                    art_host,
+                    venv_host,
+                    wheels_host,
+                    timeout_s,
+                )
+            raise HTTPException(
+                503,
+                "docker binary unavailable and local fallback disabled",
             )
         except Exception as e:
             raise HTTPException(500, f"executor error: {type(e).__name__}")
@@ -678,9 +755,28 @@ def _run_local_with_data(
         translated = translated.replace(
             src, shlex.quote(dst),
         )
+    translated = translated.replace(
+        "cd repo",
+        f"cd {shlex.quote(repo_host)}",
+    )
+
+    setup_lines: list[str] = []
     for cpath, hpath in data_files.items():
-        translated = translated.replace(
-            cpath, shlex.quote(hpath),
+        cdir = os.path.dirname(cpath) or "/tmp"
+        setup_lines.append(
+            f"mkdir -p {shlex.quote(cdir)}"
+        )
+        setup_lines.append(
+            "cp "
+            f"{shlex.quote(hpath)} "
+            f"{shlex.quote(cpath)}"
+        )
+    if setup_lines:
+        translated = (
+            "# local-mode data mounts\n"
+            + "\n".join(setup_lines)
+            + "\n"
+            + translated
         )
 
     try:

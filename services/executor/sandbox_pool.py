@@ -7,7 +7,7 @@ the run ends (success, fail, or timeout).
 
 Security model is identical to the ephemeral path:
   - --user 1000:1000 (non-root)
-  - --no-new-privileges
+  - --security-opt no-new-privileges:true
   - --memory 2g / --cpus 2 / --pids-limit 256
   - --cap-drop ALL
   - network disabled by default
@@ -270,7 +270,7 @@ class SandboxPool:
             "--name", name,
             "--network", network,
             "--user", "1000:1000",
-            "--no-new-privileges",
+            "--security-opt", "no-new-privileges:true",
             "--memory", "2g",
             "--cpus", "2",
             "--pids-limit", "256",

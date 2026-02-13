@@ -5,6 +5,7 @@ services:
     volumes:
       - ./policies:/policies:ro
       - ./shared:/shared:ro
+      - ./rfsn_kernel:/app/rfsn_kernel:ro
       - ./data:/data
     environment:
       LLM_URL: http://llm_service:8001
@@ -14,6 +15,7 @@ services:
       LEDGER_FIXED_TS: ${LEDGER_FIXED_TS:-1.0}
       RFSN_SERVICE_TOKEN: ${RFSN_SERVICE_TOKEN:-}
       RFSN_DEV_MODE: ${RFSN_DEV_MODE:-0}
+      RFSN_WARM_SANDBOX: ${RFSN_WARM_SANDBOX:-1}
     deploy:
       resources:
         limits:
@@ -27,7 +29,7 @@ services:
       learner_service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf -H \"authorization: Bearer $${RFSN_SERVICE_TOKEN}\" http://localhost:8000/health > /dev/null"]
+      test: ["CMD", "python", "-c", "import os,urllib.request; t=os.getenv('RFSN_SERVICE_TOKEN',''); h={'Authorization':'Bearer '+t} if t else {}; urllib.request.urlopen(urllib.request.Request('http://localhost:8000/health', headers=h), timeout=3).read()"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -53,7 +55,7 @@ services:
           memory: 512m
           cpus: '1'
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf -H \"authorization: Bearer $${RFSN_SERVICE_TOKEN}\" http://localhost:8001/health > /dev/null"]
+      test: ["CMD", "python", "-c", "import os,urllib.request; t=os.getenv('RFSN_SERVICE_TOKEN',''); h={'Authorization':'Bearer '+t} if t else {}; urllib.request.urlopen(urllib.request.Request('http://localhost:8001/health', headers=h), timeout=3).read()"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -79,7 +81,7 @@ services:
       executor:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf -H \"authorization: Bearer $${RFSN_SERVICE_TOKEN}\" http://localhost:8002/health > /dev/null"]
+      test: ["CMD", "python", "-c", "import os,urllib.request; t=os.getenv('RFSN_SERVICE_TOKEN',''); h={'Authorization':'Bearer '+t} if t else {}; urllib.request.urlopen(urllib.request.Request('http://localhost:8002/health', headers=h), timeout=3).read()"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -96,7 +98,8 @@ services:
     environment:
       BLESSED_IMAGE: ${BLESSED_IMAGE:-rfsn-blessed:0.2}
       HOST_DATA_DIR: ${HOST_DATA_DIR:-${PWD}/data}
-      RFSN_EXEC_USE_DOCKER: ${RFSN_EXEC_USE_DOCKER:-0}
+      RFSN_EXEC_USE_DOCKER: ${RFSN_EXEC_USE_DOCKER:-1}
+      RFSN_ALLOW_LOCAL_EXEC: ${RFSN_ALLOW_LOCAL_EXEC:-0}
       RFSN_SERVICE_TOKEN: ${RFSN_SERVICE_TOKEN:-}
       RFSN_DEV_MODE: ${RFSN_DEV_MODE:-0}
     deploy:
@@ -105,7 +108,7 @@ services:
           memory: 1g
           cpus: '2'
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf -H \"authorization: Bearer $${RFSN_SERVICE_TOKEN}\" http://localhost:8003/health > /dev/null"]
+      test: ["CMD", "python", "-c", "import os,urllib.request; t=os.getenv('RFSN_SERVICE_TOKEN',''); h={'Authorization':'Bearer '+t} if t else {}; urllib.request.urlopen(urllib.request.Request('http://localhost:8003/health', headers=h), timeout=3).read()"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -127,7 +130,7 @@ services:
           memory: 512m
           cpus: '1'
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf -H \"authorization: Bearer $${RFSN_SERVICE_TOKEN}\" http://localhost:8004/health > /dev/null"]
+      test: ["CMD", "python", "-c", "import os,urllib.request; t=os.getenv('RFSN_SERVICE_TOKEN',''); h={'Authorization':'Bearer '+t} if t else {}; urllib.request.urlopen(urllib.request.Request('http://localhost:8004/health', headers=h), timeout=3).read()"]
       interval: 10s
       timeout: 5s
       retries: 3

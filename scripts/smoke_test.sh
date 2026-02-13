@@ -1,80 +1,127 @@
 #!/usr/bin/env bash
-# smoke_test.sh — Verify the full RFSN stack is healthy and can run a fixture.
-#
-# After security hardening, only the orchestrator (port 8000) is exposed
-# to the host.  Executor, tool_gateway, and llm_service are internal-only.
-#
-# Prerequisites:
-#   1. docker compose up --build -d
-#   2. blessed image built (docker build -t rfsn-blessed:0.2 -f blessed.Dockerfile .)
-#   3. Fixture repo prepared in data/repos/<repo_id>
+# smoke_test.sh — End-to-end smoke for the hardened orchestrator API.
 #
 # Usage:
-#   ./scripts/smoke_test.sh [repo_id]
+#   RFSN_SERVICE_TOKEN=... ./scripts/smoke_test.sh \
+#     [repo_url] [repo_id]
+#
+# Defaults:
+#   repo_url=https://github.com/pypa/sampleproject.git
+#   repo_id=smoke-sampleproject
 set -euo pipefail
 
-REPO_ID="${1:-demo_failrepo}"
 BASE="${ORCHESTRATOR_URL:-http://localhost:8000}"
+REPO_URL="${1:-https://github.com/pypa/sampleproject.git}"
+REPO_ID="${2:-smoke-sampleproject}"
+TOKEN="${RFSN_SERVICE_TOKEN:-}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m'
 
-pass() { echo -e "${GREEN}[✓]${NC} $1"; }
-warn() { echo -e "${YELLOW}[!]${NC} $1"; }
-fail() { echo -e "${RED}[✗]${NC} $1"; exit 1; }
+pass() { echo -e "${GREEN}[ok]${NC} $1"; }
+warn() { echo -e "${YELLOW}[warn]${NC} $1"; }
+fail() { echo -e "${RED}[fail]${NC} $1"; exit 1; }
 
-echo "=== RFSN Stack Smoke Test ==="
-echo "    Repo ID: $REPO_ID"
-echo "    Orchestrator: $BASE"
-echo ""
-
-# --- Health check: orchestrator (only exposed port) ---
-echo "--- Health Check ---"
-code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/health" 2>/dev/null || echo "000")
-if [[ "$code" == "200" ]]; then
-    pass "orchestrator $BASE/health"
+AUTH_ARGS=()
+if [[ -n "$TOKEN" ]]; then
+  AUTH_ARGS=(-H "Authorization: Bearer $TOKEN")
 else
-    fail "orchestrator $BASE/health returned $code — is the stack up?"
+  warn "RFSN_SERVICE_TOKEN not set; calls may fail if auth is enforced."
 fi
 
-# Internal services health via docker exec (if containers are running)
-for svc in llm_service tool_gateway executor; do
-    container="rfsn-agent-${svc}-1"
-    if docker ps --format '{{.Names}}' | grep -q "$container"; then
-        port=8001
-        [[ "$svc" == "tool_gateway" ]] && port=8002
-        [[ "$svc" == "executor" ]] && port=8003
-        h=$(docker exec "$container" curl -sf "http://localhost:${port}/health" 2>/dev/null || echo "FAIL")
-        if echo "$h" | grep -q '"ok"'; then
-            pass "$svc internal health"
-        else
-            warn "$svc internal health check: $h"
-        fi
-    else
-        warn "$svc container not found (name=$container)"
-    fi
-done
-echo ""
+echo "=== RFSN End-to-End Smoke ==="
+echo "orchestrator=$BASE"
+echo "repo_url=$REPO_URL"
+echo "repo_id=$REPO_ID"
+echo
 
-# --- Orchestrator: /run (quick, max_iters=1) ---
-echo "--- Orchestrator: /run (max_iters=1) ---"
-ORCH_RESP=$(curl -s -X POST "$BASE/run" \
-    -H 'Content-Type: application/json' \
-    -d "{
-        \"repo_id\": \"$REPO_ID\",
-        \"task\": \"Fix the failing test. Minimal diff only.\",
-        \"max_iters\": 1,
-        \"scenario\": \"smoke_test\"
-    }" --max-time 180 2>/dev/null)
+echo "--- /health ---"
+HEALTH="$(curl -sS "${AUTH_ARGS[@]}" "$BASE/health" || true)"
+echo "$HEALTH"
+python3 - <<'PY' "$HEALTH" || fail "health check failed"
+import json,sys
+obj=json.loads(sys.argv[1])
+assert obj.get("ok") is True
+PY
+pass "health ok"
 
-ORCH_STATUS=$(echo "$ORCH_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || echo "?")
-if [[ "$ORCH_STATUS" != "?" ]]; then
-    pass "orchestrator /run returned status=$ORCH_STATUS"
-else
-    warn "orchestrator /run response: $ORCH_RESP"
-fi
-echo ""
+echo "--- /repos/import ---"
+IMPORT="$(curl -sS -X POST "$BASE/repos/import" \
+  "${AUTH_ARGS[@]}" \
+  -H 'Content-Type: application/json' \
+  -d "{\"repo_url\":\"$REPO_URL\",\"repo_id\":\"$REPO_ID\",\"depth\":1,\"force\":true}")"
+echo "$IMPORT"
+python3 - <<'PY' "$IMPORT" || fail "repo import failed"
+import json,sys
+obj=json.loads(sys.argv[1])
+assert obj.get("ok") is True
+assert obj.get("repo_id")
+PY
+pass "repo imported"
 
-echo "=== Smoke test complete ==="
+echo "--- /run (tests-only fast path) ---"
+RUN="$(curl -sS -X POST "$BASE/run" \
+  "${AUTH_ARGS[@]}" \
+  -H 'Content-Type: application/json' \
+  -d "{\"repo_id\":\"$REPO_ID\",\"task\":\"run tests only and make no changes\",\"max_iters\":2,\"scenario\":\"smoke_test\"}")"
+echo "$RUN"
+RUN_STATUS="$(python3 - <<'PY' "$RUN"
+import json,sys
+obj=json.loads(sys.argv[1])
+print(obj.get("status",""))
+PY
+)"
+RUN_ID="$(python3 - <<'PY' "$RUN"
+import json,sys
+obj=json.loads(sys.argv[1])
+print(obj.get("run_id",""))
+PY
+)"
+[[ "$RUN_STATUS" == "ok" ]] || fail "run failed with status=$RUN_STATUS"
+[[ -n "$RUN_ID" ]] || fail "run_id missing"
+pass "run ok ($RUN_ID)"
+
+echo "--- /kernel/replay/manifest/check/$RUN_ID ---"
+MANIFEST_CHECK="$(curl -sS "${AUTH_ARGS[@]}" "$BASE/kernel/replay/manifest/check/$RUN_ID")"
+echo "$MANIFEST_CHECK"
+python3 - <<'PY' "$MANIFEST_CHECK" || fail "manifest check failed"
+import json,sys
+obj=json.loads(sys.argv[1])
+assert obj.get("ok") is True
+PY
+pass "replay manifest check ok"
+
+echo "--- /chat (repo) ---"
+CHAT_REPO="$(curl -sS -X POST "$BASE/chat" \
+  "${AUTH_ARGS[@]}" \
+  -H 'Content-Type: application/json' \
+  -d "{\"repo_id\":\"$REPO_ID\",\"message\":\"Where are tests?\",\"max_files\":5}")"
+echo "$CHAT_REPO"
+python3 - <<'PY' "$CHAT_REPO" || fail "repo chat failed"
+import json,sys
+obj=json.loads(sys.argv[1])
+assert obj.get("ok") is True
+assert obj.get("thread_id")
+assert obj.get("reply")
+PY
+pass "repo chat ok"
+
+echo "--- /chat/text ---"
+CHAT_TEXT="$(curl -sS -X POST "$BASE/chat/text" \
+  "${AUTH_ARGS[@]}" \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"hello from smoke test"}')"
+echo "$CHAT_TEXT"
+python3 - <<'PY' "$CHAT_TEXT" || fail "text chat failed"
+import json,sys
+obj=json.loads(sys.argv[1])
+assert obj.get("ok") is True
+assert obj.get("thread_id")
+assert obj.get("reply")
+PY
+pass "text chat ok"
+
+echo
+echo "=== Smoke complete ==="
