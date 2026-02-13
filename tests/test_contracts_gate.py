@@ -1,4 +1,5 @@
 """Tests for rfsn_swebench contracts and gate module."""
+
 import os
 import sys
 
@@ -29,7 +30,7 @@ def test_bench_task_defaults():
         workdir="/tmp/test",
         issue_text="Fix bug",
     )
-    assert t.limits.max_iters == 8
+    assert t.limits.max_iters == 10
     assert t.commands.test_quick == "pytest -q"
 
 
@@ -48,7 +49,8 @@ def test_bench_result_to_dict():
             ),
         },
         risk=RiskReport(
-            decision="ALLOW", reasons=[],
+            decision="ALLOW",
+            reasons=[],
         ),
         replay_dir="/tmp/replay",
     )
@@ -69,17 +71,14 @@ def test_task_limits_customisation():
     assert lim.max_patch_bytes == 50000
     # defaults preserved
     assert lim.max_files_touched == 25
-    assert lim.max_runtime_sec == 1800
+    assert lim.max_runtime_sec == 3600
 
 
 # ── gate ─────────────────────────────────────
 
 
 def test_gate_allows_small_patch():
-    patch = (
-        "--- a/x.py\n+++ b/x.py\n"
-        "@@ -1 +1 @@\n-old\n+new\n"
-    )
+    patch = "--- a/x.py\n+++ b/x.py\n" "@@ -1 +1 @@\n-old\n+new\n"
     r = patch_risk_gate(patch, 100000, 10, 5)
     assert r.decision == "ALLOW"
     assert r.reasons == [] or len(r.reasons) == 0
@@ -113,6 +112,7 @@ def test_gate_empty_patch():
 
 def test_choose_quick_tests_default():
     from rfsn_swebench.testsel import choose_quick_tests
+
     hints = TaskHints(
         failing_tests=["tests/test_a.py::test_one"],
     )

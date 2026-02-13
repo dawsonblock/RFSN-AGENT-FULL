@@ -44,10 +44,11 @@ import sys
 import time
 from typing import Any, Optional
 
+# Add parent dir to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-def _find_task_files(
-    tasks_dir: str, manifest_path: Optional[str] = None
-) -> list[str]:
+
+def _find_task_files(tasks_dir: str, manifest_path: Optional[str] = None) -> list[str]:
     """Discover task JSON files, optionally filtered by manifest."""
     if manifest_path:
         with open(manifest_path, "r", encoding="utf-8") as f:
@@ -60,8 +61,7 @@ def _find_task_files(
                 paths.append(p)
             else:
                 print(
-                    f"  WARN: manifest lists {tid}"
-                    f" but {p} not found",
+                    f"  WARN: manifest lists {tid}" f" but {p} not found",
                     file=sys.stderr,
                 )
         return sorted(paths)
@@ -87,10 +87,15 @@ def _build_cli_args(
 ) -> list[str]:
     """Build the CLI command to run a single task."""
     cmd = [
-        sys.executable, "-m", "rfsn_swebench.cli",
-        "--task", task_path,
-        "--out", result_path,
-        "--proposer", args.proposer,
+        sys.executable,
+        "-m",
+        "rfsn_swebench.cli",
+        "--task",
+        task_path,
+        "--out",
+        result_path,
+        "--proposer",
+        args.proposer,
     ]
 
     if args.replay_base:
@@ -114,6 +119,8 @@ def _build_cli_args(
         cmd.extend(["--gateway-url", args.gateway_url])
     if args.data_dir:
         cmd.extend(["--data-dir", args.data_dir])
+    if args.outcome_memory:
+        cmd.extend(["--outcome-memory", args.outcome_memory])
 
     return cmd
 
@@ -127,24 +134,84 @@ def _load_result(path: str) -> dict:
         return {}
 
 
+def _record_batch_outcome(
+    memory_path: str,
+    task_id: str,
+    result: dict,
+) -> None:
+    """Record task outcome to the persistent outcome memory."""
+    try:
+        from rfsn_swebench.outcome_memory import OutcomeMemory
+    except ImportError:
+        return  # graceful degradation
+
+    status = result.get("status", "UNKNOWN")
+    repo = task_id.rsplit("-", 1)[0] if "-" in task_id else task_id
+
+    # Determine error type and summary
+    error_type = ""
+    error_summary = ""
+    if status == "GATE_REJECT":
+        error_type = "gate_reject"
+        reasons = result.get("risk", {}).get("reasons", [])
+        error_summary = "; ".join(reasons[:3]) if reasons else "Gate rejected"
+    elif status == "FAIL":
+        error_type = "test_fail"
+        quick = result.get("tests", {}).get("quick", {})
+        stdout = quick.get("stdout_tail", "")
+        # Extract the first failure line
+        for line in stdout.split("\n"):
+            if "FAILED" in line or "Error" in line:
+                error_summary = line.strip()[:200]
+                break
+        if not error_summary:
+            error_summary = "Tests failed"
+    elif status == "ABORT":
+        error_type = "abort"
+        error_summary = "Task aborted (timeout or setup failure)"
+
+    # Extract files changed from patch
+    patch = result.get("final_patch_unified_diff", "")
+    files_changed = []
+    for line in patch.split("\n"):
+        if line.startswith("+++ b/"):
+            files_changed.append(line[6:].strip())
+
+    mem = OutcomeMemory(memory_path)
+    mem.record(
+        task_id=task_id,
+        status=status,
+        repo=repo,
+        error_type=error_type,
+        error_summary=error_summary,
+        files_changed=files_changed,
+        patch_snippet=patch[:500],
+        iters_used=result.get("iters", 0),
+    )
+
+
 def main(argv: Optional[list[str]] = None) -> None:
     ap = argparse.ArgumentParser(
         description="Batch runner for RFSN SWE-bench tasks",
     )
     ap.add_argument(
-        "--tasks", required=True,
+        "--tasks",
+        required=True,
         help="Directory containing task_*.json files",
     )
     ap.add_argument(
-        "--results", required=True,
+        "--results",
+        required=True,
         help="Output directory for result JSON files",
     )
     ap.add_argument(
-        "--manifest", default=None,
+        "--manifest",
+        default=None,
         help="Path to _manifest.json (optional)",
     )
     ap.add_argument(
-        "--replay-base", default=None,
+        "--replay-base",
+        default=None,
         help="Replay artifacts directory",
     )
     ap.add_argument(
@@ -153,33 +220,46 @@ def main(argv: Optional[list[str]] = None) -> None:
         default="direct",
     )
     ap.add_argument(
-        "--model", default="deepseek-reasoner",
+        "--model",
+        default="deepseek-reasoner",
         help="Model for direct proposer",
     )
     ap.add_argument("--base-url", default=None, help="LLM API base URL")
     ap.add_argument("--api-key", default=None, help="LLM API key")
     ap.add_argument(
-        "--orchestrator-url", default=None,
+        "--orchestrator-url",
+        default=None,
         help="Orchestrator URL",
     )
     ap.add_argument("--executor-url", default=None, help="Executor URL")
     ap.add_argument("--gateway-url", default=None, help="Tool Gateway URL")
     ap.add_argument("--data-dir", default=None, help="Shared data dir")
     ap.add_argument(
-        "--resume", action="store_true",
+        "--resume",
+        action="store_true",
         help="Skip tasks with existing results",
     )
     ap.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Print commands without executing",
     )
     ap.add_argument(
-        "--timeout", type=int, default=900,
+        "--timeout",
+        type=int,
+        default=900,
         help="Per-task timeout in seconds (default: 900)",
     )
     ap.add_argument(
-        "--parallel", type=int, default=1,
+        "--parallel",
+        type=int,
+        default=1,
         help="Number of parallel workers (default: 1)",
+    )
+    ap.add_argument(
+        "--outcome-memory",
+        default=None,
+        help="Path to outcome memory JSONL file (default: <results>/outcome_memory.jsonl)",
     )
 
     args = ap.parse_args(argv)
@@ -188,8 +268,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     task_files = _find_task_files(args.tasks, args.manifest)
     if not task_files:
         print(
-            "No task files found. "
-            "Run convert_swebench_tasks.py first.",
+            "No task files found. " "Run convert_swebench_tasks.py first.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -202,14 +281,12 @@ def main(argv: Optional[list[str]] = None) -> None:
     if args.resume:
         original = len(task_files)
         task_files = [
-            tf for tf in task_files
+            tf
+            for tf in task_files
             if not os.path.isfile(_result_path(args.results, tf))
         ]
         done = original - len(task_files)
-        print(
-            f"Resume: {done} already done, "
-            f"{len(task_files)} remaining"
-        )
+        print(f"Resume: {done} already done, " f"{len(task_files)} remaining")
 
     total = len(task_files)
     print(f"\n{'='*60}")
@@ -228,11 +305,16 @@ def main(argv: Optional[list[str]] = None) -> None:
         print(f"\n[DRY RUN] Would run {total} tasks")
         return
 
+    # Default outcome memory path
+    if args.outcome_memory is None:
+        args.outcome_memory = os.path.join(args.results, "outcome_memory.jsonl")
+
     # Run tasks sequentially (parallel support can be added later)
     summary: dict[str, Any] = {
         "total": total,
         "pass": 0,
         "fail": 0,
+        "gate_reject": 0,
         "abort": 0,
         "error": 0,
         "results": [],
@@ -241,11 +323,7 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     for i, task_file in enumerate(task_files, 1):
         result_file = _result_path(args.results, task_file)
-        task_id = (
-            os.path.basename(task_file)
-            .replace("task_", "")
-            .replace(".json", "")
-        )
+        task_id = os.path.basename(task_file).replace("task_", "").replace(".json", "")
 
         print(f"[{i}/{total}] {task_id}", end=" ", flush=True)
         cmd = _build_cli_args(task_file, result_file, args)
@@ -254,11 +332,7 @@ def main(argv: Optional[list[str]] = None) -> None:
         try:
             proc = subprocess.run(
                 cmd,
-                cwd=os.path.dirname(
-                    os.path.dirname(
-                        os.path.abspath(__file__)
-                    )
-                ),
+                cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 capture_output=True,
                 text=True,
                 timeout=args.timeout,
@@ -274,6 +348,8 @@ def main(argv: Optional[list[str]] = None) -> None:
 
                 if status == "PASS":
                     summary["pass"] += 1
+                elif status == "GATE_REJECT":
+                    summary["gate_reject"] += 1
                 elif status == "FAIL":
                     summary["fail"] += 1
                 elif status == "ABORT":
@@ -281,46 +357,61 @@ def main(argv: Optional[list[str]] = None) -> None:
                 else:
                     summary["error"] += 1
 
-                summary["results"].append({
-                    "task_id": task_id,
-                    "status": status,
-                    "iters": iters,
-                    "risk": risk,
-                    "duration_sec": round(dt, 1),
-                })
+                # Record outcome for cross-task learning
+                _record_batch_outcome(
+                    args.outcome_memory,
+                    task_id,
+                    result,
+                )
+
+                summary["results"].append(
+                    {
+                        "task_id": task_id,
+                        "status": status,
+                        "iters": iters,
+                        "risk": risk,
+                        "duration_sec": round(dt, 1),
+                    }
+                )
             else:
                 dt = time.time() - t0
                 print(f"→ ERROR (exit={proc.returncode}, {dt:.0f}s)")
                 stderr_tail = (proc.stderr or "")[-500:]
                 summary["error"] += 1
-                summary["results"].append({
-                    "task_id": task_id,
-                    "status": "ERROR",
-                    "exit_code": proc.returncode,
-                    "stderr_tail": stderr_tail,
-                    "duration_sec": round(dt, 1),
-                })
+                summary["results"].append(
+                    {
+                        "task_id": task_id,
+                        "status": "ERROR",
+                        "exit_code": proc.returncode,
+                        "stderr_tail": stderr_tail,
+                        "duration_sec": round(dt, 1),
+                    }
+                )
 
         except subprocess.TimeoutExpired:
             dt = time.time() - t0
             print(f"→ TIMEOUT ({dt:.0f}s)")
             summary["error"] += 1
-            summary["results"].append({
-                "task_id": task_id,
-                "status": "TIMEOUT",
-                "duration_sec": round(dt, 1),
-            })
+            summary["results"].append(
+                {
+                    "task_id": task_id,
+                    "status": "TIMEOUT",
+                    "duration_sec": round(dt, 1),
+                }
+            )
 
         except Exception as exc:
             dt = time.time() - t0
             print(f"→ EXCEPTION: {exc}")
             summary["error"] += 1
-            summary["results"].append({
-                "task_id": task_id,
-                "status": "EXCEPTION",
-                "error": str(exc),
-                "duration_sec": round(dt, 1),
-            })
+            summary["results"].append(
+                {
+                    "task_id": task_id,
+                    "status": "EXCEPTION",
+                    "error": str(exc),
+                    "duration_sec": round(dt, 1),
+                }
+            )
 
     # Summary
     batch_dt = time.time() - batch_start
@@ -328,10 +419,11 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     print(f"\n{'='*60}")
     print(f"BATCH COMPLETE — {batch_dt:.0f}s total")
-    print(f"  PASS:  {summary['pass']}/{total}")
-    print(f"  FAIL:  {summary['fail']}/{total}")
-    print(f"  ABORT: {summary['abort']}/{total}")
-    print(f"  ERROR: {summary['error']}/{total}")
+    print(f"  PASS:         {summary['pass']}/{total}")
+    print(f"  FAIL:         {summary['fail']}/{total}")
+    print(f"  GATE_REJECT:  {summary['gate_reject']}/{total}")
+    print(f"  ABORT:        {summary['abort']}/{total}")
+    print(f"  ERROR:        {summary['error']}/{total}")
     if total > 0:
         print(f"  Resolve rate: {summary['pass']/total*100:.1f}%")
     print(f"{'='*60}")

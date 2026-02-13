@@ -1,20 +1,21 @@
 """Input/output contracts for SWE-bench-compatible task execution."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
-Status = Literal["PASS", "FAIL", "ABORT"]
+Status = Literal["PASS", "FAIL", "ABORT", "GATE_REJECT"]
 RiskDecision = Literal["ALLOW", "REJECT"]
 
 
 @dataclass
 class TaskLimits:
-    max_iters: int = 8
+    max_iters: int = 10
     max_patch_bytes: int = 250_000
     max_files_touched: int = 25
     max_new_files: int = 5
-    max_runtime_sec: int = 1800
+    max_runtime_sec: int = 3600
 
 
 @dataclass

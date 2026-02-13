@@ -1,4 +1,5 @@
 """Tests for CLI task loading and proposer selection."""
+
 import json
 import os
 import sys
@@ -60,8 +61,8 @@ def test_load_task_defaults(tmp_path):
     p = tmp_path / "task.json"
     p.write_text(json.dumps(task))
     t = load_task(str(p))
-    assert t.limits.max_iters == 8
-    assert t.limits.max_runtime_sec == 1800
+    assert t.limits.max_iters == 10
+    assert t.limits.max_runtime_sec == 3600
 
 
 def test_load_task_with_test_patch(tmp_path):
@@ -72,10 +73,7 @@ def test_load_task_with_test_patch(tmp_path):
         "issue_text": "Fix it",
         "hints": {
             "test_patch": (
-                "--- a/tests/t.py\n"
-                "+++ b/tests/t.py\n"
-                "@@ -1 +1 @@\n"
-                "-old\n+new\n"
+                "--- a/tests/t.py\n" "+++ b/tests/t.py\n" "@@ -1 +1 @@\n" "-old\n+new\n"
             ),
         },
     }
@@ -89,7 +87,9 @@ def test_load_task_with_test_patch(tmp_path):
 
 TASKS_DIR = os.path.join(
     os.path.dirname(__file__),
-    "..", "data", "tasks",
+    "..",
+    "data",
+    "tasks",
 )
 
 

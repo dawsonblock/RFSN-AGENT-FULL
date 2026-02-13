@@ -12,8 +12,11 @@ When ``executor_url`` is provided, test execution is delegated to the RFSN
 Executor service (Docker-sandboxed, venv-managed, network-disabled) instead
 of running locally via subprocess.
 """
+
 from __future__ import annotations
 
+import json
+import os
 import re
 import time
 from typing import Callable, Dict, Optional
@@ -144,9 +147,7 @@ def _parse_test_cmd(cmd: str) -> tuple[str, str]:
         # Split off everything after the pytest flags
         parts = cmd_stripped.split()
         targets = [
-            p for p in parts
-            if "::" in p
-            or (p.endswith(".py") and "test" in p.lower())
+            p for p in parts if "::" in p or (p.endswith(".py") and "test" in p.lower())
         ]
         if targets:
             return "pytest_targeted", " ".join(targets)
@@ -229,22 +230,32 @@ def bench_run(
     quick_cmd = choose_quick_tests(task.hints, task.commands.test_quick)
 
     # Derive a repo_id for executor routing (sanitise task_id)
-    repo_id = (
-        re.sub(r"[^A-Za-z0-9_.-]", "_", task.task_id)
-        if executor_url else ""
-    )
+    repo_id = re.sub(r"[^A-Za-z0-9_.-]", "_", task.task_id) if executor_url else ""
+
+    # Helper: persist iteration feedback for the proposer
+    def _write_feedback(replay_dir: str, feedback: list) -> None:
+        path = os.path.join(replay_dir, "feedback.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(feedback, f, ensure_ascii=False, indent=2)
 
     # Helper: run tests locally or via executor
     def _run(cmd: str, timeout: int, iteration: int) -> TestRun:
         if executor_url:
             template_id, target = _parse_test_cmd(cmd)
             return run_tests_via_executor(
-                executor_url, repo_id, iteration, template_id, target, timeout,
+                executor_url,
+                repo_id,
+                iteration,
+                template_id,
+                target,
+                timeout,
                 gateway_url=gateway_url,
             )
         return run_tests(cmd, task.workdir, timeout)
 
     final_patch = ""
+    last_gate_rejected = False
+    iter_feedback: list[dict] = []  # Accumulate ALL feedback for learning
     last_quick: Optional[TestRun] = None
     last_full: Optional[TestRun] = None
 
@@ -291,6 +302,14 @@ def bench_run(
                 replay_dir,
                 {"type": "propose_error", "iter": i, "error": str(exc)},
             )
+            iter_feedback.append(
+                {
+                    "iter": i,
+                    "type": "propose_error",
+                    "error": str(exc)[:500],
+                }
+            )
+            _write_feedback(replay_dir, iter_feedback)
             continue
 
         if not isinstance(patch, str):
@@ -309,6 +328,14 @@ def bench_run(
                 replay_dir,
                 {"type": "apply_fail", "iter": i, "error": str(exc)},
             )
+            iter_feedback.append(
+                {
+                    "iter": i,
+                    "type": "apply_fail",
+                    "error": str(exc)[:500],
+                }
+            )
+            _write_feedback(replay_dir, iter_feedback)
             continue
 
         # Capture the ground-truth diff actually applied, excluding
@@ -341,7 +368,18 @@ def bench_run(
             },
         )
         if risk.decision == "REJECT":
+            final_patch = ""  # Gate is final authority — clear rejected patch
+            last_gate_rejected = True
+            iter_feedback.append(
+                {
+                    "iter": i,
+                    "type": "gate_reject",
+                    "reasons": risk.reasons,
+                }
+            )
+            _write_feedback(replay_dir, iter_feedback)
             continue
+        last_gate_rejected = False
 
         # ---- Quick tests ----
         last_quick = _run(
@@ -370,7 +408,16 @@ def bench_run(
         )
 
         if last_quick.exit_code != 0:
-            # Quick tests failed — try again next iteration
+            # Quick tests failed — record feedback and try next iteration
+            iter_feedback.append(
+                {
+                    "iter": i,
+                    "type": "test_fail",
+                    "stdout_tail": _tail(last_quick.stdout_tail, 2000),
+                    "stderr_tail": _tail(last_quick.stderr_tail, 1000),
+                }
+            )
+            _write_feedback(replay_dir, iter_feedback)
             continue
 
         # ---- Full tests ----
@@ -400,13 +447,33 @@ def bench_run(
         )
 
         if last_full.exit_code == 0:
+            # Re-gate the final patch — gate is FINAL authority
+            final_risk = patch_risk_gate(
+                final_patch,
+                task.limits.max_patch_bytes,
+                task.limits.max_files_touched,
+                task.limits.max_new_files,
+            )
+            if final_risk.decision == "REJECT":
+                log_event(
+                    replay_dir,
+                    {
+                        "type": "final_gate_reject",
+                        "iter": i,
+                        "reasons": final_risk.reasons,
+                    },
+                )
+                final_patch = ""
+                last_gate_rejected = True
+                continue
+
             return BenchResult(
                 task_id=task.task_id,
                 status="PASS",
                 iters=i,
                 final_patch_unified_diff=final_patch,
                 tests={"quick": last_quick, "full": last_full},
-                risk=risk,
+                risk=final_risk,
                 replay_dir=replay_dir,
             )
 
@@ -417,9 +484,12 @@ def bench_run(
     if last_full is not None:
         final_tests["full"] = last_full
 
+    # Determine terminal status
+    terminal_status: str = "GATE_REJECT" if last_gate_rejected else "FAIL"
+
     return BenchResult(
         task_id=task.task_id,
-        status="FAIL",
+        status=terminal_status,  # type: ignore[arg-type]
         iters=task.limits.max_iters,
         final_patch_unified_diff=final_patch,
         tests=final_tests,

@@ -12,6 +12,7 @@ Usage
         [--ledger-path /data/kernel_ledger.jsonl] \\
         [--data-dir /data]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -38,7 +39,9 @@ from .util import read_text, write_json
 _TASK_SCHEMA_SEARCH_PATHS = [
     os.path.join(
         os.path.dirname(__file__),
-        "..", "shared", "task_schema.json",
+        "..",
+        "shared",
+        "task_schema.json",
     ),
     "/shared/task_schema.json",  # Docker container mount
 ]
@@ -56,6 +59,7 @@ def _load_task_schema() -> Optional[dict]:
 # ---------------------------------------------------------------------------
 # Task loader (with optional schema validation)
 # ---------------------------------------------------------------------------
+
 
 def load_task(path: str) -> BenchTask:
     with open(path, "r", encoding="utf-8") as f:
@@ -86,6 +90,7 @@ def load_task(path: str) -> BenchTask:
 # ---------------------------------------------------------------------------
 # Proposer implementations
 # ---------------------------------------------------------------------------
+
 
 def make_orchestrator_proposer(
     orchestrator_url: str,
@@ -153,69 +158,234 @@ def make_direct_proposer(
     api_key: Optional[str] = None,
     base_url: str = "https://api.deepseek.com",
     model: str = "deepseek-chat",
+    outcome_memory_path: Optional[str] = None,
 ):
-    """Return a proposer that calls DeepSeek (or compatible) API directly.
+    """Return a two-stage agentic proposer using any OpenAI-compatible API.
 
-    Requires the ``DEEPSEEK_API_KEY`` env-var (or *api_key* kwarg).
+    **Stage 1 (Locate)**: Identify files to modify using repo tree + issue.
+    **Stage 2 (Patch)**: Generate full file content with real code context,
+    then extract the patch via ``git diff`` (Apply-and-Diff).
+
+    Supports any OpenAI-compatible API (DeepSeek, OpenAI, Anthropic via
+    proxy, Gemini, local models, etc.) through ``base_url`` and ``model``.
+
+    Env-var resolution order for API key:
+      1. Explicit *api_key* kwarg
+      2. ``DEEPSEEK_API_KEY``
+      3. ``OPENAI_API_KEY``
+      4. ``LLM_API_KEY``
     """
-    resolved_key = api_key or os.environ.get("DEEPSEEK_API_KEY", "")
+    resolved_key = (
+        api_key
+        or os.environ.get("DEEPSEEK_API_KEY", "")
+        or os.environ.get("OPENAI_API_KEY", "")
+        or os.environ.get("LLM_API_KEY", "")
+    )
     if not resolved_key:
         raise RuntimeError(
-            "direct proposer requires DEEPSEEK_API_KEY env-var or --api-key"
+            "Proposer requires an API key. Set DEEPSEEK_API_KEY, "
+            "OPENAI_API_KEY, LLM_API_KEY, or pass --api-key."
         )
 
-    _SYSTEM = (
-        "You are a code repair agent.  You MUST output "
-        "ONLY a single unified diff patch (git diff format) "
-        "inside a ```diff code block and nothing else.\n"
-        "The patch must be minimal and only change files "
-        "necessary to fix the issue.\n"
-        "Do not modify CI configs, dependency files, or "
-        "skip/xfail tests.\n"
-        "Do not modify test files — only fix the source code.\n"
-        "Reproduce the failing tests and fix the root cause.\n"
-        "Output format:\n"
-        "```diff\n"
-        "--- a/path/to/file.py\n"
-        "+++ b/path/to/file.py\n"
-        "@@ -line,count +line,count @@\n"
-        " context\n"
-        "-old line\n"
-        "+new line\n"
-        "```\n"
+    from .locator import build_repo_tree, locate_files, read_file_context
+
+    # ------------------------------------------------------------------
+    # System prompts
+    # ------------------------------------------------------------------
+    _LOCATE_SYSTEM = (
+        "You are a code repair agent performing file localization.\n"
+        "Given a bug report and a repository file listing, identify the "
+        "1-5 source files MOST LIKELY to require changes to fix the bug.\n"
+        "Focus on SOURCE files, not test files.\n"
+        "Output ONLY a JSON array of relative file paths, e.g.:\n"
+        '["src/module/foo.py", "src/utils/bar.py"]\n'
+        "No explanation, no markdown — just the JSON array.\n"
     )
 
-    def _extract_diff(text: str) -> str:
-        """Pull the unified diff out of a chat completion.
+    _PATCH_SYSTEM = (
+        "You are an expert code repair agent. Your task is to fix a bug "
+        "in a software project.\n\n"
+        "## Instructions\n"
+        "1. **Analyze** the bug report and understand the root cause.\n"
+        "2. **Study** the provided source code and test expectations.\n"
+        "3. **Plan** your fix — explain WHY the bug occurs and HOW "
+        "you will fix it (2-3 sentences).\n"
+        "4. **Output** the COMPLETE modified file content for EACH file "
+        "you need to change.\n\n"
+        "## Output Format\n"
+        "For each file you modify, output:\n"
+        "```\n"
+        "### FILE: path/to/file.py\n"
+        "```python\n"
+        "<entire file content with your fix applied>\n"
+        "```\n"
+        "```\n\n"
+        "## Rules\n"
+        "- Output the COMPLETE file — every line, not just the changed "
+        "parts. The system will diff it against the original.\n"
+        "- Only modify files that need changes. Do NOT modify test files.\n"
+        "- Do NOT skip/xfail tests or modify CI configs.\n"
+        "- Keep changes minimal and surgical.\n"
+        "- If you modify multiple files, output each with its own "
+        "### FILE: header.\n"
+    )
 
-        Handles several common LLM output patterns:
-        1. Clean diff (just the diff text)
-        2. Diff inside a single ```diff ... ``` code block
-        3. Multiple code blocks with reasoning text between them
-        4. Reasoning text with diff lines interspersed
+    _RETRY_SYSTEM = (
+        "You are an expert code repair agent. Your previous fix attempt "
+        "FAILED the test suite. You will be shown the test errors.\n\n"
+        "## Instructions\n"
+        "1. **Analyze** the test failure output to understand WHAT went "
+        "wrong with your previous attempt.\n"
+        "2. **Diagnose** the remaining issue — is it a logic error, "
+        "edge case, wrong variable, or incomplete fix?\n"
+        "3. **Output** the corrected COMPLETE file content.\n\n"
+        "## Output Format\n"
+        "Same as before — for each file:\n"
+        "### FILE: path/to/file.py\n"
+        "```python\n"
+        "<entire corrected file content>\n"
+        "```\n\n"
+        "## Rules\n"
+        "- Output the COMPLETE file content, not a diff.\n"
+        "- Only modify source files, never test files.\n"
+        "- Learn from the error output to make the RIGHT fix this time.\n"
+    )
 
-        Strategy: find ALL lines that look like unified-diff content
-        (--- a/, +++ b/, @@ ... @@, context/add/remove lines within hunks)
-        and reconstruct a single coherent patch.
+    # ------------------------------------------------------------------
+    # LLM call helper
+    # ------------------------------------------------------------------
+    def _llm_call(
+        system: str,
+        user: str,
+        *,
+        max_tokens: int = 16384,
+        temperature: float = 0.0,
+    ) -> str:
+        """Make a single chat completion call."""
+        payload: dict = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+        # Reasoner models don't support temperature/max_tokens
+        # Gemini 3 has always-on reasoning
+        is_reasoner = "reasoner" in model or "gemini-3" in model
+        if not is_reasoner:
+            payload["temperature"] = temperature
+            payload["max_tokens"] = max_tokens
+
+        r = requests.post(
+            f"{base_url.rstrip('/')}/chat/completions",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {resolved_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=600,
+        )
+        r.raise_for_status()
+        data = r.json()
+        msg = data["choices"][0]["message"]
+        raw = msg.get("content") or ""
+
+        # Reasoner models: content may be empty, reasoning_content has answer
+        if not raw.strip():
+            reasoning = msg.get("reasoning_content", "")
+            if reasoning:
+                raw = reasoning
+
+        return raw
+
+    # ------------------------------------------------------------------
+    # Apply-and-Diff: write full files, extract diff via git
+    # ------------------------------------------------------------------
+    def _extract_file_blocks(text: str) -> dict[str, str]:
+        """Parse ``### FILE: path`` blocks from LLM output.
+
+        Returns {relative_path: file_content}.
         """
-        # First, try to extract from fenced code blocks
-        import re as _re
-        blocks = _re.findall(
+        blocks: dict[str, str] = {}
+        # Pattern: ### FILE: path/to/file.py followed by ```python ... ```
+        pattern = re.compile(
+            r"###\s*FILE:\s*(.+?)\s*\n" r"```(?:python|py)?\s*\n" r"(.*?)" r"```",
+            re.DOTALL,
+        )
+        for m in pattern.finditer(text):
+            path = m.group(1).strip().strip("`")
+            content = m.group(2)
+            if path and content:
+                blocks[path] = content
+
+        # Fallback: if no ### FILE: blocks found, try to extract a single
+        # code block and match it to the first focus file
+        if not blocks:
+            code_blocks = re.findall(
+                r"```(?:python|py)?\s*\n(.*?)```",
+                text,
+                re.DOTALL,
+            )
+            if code_blocks:
+                # Use the largest code block as the primary fix
+                largest = max(code_blocks, key=len)
+                if len(largest.strip()) > 50:
+                    blocks["__single__"] = largest
+
+        return blocks
+
+    def _apply_and_diff(
+        workdir: str,
+        file_blocks: dict[str, str],
+        focus_files: list[str],
+    ) -> str:
+        """Write LLM-generated file content to disk, then extract
+        the diff via ``git diff``.
+
+        This ensures patches are always syntactically valid.
+        """
+        from .repo import git_diff_unified
+
+        written_any = False
+        for path, content in file_blocks.items():
+            if path == "__single__" and focus_files:
+                # Map the single block to the first focus file
+                path = focus_files[0]
+
+            abs_path = os.path.join(workdir, path)
+            if not os.path.isfile(abs_path):
+                # Don't create new files for paths we can't verify
+                continue
+
+            try:
+                with open(abs_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                written_any = True
+            except Exception:
+                continue
+
+        if not written_any:
+            return ""
+
+        # Extract the diff from git
+        return git_diff_unified(workdir)
+
+    # ------------------------------------------------------------------
+    # Legacy diff extraction (fallback)
+    # ------------------------------------------------------------------
+    def _extract_diff(text: str) -> str:
+        """Pull a unified diff from LLM output (fallback path)."""
+        blocks = re.findall(
             r"```(?:diff)?\s*\n(.*?)```",
             text,
-            _re.DOTALL,
+            re.DOTALL,
         )
         if blocks:
-            # Use the LAST complete diff block — LLMs often iterate and
-            # the final block is the refined/corrected version.
-            # Find the last block that contains actual diff content
             for block in reversed(blocks):
                 if "--- a/" in block and "+++ b/" in block:
                     return block.strip() + "\n"
-            # If no block has full diff markers, concatenate all
             return "\n".join(b.strip() for b in blocks) + "\n"
 
-        # No code fences — scan for diff-like lines
         diff_lines: list[str] = []
         in_hunk = False
         for line in text.splitlines():
@@ -223,10 +393,7 @@ def make_direct_proposer(
             if stripped.startswith("diff --git "):
                 in_hunk = True
                 diff_lines.append(stripped)
-            elif (
-                stripped.startswith("--- a/")
-                or stripped.startswith("+++ b/")
-            ):
+            elif stripped.startswith("--- a/") or stripped.startswith("+++ b/"):
                 in_hunk = True
                 diff_lines.append(stripped)
             elif stripped.startswith("@@ ") and "@@" in stripped[3:]:
@@ -239,135 +406,273 @@ def make_direct_proposer(
                 or stripped == ""
             ):
                 diff_lines.append(line.rstrip())
-            elif in_hunk and stripped.startswith("diff --git "):
-                diff_lines.append(stripped)
             else:
-                # Non-diff line — if we were in a hunk, check if it's
-                # just a blank separator
-                if in_hunk and not stripped:
-                    diff_lines.append("")
-                else:
+                if not (in_hunk and not stripped):
                     in_hunk = False
 
         if diff_lines:
             return "\n".join(diff_lines) + "\n"
-
-        # Fallback: return original text stripped
         return text.strip() + "\n"
+
+    # ------------------------------------------------------------------
+    # Main proposer callback
+    # ------------------------------------------------------------------
+    _cached_repo_tree: str | None = None
+    _cached_target_files: list[str] | None = None
+
+    def _format_feedback(feedback: list[dict]) -> str:
+        """Format structured iteration feedback for the LLM."""
+        parts = ["## Previous Attempts (learn from these)\n"]
+        for fb in feedback:
+            iter_n = fb.get("iter", "?")
+            fb_type = fb.get("type", "unknown")
+            if fb_type == "gate_reject":
+                reasons = ", ".join(fb.get("reasons", []))
+                parts.append(
+                    f"**Iteration {iter_n} — GATE REJECTED**: {reasons}\n"
+                    f"Your patch was blocked by the safety gate. "
+                    f"Avoid: {reasons}\n"
+                )
+            elif fb_type == "apply_fail":
+                err = fb.get("error", "unknown error")[:300]
+                parts.append(
+                    f"**Iteration {iter_n} — PATCH APPLY FAILED**: {err}\n"
+                    f"Your diff was malformed. Output the COMPLETE file "
+                    f"content, not a partial diff.\n"
+                )
+            elif fb_type == "test_fail":
+                stdout = fb.get("stdout_tail", "")[:2000]
+                stderr = fb.get("stderr_tail", "")[:500]
+                parts.append(
+                    f"**Iteration {iter_n} — TESTS FAILED**:\n" f"```\n{stdout}\n```\n"
+                )
+                if stderr.strip():
+                    parts.append(f"Stderr:\n```\n{stderr}\n```\n")
+            elif fb_type == "propose_error":
+                err = fb.get("error", "unknown")[:300]
+                parts.append(f"**Iteration {iter_n} — PROPOSER ERROR**: {err}\n")
+        return "\n".join(parts)
 
     def _proposer(task: BenchTask, replay_dir: str) -> str:
         from .replay import log_event
-
-        # Build context: issue + optional last-failure stderr
-        user_parts = [
-            f"## Issue\n{task.issue_text}\n",
-        ]
-        if task.hints.failing_tests:
-            tests_str = chr(10).join(
-                task.hints.failing_tests
-            )
-            user_parts.append(
-                f"## Known failing tests\n{tests_str}\n"
-            )
-        if task.hints.focus_files:
-            user_parts.append(
-                f"## Likely files\n{chr(10).join(task.hints.focus_files)}\n"
-            )
-            # Include actual file contents so the LLM sees the real code
-            for fpath in task.hints.focus_files:
-                abs_path = os.path.join(task.workdir, fpath)
-                if os.path.isfile(abs_path):
-                    try:
-                        content = read_text(abs_path)[:8000]
-                        user_parts.append(
-                            f"## File: {fpath}\n```python\n{content}\n```\n"
-                        )
-                    except Exception:
-                        pass
-
-        # Also include failing test file contents
-        if task.hints.failing_tests:
-            seen = set()
-            for tnode in task.hints.failing_tests:
-                tfile = tnode.split("::")[0]
-                if tfile in seen:
-                    continue
-                seen.add(tfile)
-                abs_path = os.path.join(task.workdir, tfile)
-                if os.path.isfile(abs_path):
-                    try:
-                        content = read_text(abs_path)[:8000]
-                        user_parts.append(
-                            f"## File: {tfile}\n```python\n{content}\n```\n"
-                        )
-                    except Exception:
-                        pass
-
-        # Try to include last quick-test failure from replay dir
         import glob
 
-        # Include stdout (pytest writes failure details there, not stderr)
-        stdout_blobs = sorted(
-            glob.glob(os.path.join(replay_dir, "blobs", "quick_stdout_*"))
-        )
-        if stdout_blobs:
-            last_out = read_text(stdout_blobs[-1])[-3000:]
-            user_parts.append(f"## Last test output\n```\n{last_out}\n```\n")
+        # Closure-level caches — persist across iterations
+        nonlocal _cached_repo_tree, _cached_target_files
 
-        stderr_blobs = sorted(
-            glob.glob(os.path.join(replay_dir, "blobs", "quick_stderr_*"))
+        log_event(
+            replay_dir,
+            {
+                "type": "direct_llm_request",
+                "model": model,
+                "strategy": "two_stage_apply_and_diff",
+            },
         )
-        if stderr_blobs:
-            last_err = read_text(stderr_blobs[-1])[-2000:]
-            if last_err.strip():
-                user_parts.append(
-                    "## Last test stderr\n"
-                    f"```\n{last_err}\n```\n"
+
+        # --- Build repo tree (cached across iterations) ---
+        if _cached_repo_tree is None:
+            _cached_repo_tree = build_repo_tree(task.workdir, max_files=200)
+        repo_tree = _cached_repo_tree
+
+        # --- Load structured feedback from ALL previous iterations ---
+        feedback_path = os.path.join(replay_dir, "feedback.json")
+        iter_feedback: list[dict] = []
+        if os.path.isfile(feedback_path):
+            try:
+                import json as _json
+
+                with open(feedback_path, "r", encoding="utf-8") as f:
+                    iter_feedback = _json.load(f)
+            except Exception:
+                pass
+
+        # Legacy blob fallback (in case feedback.json not yet written)
+        last_test_output = ""
+        last_test_stderr = ""
+        if not iter_feedback:
+            stdout_blobs = sorted(
+                glob.glob(os.path.join(replay_dir, "blobs", "quick_stdout_*")),
+            )
+            if stdout_blobs:
+                last_test_output = read_text(stdout_blobs[-1])[-4000:]
+
+            stderr_blobs = sorted(
+                glob.glob(os.path.join(replay_dir, "blobs", "quick_stderr_*")),
+            )
+            if stderr_blobs:
+                last_test_stderr = read_text(stderr_blobs[-1])[-2000:]
+
+        is_retry = bool(
+            iter_feedback or last_test_output.strip() or last_test_stderr.strip()
+        )
+
+        # --- Determine files to read (cached across iterations) ---
+        if _cached_target_files is not None:
+            target_files = _cached_target_files
+        else:
+            # Start with hint focus_files (from gold patch in SWE-bench)
+            target_files = list(task.hints.focus_files or [])
+        # If no target files cached or provided, run Stage 1: Locate
+        if not target_files:
+            locate_prompt = (
+                f"## Bug Report\n{task.issue_text}\n\n"
+                f"## Repository File Listing\n```\n{repo_tree}\n```\n"
+            )
+            if task.hints.failing_tests:
+                locate_prompt += (
+                    "\n## Known Failing Tests\n"
+                    + "\n".join(task.hints.failing_tests)
+                    + "\n"
                 )
 
-        payload: dict = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": _SYSTEM},
-                {"role": "user", "content": "\n".join(user_parts)},
-            ],
-        }
-        # deepseek-reasoner (R1) doesn't support temperature/max_tokens
-        if "reasoner" not in model:
-            payload["temperature"] = 0.0
-            payload["max_tokens"] = 4096
+            log_event(replay_dir, {"type": "locate_start"})
+            locate_response = _llm_call(
+                _LOCATE_SYSTEM,
+                locate_prompt,
+                max_tokens=1024,
+                temperature=0.0,
+            )
+            target_files = locate_files(locate_response)
+            log_event(
+                replay_dir,
+                {
+                    "type": "locate_result",
+                    "files": target_files,
+                },
+            )
 
-        log_event(replay_dir, {"type": "direct_llm_request", "model": model})
+            if not target_files:
+                # Absolute fallback: try to find Python files mentioned
+                # in the issue text
+                mentioned = re.findall(
+                    r"([A-Za-z0-9_/]+\.py)\b",
+                    task.issue_text,
+                )
+                target_files = mentioned[:3] if mentioned else []
 
-        r = requests.post(
-            f"{base_url.rstrip('/')}/chat/completions",
-            json=payload,
-            headers={
-                "Authorization": f"Bearer {resolved_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=300,
+            # Cache for subsequent iterations
+            _cached_target_files = target_files
+
+        # --- Read file contents ---
+        file_context = read_file_context(
+            task.workdir,
+            target_files,
+            max_chars_per_file=15000,
+            max_total_chars=60000,
         )
-        r.raise_for_status()
-        data = r.json()
-        msg = data["choices"][0]["message"]
-        raw = msg.get("content") or ""
 
-        # deepseek-reasoner puts chain-of-thought in reasoning_content
-        # and the final answer in content. But sometimes content is empty
-        # or just a summary without a diff.
-        if raw.strip() and ("--- a/" in raw or "diff --git" in raw):
-            # Content has actual diff markers — use it
-            pass
-        else:
-            reasoning = msg.get("reasoning_content", "")
-            if reasoning and (
-                "--- a/" in reasoning
-                or "diff --git" in reasoning
-            ):
-                raw = reasoning
+        # --- Read test file contents ---
+        test_context = ""
+        if task.hints.failing_tests:
+            test_files_seen: set[str] = set()
+            test_paths: list[str] = []
+            for tnode in task.hints.failing_tests:
+                tfile = tnode.split("::")[0]
+                if tfile not in test_files_seen and tfile.endswith(".py"):
+                    test_files_seen.add(tfile)
+                    test_paths.append(tfile)
+            if test_paths:
+                test_context = read_file_context(
+                    task.workdir,
+                    test_paths,
+                    max_chars_per_file=8000,
+                    max_total_chars=16000,
+                )
 
-        return _extract_diff(raw)
+        # --- Build Stage 2 prompt ---
+        user_parts = [
+            f"## Bug Report\n{task.issue_text}\n",
+        ]
+
+        if task.hints.failing_tests:
+            user_parts.append(
+                "## Known Failing Tests\n" + "\n".join(task.hints.failing_tests) + "\n"
+            )
+
+        if repo_tree:
+            user_parts.append(
+                f"## Repository Structure\n```\n{repo_tree[:3000]}\n```\n"
+            )
+
+        if file_context:
+            user_parts.append(f"## Source Code\n{file_context}\n")
+
+        if test_context:
+            user_parts.append(
+                f"## Test Code (read-only — do NOT modify)\n" f"{test_context}\n"
+            )
+
+        # Retry: include structured feedback from ALL previous attempts
+        if is_retry:
+            if iter_feedback:
+                user_parts.append(_format_feedback(iter_feedback))
+            else:
+                # Legacy path — blob-based feedback
+                if last_test_output.strip():
+                    user_parts.append(
+                        f"## Previous Test Failure Output\n"
+                        f"```\n{last_test_output}\n```\n"
+                    )
+                if last_test_stderr.strip():
+                    user_parts.append(
+                        f"## Previous Test Stderr\n" f"```\n{last_test_stderr}\n```\n"
+                    )
+
+        # Cross-task learnings from outcome memory
+        if outcome_memory_path:
+            from .outcome_memory import OutcomeMemory
+
+            mem = OutcomeMemory(outcome_memory_path)
+            # Extract repo family from task_id (e.g. "django__django" from "django__django-11049")
+            repo = (
+                task.task_id.rsplit("-", 1)[0] if "-" in task.task_id else task.task_id
+            )
+            learnings = mem.format_learnings(repo)
+            if learnings:
+                user_parts.append(f"## Learnings from Past Tasks\n{learnings}\n")
+
+        system_prompt = _RETRY_SYSTEM if is_retry else _PATCH_SYSTEM
+        user_prompt = "\n".join(user_parts)
+
+        # --- Stage 2: Generate fix ---
+        log_event(
+            replay_dir,
+            {
+                "type": "patch_start",
+                "is_retry": is_retry,
+                "target_files": target_files,
+            },
+        )
+
+        raw_response = _llm_call(
+            system_prompt,
+            user_prompt,
+            max_tokens=16384,
+            temperature=0.2 if is_retry else 0.0,
+        )
+
+        # --- Try Apply-and-Diff first ---
+        file_blocks = _extract_file_blocks(raw_response)
+        if file_blocks:
+            log_event(
+                replay_dir,
+                {
+                    "type": "apply_and_diff",
+                    "file_count": len(file_blocks),
+                    "files": list(file_blocks.keys()),
+                },
+            )
+            diff = _apply_and_diff(
+                task.workdir,
+                file_blocks,
+                target_files,
+            )
+            if diff.strip():
+                return diff
+
+        # --- Fallback: extract diff directly from response ---
+        log_event(replay_dir, {"type": "fallback_diff_extract"})
+        return _extract_diff(raw_response)
 
     return _proposer
 
@@ -382,6 +687,7 @@ def _placeholder_proposer(task: BenchTask, replay_dir: str) -> str:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main(argv: Optional[list[str]] = None) -> None:
     ap = argparse.ArgumentParser(
@@ -454,6 +760,11 @@ def main(argv: Optional[list[str]] = None) -> None:
         default="https://api.deepseek.com",
         help="LLM API base URL for --proposer direct",
     )
+    ap.add_argument(
+        "--outcome-memory",
+        default=None,
+        help="Path to outcome memory JSONL file for cross-task learning",
+    )
 
     args = ap.parse_args(argv)
     task = load_task(args.task)
@@ -483,6 +794,7 @@ def main(argv: Optional[list[str]] = None) -> None:
             api_key=args.api_key,
             base_url=args.base_url,
             model=args.model,
+            outcome_memory_path=args.outcome_memory,
         )
     else:
         proposer = _placeholder_proposer

@@ -1,4 +1,5 @@
 """Tests for rfsn_swebench.contracts — dataclass serialization."""
+
 from __future__ import annotations
 
 from rfsn_swebench.contracts import (
@@ -20,12 +21,16 @@ def test_bench_result_to_dict_roundtrip():
         final_patch_unified_diff="--- a/f.py\n+++ b/f.py\n+x=1\n",
         tests={
             "quick": TestRun(
-                exit_code=0, stdout_tail="ok",
-                stderr_tail="", duration_sec=1.5,
+                exit_code=0,
+                stdout_tail="ok",
+                stderr_tail="",
+                duration_sec=1.5,
             ),
             "full": TestRun(
-                exit_code=0, stdout_tail="ok",
-                stderr_tail="", duration_sec=10.2,
+                exit_code=0,
+                stdout_tail="ok",
+                stderr_tail="",
+                duration_sec=10.2,
             ),
         },
         risk=RiskReport(decision="ALLOW", reasons=[]),
@@ -50,10 +55,14 @@ def test_bench_result_fail_status():
         status="FAIL",
         iters=8,
         final_patch_unified_diff="",
-        tests={"quick": TestRun(
-            exit_code=1, stdout_tail="",
-            stderr_tail="err", duration_sec=0.5,
-        )},
+        tests={
+            "quick": TestRun(
+                exit_code=1,
+                stdout_tail="",
+                stderr_tail="err",
+                duration_sec=0.5,
+            )
+        },
         risk=RiskReport(decision="REJECT", reasons=["too large"]),
         replay_dir="/tmp/r",
     )
@@ -75,14 +84,16 @@ def test_bench_task_defaults():
     assert task.hints.focus_files == []
     assert task.commands.test_quick == "pytest -q"
     assert task.commands.test_full == "pytest -q"
-    assert task.limits.max_iters == 8
+    assert task.limits.max_iters == 10
     assert task.limits.max_patch_bytes == 250_000
 
 
 def test_task_limits_custom():
     lim = TaskLimits(
-        max_iters=3, max_patch_bytes=100,
-        max_files_touched=2, max_new_files=0,
+        max_iters=3,
+        max_patch_bytes=100,
+        max_files_touched=2,
+        max_new_files=0,
         max_runtime_sec=60,
     )
     assert lim.max_iters == 3

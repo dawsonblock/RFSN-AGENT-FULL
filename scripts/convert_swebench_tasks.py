@@ -90,11 +90,11 @@ _REPO_SETUP: dict[str, list[str]] = {
 
 # Default generous limits for real SWE-bench tasks (much harder than demos).
 _DEFAULT_LIMITS = {
-    "max_iters": 3,
-    "max_patch_bytes": 100_000,
-    "max_files_touched": 10,
-    "max_new_files": 3,
-    "max_runtime_sec": 600,
+    "max_iters": 8,
+    "max_patch_bytes": 250_000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800,
 }
 
 

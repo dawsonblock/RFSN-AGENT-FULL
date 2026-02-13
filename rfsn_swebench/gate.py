@@ -31,6 +31,11 @@ _DEFAULT_BANNED_PATTERNS: List[str] = [
     r"xfail",
     r"remove\s+test",
     r"disable\s+test",
+]
+
+# Patterns that are only suspicious in test files, not in source code.
+# Many legitimate source-code fixes use these standard library APIs.
+_TEST_ONLY_BANNED_PATTERNS: List[str] = [
     r"__import__\s*\(",
     r"eval\s*\(",
     r"exec\s*\(",
@@ -65,6 +70,9 @@ class DiffStats:
     deleted_lines: int = 0
     deleted_test_lines: int = 0
     plus_lines: List[str] = field(default_factory=list)
+    # Added lines grouped by whether they belong to test files
+    plus_lines_test: List[str] = field(default_factory=list)
+    plus_lines_source: List[str] = field(default_factory=list)
 
 
 def diff_analysis(unified_diff: str) -> DiffStats:
@@ -77,16 +85,26 @@ def diff_analysis(unified_diff: str) -> DiffStats:
     stats.size_bytes = len(unified_diff.encode("utf-8", errors="replace"))
 
     files_set: set[str] = set()
+    current_file: str = ""
     for line in unified_diff.splitlines():
         if line.startswith("diff --git "):
             parts = line.split()
             if len(parts) >= 4:
-                files_set.add(parts[2].replace("a/", "", 1))
+                current_file = parts[2].replace("a/", "", 1)
+                files_set.add(current_file)
+        if line.startswith("+++ b/"):
+            current_file = line[6:]
         if line.startswith("new file mode"):
             stats.new_files += 1
         if line.startswith("+") and not line.startswith("+++"):
             stats.added_lines += 1
             stats.plus_lines.append(line[1:])
+            # Classify by file type for targeted pattern checks
+            is_test_file = "test" in current_file.lower()
+            if is_test_file:
+                stats.plus_lines_test.append(line[1:])
+            else:
+                stats.plus_lines_source.append(line[1:])
         elif line.startswith("-") and not line.startswith("---"):
             stats.deleted_lines += 1
             if "test" in line.lower():
@@ -241,10 +259,18 @@ def patch_risk_gate(
         )
 
     # --- banned patterns in added code ---
+    # Universal bans (test-skip, xfail, etc.) apply everywhere
     plus_blob = "\n".join(stats.plus_lines)
     for pat in pol.get("banned_patterns", _DEFAULT_BANNED_PATTERNS):
         if re.search(pat, plus_blob, flags=re.IGNORECASE):
             reasons.append(f"banned pattern in added code: {pat}")
+
+    # Test-only bans (subprocess, eval, exec, etc.) only in test files
+    if stats.plus_lines_test:
+        test_blob = "\n".join(stats.plus_lines_test)
+        for pat in _TEST_ONLY_BANNED_PATTERNS:
+            if re.search(pat, test_blob, flags=re.IGNORECASE):
+                reasons.append(f"banned pattern in test code: {pat}")
 
     # --- heuristic: large test deletion ---
     if stats.deleted_test_lines > 50:
