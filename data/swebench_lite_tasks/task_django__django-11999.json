@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-11999",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "84633905273fc916e3d17883810d9969c03f73c2",
+  "workdir": "/tmp/swebench_work/django__django-11999",
+  "issue_text": "Cannot override get_FOO_display() in Django 2.2+.\nDescription\n\t\nI cannot override the get_FIELD_display function on models since version 2.2. It works in version 2.1.\nExample:\nclass FooBar(models.Model):\n\tfoo_bar = models.CharField(_(\"foo\"), choices=[(1, 'foo'), (2, 'bar')])\n\tdef __str__(self):\n\t\treturn self.get_foo_bar_display() # This returns 'foo' or 'bar' in 2.2, but 'something' in 2.1\n\tdef get_foo_bar_display(self):\n\t\treturn \"something\"\nWhat I expect is that I should be able to override this function.\n",
+  "hints": {
+    "failing_tests": [
+      "test_overriding_FIELD_display (model_fields.tests.GetFieldDisplayTests)"
+    ],
+    "focus_files": [
+      "django/db/models/fields/__init__.py"
+    ],
+    "test_patch": "diff --git a/tests/model_fields/tests.py b/tests/model_fields/tests.py\n--- a/tests/model_fields/tests.py\n+++ b/tests/model_fields/tests.py\n@@ -168,6 +168,16 @@ def test_get_FIELD_display_translated(self):\n         self.assertIsInstance(val, str)\n         self.assertEqual(val, 'translated')\n \n+    def test_overriding_FIELD_display(self):\n+        class FooBar(models.Model):\n+            foo_bar = models.IntegerField(choices=[(1, 'foo'), (2, 'bar')])\n+\n+            def get_foo_bar_display(self):\n+                return 'something'\n+\n+        f = FooBar(foo_bar=1)\n+        self.assertEqual(f.get_foo_bar_display(), 'something')\n+\n     def test_iterator_choices(self):\n         \"\"\"\n         get_choices() works with Iterators.\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q model_fields/tests.py",
+    "test_full": "python -m pytest -x -q model_fields/tests.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

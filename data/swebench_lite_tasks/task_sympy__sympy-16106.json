@@ -1,0 +1,30 @@
+{
+  "task_id": "sympy__sympy-16106",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "0e987498b00167fdd4a08a41c852a97cb70ce8f2",
+  "workdir": "/tmp/swebench_work/sympy__sympy-16106",
+  "issue_text": "mathml printer for IndexedBase required\nWriting an `Indexed` object to MathML fails with a `TypeError` exception: `TypeError: 'Indexed' object is not iterable`:\r\n\r\n```\r\nIn [340]: sympy.__version__\r\nOut[340]: '1.0.1.dev'\r\n\r\nIn [341]: from sympy.abc import (a, b)\r\n\r\nIn [342]: sympy.printing.mathml(sympy.IndexedBase(a)[b])\r\n---------------------------------------------------------------------------\r\nTypeError                                 Traceback (most recent call last)\r\n<ipython-input-342-b32e493b70d3> in <module>()\r\n----> 1 sympy.printing.mathml(sympy.IndexedBase(a)[b])\r\n\r\n/dev/shm/gerrit/venv/stable-3.5/lib/python3.5/site-packages/sympy/printing/mathml.py in mathml(expr, **settings)\r\n    442 def mathml(expr, **settings):\r\n    443     \"\"\"Returns the MathML representation of expr\"\"\"\r\n--> 444     return MathMLPrinter(settings).doprint(expr)\r\n    445 \r\n    446 \r\n\r\n/dev/shm/gerrit/venv/stable-3.5/lib/python3.5/site-packages/sympy/printing/mathml.py in doprint(self, expr)\r\n     36         Prints the expression as MathML.\r\n     37         \"\"\"\r\n---> 38         mathML = Printer._print(self, expr)\r\n     39         unistr = mathML.toxml()\r\n     40         xmlbstr = unistr.encode('ascii', 'xmlcharrefreplace')\r\n\r\n/dev/shm/gerrit/venv/stable-3.5/lib/python3.5/site-packages/sympy/printing/printer.py in _print(self, expr, *args, **kwargs)\r\n    255                 printmethod = '_print_' + cls.__name__\r\n    256                 if hasattr(self, printmethod):\r\n--> 257                     return getattr(self, printmethod)(expr, *args, **kwargs)\r\n    258             # Unknown object, fall back to the emptyPrinter.\r\n    259             return self.emptyPrinter(expr)\r\n\r\n/dev/shm/gerrit/venv/stable-3.5/lib/python3.5/site-packages/sympy/printing/mathml.py in _print_Basic(self, e)\r\n    356     def _print_Basic(self, e):\r\n    357         x = self.dom.createElement(self.mathml_tag(e))\r\n--> 358         for arg in e:\r\n    359             x.appendChild(self._print(arg))\r\n    360         return x\r\n\r\nTypeError: 'Indexed' object is not iterable\r\n```\r\n\r\nIt also fails for more complex expressions where at least one element is Indexed.\n",
+  "hints": {
+    "failing_tests": [
+      "test_print_IndexedBase"
+    ],
+    "focus_files": [
+      "sympy/printing/mathml.py"
+    ],
+    "test_patch": "diff --git a/sympy/printing/tests/test_mathml.py b/sympy/printing/tests/test_mathml.py\n--- a/sympy/printing/tests/test_mathml.py\n+++ b/sympy/printing/tests/test_mathml.py\n@@ -1,7 +1,7 @@\n from sympy import diff, Integral, Limit, sin, Symbol, Integer, Rational, cos, \\\n     tan, asin, acos, atan, sinh, cosh, tanh, asinh, acosh, atanh, E, I, oo, \\\n     pi, GoldenRatio, EulerGamma, Sum, Eq, Ne, Ge, Lt, Float, Matrix, Basic, S, \\\n-    MatrixSymbol, Function, Derivative, log, Lambda\n+    MatrixSymbol, Function, Derivative, log, Lambda, IndexedBase, symbols\n from sympy.core.containers import Tuple\n from sympy.functions.elementary.complexes import re, im, Abs, conjugate\n from sympy.functions.elementary.integers import floor, ceiling\n@@ -1139,3 +1139,17 @@ def test_print_random_symbol():\n     R = RandomSymbol(Symbol('R'))\n     assert mpp.doprint(R) == '<mi>R</mi>'\n     assert mp.doprint(R) == '<ci>R</ci>'\n+\n+\n+def test_print_IndexedBase():\n+    a,b,c,d,e = symbols('a b c d e')\n+    assert mathml(IndexedBase(a)[b],printer='presentation') == '<msub><mi>a</mi><mi>b</mi></msub>'\n+    assert mathml(IndexedBase(a)[b,c,d],printer = 'presentation') == '<msub><mi>a</mi><mfenced><mi>b</mi><mi>c</mi><mi>d</mi></mfenced></msub>'\n+    assert mathml(IndexedBase(a)[b]*IndexedBase(c)[d]*IndexedBase(e),printer = 'presentation') == '<mrow><msub><mi>a</mi><mi>b</mi></msub><mo>&InvisibleTimes;</mo><msub><mi>c</mi><mi>d</mi></msub><mo>&InvisibleTimes;</mo><mi>e</mi></mrow>'\n+\n+\n+def test_print_Indexed():\n+    a,b,c = symbols('a b c')\n+    assert mathml(IndexedBase(a),printer = 'presentation') == '<mi>a</mi>'\n+    assert mathml(IndexedBase(a/b),printer = 'presentation') == '<mrow><mfrac><mi>a</mi><mi>b</mi></mfrac></mrow>'\n+    assert mathml(IndexedBase((a,b)),printer = 'presentation') == '<mrow><mfenced><mi>a</mi><mi>b</mi></mfenced></mrow>'\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_print_IndexedBase\"",
+    "test_full": "python -m pytest -x -q -k \"test_print_IndexedBase\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

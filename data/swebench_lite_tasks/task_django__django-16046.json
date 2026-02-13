@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-16046",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "ec13e801b820614ff374cb0046092caab8d67249",
+  "workdir": "/tmp/swebench_work/django__django-16046",
+  "issue_text": "Fix numberformat.py \"string index out of range\" when null\nDescription\n\t\nWhen:\nif str_number[0] == \"-\"\nencounters a number field that's null when formatting for the admin list_display this causes an \nIndexError: string index out of range\nI can attach the proposed fix here, or open a pull request on GitHub if you like?\n",
+  "hints": {
+    "failing_tests": [
+      "test_empty (utils_tests.test_numberformat.TestNumberFormat)"
+    ],
+    "focus_files": [
+      "django/utils/numberformat.py"
+    ],
+    "test_patch": "diff --git a/tests/utils_tests/test_numberformat.py b/tests/utils_tests/test_numberformat.py\n--- a/tests/utils_tests/test_numberformat.py\n+++ b/tests/utils_tests/test_numberformat.py\n@@ -172,3 +172,7 @@ def __format__(self, specifier, **kwargs):\n \n         price = EuroDecimal(\"1.23\")\n         self.assertEqual(nformat(price, \",\"), \"€ 1,23\")\n+\n+    def test_empty(self):\n+        self.assertEqual(nformat(\"\", \".\"), \"\")\n+        self.assertEqual(nformat(None, \".\"), \"None\")\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q utils_tests/test_numberformat.py",
+    "test_full": "python -m pytest -x -q utils_tests/test_numberformat.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "task_id": "sympy__sympy-20212",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "a106f4782a9dbe7f8fd16030f15401d977e03ae9",
+  "workdir": "/tmp/swebench_work/sympy__sympy-20212",
+  "issue_text": "0**-oo produces 0, the documentation says it should produce zoo\nUsing SymPy 1.5.1, evaluate `0**-oo` produces `0`.\r\n\r\nThe documentation for the Pow class states that it should return `ComplexInfinity`, aka `zoo`\r\n\r\n| expr | value | reason |\r\n| :-- | :-- | :--|\r\n| `0**-oo` | `zoo` | This is not strictly true, as 0**oo may be oscillating between positive and negative values or rotating in the complex plane. It is convenient, however, when the base is positive.|\r\n\n",
+  "hints": {
+    "failing_tests": [
+      "test_zero"
+    ],
+    "focus_files": [
+      "sympy/core/power.py"
+    ],
+    "test_patch": "diff --git a/sympy/core/tests/test_power.py b/sympy/core/tests/test_power.py\n--- a/sympy/core/tests/test_power.py\n+++ b/sympy/core/tests/test_power.py\n@@ -266,6 +266,9 @@ def test_zero():\n     assert 0**(2*x*y) == 0**(x*y)\n     assert 0**(-2*x*y) == S.ComplexInfinity**(x*y)\n \n+    #Test issue 19572\n+    assert 0 ** -oo is zoo\n+    assert power(0, -oo) is zoo\n \n def test_pow_as_base_exp():\n     x = Symbol('x')\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_zero\"",
+    "test_full": "python -m pytest -x -q -k \"test_zero\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

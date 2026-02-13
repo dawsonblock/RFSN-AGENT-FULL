@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-14787",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "004b4620f6f4ad87261e149898940f2dcd5757ef",
+  "workdir": "/tmp/swebench_work/django__django-14787",
+  "issue_text": "method_decorator() should preserve wrapper assignments\nDescription\n\t\nthe function that is passed to the decorator is a partial object and does not have any of the attributes expected from a function i.e. __name__, __module__ etc...\nconsider the following case\ndef logger(func):\n\t@wraps(func)\n\tdef inner(*args, **kwargs):\n\t\ttry:\n\t\t\tresult = func(*args, **kwargs)\n\t\texcept Exception as e:\n\t\t\tresult = str(e)\n\t\tfinally:\n\t\t\tlogger.debug(f\"{func.__name__} called with args: {args} and kwargs: {kwargs} resulting: {result}\")\n\treturn inner\nclass Test:\n\t@method_decorator(logger)\n\tdef hello_world(self):\n\t\treturn \"hello\"\nTest().test_method()\nThis results in the following exception\nAttributeError: 'functools.partial' object has no attribute '__name__'\n",
+  "hints": {
+    "failing_tests": [
+      "@method_decorator preserves wrapper assignments."
+    ],
+    "focus_files": [
+      "django/utils/decorators.py"
+    ],
+    "test_patch": "diff --git a/tests/decorators/tests.py b/tests/decorators/tests.py\n--- a/tests/decorators/tests.py\n+++ b/tests/decorators/tests.py\n@@ -425,6 +425,29 @@ class Test:\n                 def __module__(cls):\n                     return \"tests\"\n \n+    def test_wrapper_assignments(self):\n+        \"\"\"@method_decorator preserves wrapper assignments.\"\"\"\n+        func_name = None\n+        func_module = None\n+\n+        def decorator(func):\n+            @wraps(func)\n+            def inner(*args, **kwargs):\n+                nonlocal func_name, func_module\n+                func_name = getattr(func, '__name__', None)\n+                func_module = getattr(func, '__module__', None)\n+                return func(*args, **kwargs)\n+            return inner\n+\n+        class Test:\n+            @method_decorator(decorator)\n+            def method(self):\n+                return 'tests'\n+\n+        Test().method()\n+        self.assertEqual(func_name, 'method')\n+        self.assertIsNotNone(func_module)\n+\n \n class XFrameOptionsDecoratorsTests(TestCase):\n     \"\"\"\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q -k \"@method_decorator\"",
+    "test_full": "python -m pytest -x -q -k \"@method_decorator\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "task_id": "sympy__sympy-13146",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "b678d8103e48fdb1af335dbf0080b3d5366f2d17",
+  "workdir": "/tmp/swebench_work/sympy__sympy-13146",
+  "issue_text": "Exponent doesn't fully simplify\nSay I have code like this:\n\n```\nimport sympy\nfrom sympy import *\nx=Symbol('x')\nexpr1 = S(1)/2*x**2.5\nexpr2 = S(1)*x**(S(5)/2)/2\nres = expr1-expr2\nres= simplify(res.evalf(5))\nprint res\n```\n\nThe output is\n`-0.5*x**2.5 + 0.5*x**2.5`\nHow do I simplify it to 0?\n\n",
+  "hints": {
+    "failing_tests": [
+      "test_evalf_bugs"
+    ],
+    "focus_files": [
+      "sympy/core/operations.py"
+    ],
+    "test_patch": "diff --git a/sympy/core/tests/test_evalf.py b/sympy/core/tests/test_evalf.py\n--- a/sympy/core/tests/test_evalf.py\n+++ b/sympy/core/tests/test_evalf.py\n@@ -227,6 +227,9 @@ def test_evalf_bugs():\n     assert ((oo*I).n() == S.Infinity*I)\n     assert ((oo+oo*I).n() == S.Infinity + S.Infinity*I)\n \n+    #issue 11518\n+    assert NS(2*x**2.5, 5) == '2.0000*x**2.5000'\n+\n \n def test_evalf_integer_parts():\n     a = floor(log(8)/log(2) - exp(-1000), evaluate=False)\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_evalf_bugs\"",
+    "test_full": "python -m pytest -x -q -k \"test_evalf_bugs\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

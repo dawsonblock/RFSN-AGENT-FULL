@@ -14,23 +14,40 @@ from policy import (
 )
 from workdir_store import WorkdirStore
 
+# Import the RFSN patch risk gate as final authority.
+try:
+    from rfsn_swebench.gate import patch_risk_gate as _patch_risk_gate
+
+    _HAS_PATCH_GATE = True
+except ImportError:
+    _HAS_PATCH_GATE = False
+    _patch_risk_gate = None  # type: ignore[assignment]
+    print(
+        "CRITICAL: rfsn_swebench.gate not available — "
+        "patch_risk_gate enforcement DISABLED",
+        flush=True,
+    )
+
 import sys
+
 sys.path.insert(0, "/shared")
 try:
     from auth import (  # type: ignore[import-not-found]
         ServiceAuthMiddleware,
         auth_headers,
     )
+
     _HAS_AUTH = True
 except ImportError:
     _HAS_AUTH = False
-    def auth_headers(): return {}
+
+    def auth_headers():
+        return {}
+
 
 app = FastAPI()
 if _HAS_AUTH:
-    app.add_middleware(
-        ServiceAuthMiddleware  # type: ignore[possibly-unbound]
-    )
+    app.add_middleware(ServiceAuthMiddleware)  # type: ignore[possibly-unbound]
 
 EXECUTOR_URL = os.getenv("EXECUTOR_URL", "http://executor:8003")
 
@@ -41,8 +58,7 @@ def _load_yaml(path: str) -> dict:
             return yaml.safe_load(f) or {}
     except (FileNotFoundError, PermissionError) as exc:
         print(
-            f"FATAL: Cannot load policy file {path}:"
-            f" {exc}",
+            f"FATAL: Cannot load policy file {path}:" f" {exc}",
             flush=True,
         )
         raise SystemExit(1) from exc
@@ -57,9 +73,7 @@ GATE_POLICY = _load_yaml(
     "/policies/gate_policy.yaml",
 )
 RUN_TEST_TEMPLATES = (
-    _load_yaml("/policies/command_templates.yaml")
-    .get("templates", {})
-    or {}
+    _load_yaml("/policies/command_templates.yaml").get("templates", {}) or {}
 )
 
 # ── Unified patch limits from gate_policy ──────────
@@ -81,16 +95,14 @@ _EFFECTIVE_MAX_TOTAL = int(
     ),
 )
 _BLOCKED_READ_PREFIXES = tuple(
-    str(x) for x in (
-        GATE_POLICY.get("blocked_read_prefixes", [])
-        or []
-    ) if isinstance(x, str) and x.strip()
+    str(x)
+    for x in (GATE_POLICY.get("blocked_read_prefixes", []) or [])
+    if isinstance(x, str) and x.strip()
 )
 _BLOCKED_READ_SUFFIXES = tuple(
-    str(x) for x in (
-        GATE_POLICY.get("blocked_read_suffixes", [])
-        or []
-    ) if isinstance(x, str) and x.strip()
+    str(x)
+    for x in (GATE_POLICY.get("blocked_read_suffixes", []) or [])
+    if isinstance(x, str) and x.strip()
 )
 NETWORK_MIN_TIER = int(
     GATE_POLICY.get("network_min_tier", 2),
@@ -160,14 +172,14 @@ def usage_key(
 
 
 def charge(
-    repo_id: str, it: int,
-    kind: str, bytes_out: int = 0,
+    repo_id: str,
+    it: int,
+    kind: str,
+    bytes_out: int = 0,
     run_id: str | None = None,
 ):
     k = usage_key(repo_id, it, run_id)
-    u = ITER_USAGE.setdefault(
-        k, {"reads": 0, "searches": 0, "bytes": 0}
-    )
+    u = ITER_USAGE.setdefault(k, {"reads": 0, "searches": 0, "bytes": 0})
     if kind == "read":
         u["reads"] += 1
         if u["reads"] > MAX_READ_STEPS:
@@ -182,19 +194,12 @@ def charge(
             raise HTTPException(429, "bytes budget exceeded")
 
     # prune old iters per run-scope (keep last 5)
-    keys = [
-        kk for kk in ITER_USAGE.keys()
-        if kk[0] == repo_id and kk[1] == k[1]
-    ]
+    keys = [kk for kk in ITER_USAGE.keys() if kk[0] == repo_id and kk[1] == k[1]]
     iters = sorted({kk[2] for kk in keys})
     if len(iters) > 5:
         drop = set(iters[:-5])
         for kk in list(ITER_USAGE.keys()):
-            if (
-                kk[0] == repo_id
-                and kk[1] == k[1]
-                and kk[2] in drop
-            ):
+            if kk[0] == repo_id and kk[1] == k[1] and kk[2] in drop:
                 del ITER_USAGE[kk]
 
 
@@ -299,15 +304,14 @@ def health():
 
 
 def _executor(
-    step: dict, repo_id: str, it: int,
+    step: dict,
+    repo_id: str,
+    it: int,
     run_id: str | None = None,
     run_warm: bool = False,
 ):
     step_type = str(step.get("type") or "")
-    force_cold = (
-        step_type == "ensure_deps"
-        and bool(step.get("_rfsn_allow_network"))
-    )
+    force_cold = step_type == "ensure_deps" and bool(step.get("_rfsn_allow_network"))
     if run_id and run_warm and not force_cold:
         # Route through warm sandbox.
         r = requests.post(
@@ -439,8 +443,7 @@ def run_step(
         if tier < NETWORK_MIN_TIER:
             raise HTTPException(
                 403,
-                "ensure_deps requires network tier"
-                f" >= {NETWORK_MIN_TIER}",
+                "ensure_deps requires network tier" f" >= {NETWORK_MIN_TIER}",
             )
         s["_rfsn_allow_network"] = True
         s["_rfsn_network_reason"] = "ensure_deps"
@@ -459,7 +462,7 @@ def run_step(
 
         # Block shell metacharacters in patch file paths
         # (prevents injection if patch is ever mishandled downstream)
-        _SHELL_META = re.compile(r'[;&|`$\\(){}\[\]!<>]')
+        _SHELL_META = re.compile(r"[;&|`$\\(){}\[\]!<>]")
         for line in patch_text.splitlines():
             if (
                 line.startswith("diff --git ")
@@ -471,15 +474,24 @@ def run_step(
                 if _SHELL_META.search(last):
                     raise HTTPException(
                         403,
-                        "patch contains shell"
-                        f" metacharacters: {line[:80]}",
+                        "patch contains shell" f" metacharacters: {line[:80]}",
                     )
 
         # Block patches that try to modify sensitive files beyond dep manifests
         _SENSITIVE_PATTERNS = [
-            r'\.env$', r'\.env\.', r'id_rsa', r'\.pem$', r'\.key$',
-            r'\.p12$', r'\.pfx$', r'\.jks$', r'\.pypirc$', r'\.npmrc$',
-            r'\.netrc$', r'Dockerfile', r'docker-compose',
+            r"\.env$",
+            r"\.env\.",
+            r"id_rsa",
+            r"\.pem$",
+            r"\.key$",
+            r"\.p12$",
+            r"\.pfx$",
+            r"\.jks$",
+            r"\.pypirc$",
+            r"\.npmrc$",
+            r"\.netrc$",
+            r"Dockerfile",
+            r"docker-compose",
         ]
 
         touched_paths = extract_patch_touched_paths(patch_text)
@@ -503,6 +515,63 @@ def run_step(
                     raise HTTPException(
                         403,
                         f"patch touches sensitive file: {f}",
+                    )
+
+        # --- forbid flags (defense-in-depth mirror of kernel) ---
+        _forbid_tests = bool(GATE_POLICY.get("forbid_test_edits", False))
+        _forbid_ci = bool(GATE_POLICY.get("forbid_ci_edits", False))
+        _forbid_deps = bool(GATE_POLICY.get("forbid_dep_manifest_edits", False))
+
+        _DEP_MANIFEST_NAMES = {
+            "pyproject.toml",
+            "poetry.lock",
+            "requirements.txt",
+            "requirements-dev.txt",
+            "requirements.in",
+            "constraints.txt",
+            "setup.py",
+            "setup.cfg",
+            "pipfile",
+            "pipfile.lock",
+            "package.json",
+            "package-lock.json",
+            "yarn.lock",
+            "pnpm-lock.yaml",
+            "go.mod",
+            "go.sum",
+            "cargo.toml",
+            "cargo.lock",
+        }
+
+        for tp in touched_paths:
+            pp = tp.replace("\\", "/").lstrip("/")
+            if _forbid_tests and (
+                pp.startswith("tests/")
+                or "/tests/" in f"/{pp}"
+                or pp.startswith("test/")
+                or pp.endswith("_test.py")
+                or pp.endswith("test.py")
+            ):
+                raise HTTPException(
+                    403,
+                    "forbid_test_edits: patch touches" f" test path: {tp}",
+                )
+            if _forbid_ci and (
+                pp.startswith(".github/workflows/")
+                or pp.startswith("ci/")
+                or pp.startswith("scripts/")
+            ):
+                raise HTTPException(
+                    403,
+                    "forbid_ci_edits: patch touches" f" CI/scripts path: {tp}",
+                )
+            if _forbid_deps:
+                base = pp.split("/")[-1].lower()
+                if base in _DEP_MANIFEST_NAMES:
+                    raise HTTPException(
+                        403,
+                        "forbid_dep_manifest_edits:"
+                        f" patch touches dep manifest: {tp}",
                     )
 
         # --- diff-guard: max_changed_files ---
@@ -541,10 +610,28 @@ def run_step(
                 f" ({total_changed} > {_EFFECTIVE_MAX_TOTAL})",
             )
 
+        # ── RFSN Gate: FINAL AUTHORITY ──────────────────────
+        # Call patch_risk_gate from gate.py for banned-pattern
+        # enforcement (pytest.skip, xfail, test deletion heuristics,
+        # CI/dep file blocking). This is THE central authority.
+        if _HAS_PATCH_GATE and _patch_risk_gate is not None:
+            gate_report = _patch_risk_gate(
+                patch_text,
+                MAX_PATCH_BYTES,
+                _EFFECTIVE_MAX_FILES,
+                5,  # max_new_files
+            )
+            if gate_report.decision == "REJECT":
+                raise HTTPException(
+                    403,
+                    "RFSN gate REJECT: " + "; ".join(gate_report.reasons[:5]),
+                )
+
     # Enforce per-step budgets from kernel
     # gate policy (unified source of truth).
     budgets = GATE_POLICY.get(
-        "step_budgets", {},
+        "step_budgets",
+        {},
     )
     bt = budgets.get(s["type"])
     if bt and "timeout_s" in bt:

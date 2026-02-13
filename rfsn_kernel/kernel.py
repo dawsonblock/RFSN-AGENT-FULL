@@ -39,12 +39,12 @@ from rfsn_kernel.run_state import RunStateStore
 class KernelStepResult:
     """Result of one kernel step — everything recorded."""
 
-    phase: str                    # final phase reached
-    proposal: Proposal = None     # type: ignore[assignment]
+    phase: str  # final phase reached
+    proposal: Proposal = None  # type: ignore[assignment]
     validation: ValidationResult = None  # type: ignore[assignment]
     simulation: SimResult = None  # type: ignore[assignment]
-    risk: RiskBreakdown = None    # type: ignore[assignment]
-    decision: Decision = None     # type: ignore[assignment]
+    risk: RiskBreakdown = None  # type: ignore[assignment]
+    decision: Decision = None  # type: ignore[assignment]
     outcome: Optional[Outcome] = None
     verification: Optional[VerificationResult] = None
     ledger_record: Optional[LedgerRecord] = None
@@ -68,14 +68,9 @@ class KernelStepResult:
             "approved": self.approved,
             "success": self.success,
             "error": self.error,
-            "decision_reason": (
-                self.decision.reason if self.decision else None
-            ),
+            "decision_reason": (self.decision.reason if self.decision else None),
             "risk": self.risk.to_dict() if self.risk else None,
-            "simulation": (
-                self.simulation.to_dict()
-                if self.simulation else None
-            ),
+            "simulation": (self.simulation.to_dict() if self.simulation else None),
         }
 
 
@@ -181,14 +176,13 @@ class HardKernel:
         self.tier_policy = self._load_tier_policy(
             self.tier_policy_path,
         )
-        self.classifiers = (
-            self.tier_policy.get("classifiers") or {}
-        )
+        self.classifiers = self.tier_policy.get("classifiers") or {}
         self.run_state = RunStateStore()
         self._step_count = 0
 
     def _load_tier_policy(
-        self, path: str,
+        self,
+        path: str,
     ) -> Dict[str, Any]:
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -303,24 +297,19 @@ class HardKernel:
 
         # ── 1. NORMALIZE ──
         proposal = normalize(
-            raw_step, intent=intent,
+            raw_step,
+            intent=intent,
             context_hash=context,
             bundle_id=bundle_id,
         )
         rs = self.run_state.get(run_id)
         tier_cfg = self._tier_cfg(rs.tier)
-        budgets = (
-            tier_cfg.get("budgets", {})
-            if isinstance(tier_cfg, dict) else {}
-        )
+        budgets = tier_cfg.get("budgets", {}) if isinstance(tier_cfg, dict) else {}
 
         max_total_steps = int(
             budgets.get("max_total_steps", 0) or 0,
         )
-        if (
-            max_total_steps > 0
-            and self.state.step_count >= max_total_steps
-        ):
+        if max_total_steps > 0 and self.state.step_count >= max_total_steps:
             reason = (
                 "tier max_total_steps exceeded:"
                 f" {self.state.step_count} >= {max_total_steps}"
@@ -368,12 +357,10 @@ class HardKernel:
                         "utf-8",
                         errors="replace",
                     )
-                ) > max_patch_bytes
-            ):
-                reason = (
-                    "tier max_patch_bytes exceeded:"
-                    f" > {max_patch_bytes}"
                 )
+                > max_patch_bytes
+            ):
+                reason = "tier max_patch_bytes exceeded:" f" > {max_patch_bytes}"
                 self._append_kernel_event(
                     event_type="TIER_STEP_REJECTED",
                     run_id=run_id,
@@ -409,10 +396,7 @@ class HardKernel:
                 budgets.get("max_files_touched", 0) or 0,
             )
             touched = step_touches(raw_step)
-            if (
-                max_files_touched > 0
-                and len(touched) > max_files_touched
-            ):
+            if max_files_touched > 0 and len(touched) > max_files_touched:
                 reason = (
                     "tier max_files_touched exceeded:"
                     f" {len(touched)} > {max_files_touched}"
@@ -450,8 +434,10 @@ class HardKernel:
 
             max_lines_changed = int(
                 budgets.get(
-                    "max_total_lines_changed", 0,
-                ) or 0,
+                    "max_total_lines_changed",
+                    0,
+                )
+                or 0,
             )
             if max_lines_changed > 0:
                 added = 0
@@ -540,9 +526,13 @@ class HardKernel:
         validation = validate(proposal, self.state, self.policy)
         if not validation.ok:
             record = self._commit_ledger(
-                proposal, None, None, "REJECT",
+                proposal,
+                None,
+                None,
+                "REJECT",
                 f"Validation failed: {validation.errors}",
-                None, None,
+                None,
+                None,
                 run_id,
             )
             return KernelStepResult(
@@ -569,7 +559,8 @@ class HardKernel:
             try:
                 prior_trials = int(
                     learner_evidence.get(
-                        "prior_trials", 0,
+                        "prior_trials",
+                        0,
                     )
                     or 0,
                 )
@@ -579,7 +570,8 @@ class HardKernel:
             try:
                 failure_occurrence = int(
                     learner_evidence.get(
-                        "failure_occurrence", 0,
+                        "failure_occurrence",
+                        0,
                     )
                     or 0,
                 )
@@ -588,7 +580,8 @@ class HardKernel:
             try:
                 failure_best_win_rate = float(
                     learner_evidence.get(
-                        "failure_best_win_rate", 0.0,
+                        "failure_best_win_rate",
+                        0.0,
                     )
                     or 0.0,
                 )
@@ -597,30 +590,47 @@ class HardKernel:
             if failure_occurrence >= 2:
                 prior_loop_risk = min(
                     0.9,
-                    0.2 + (0.1 * min(
-                        failure_occurrence, 5,
-                    )),
+                    0.2
+                    + (
+                        0.1
+                        * min(
+                            failure_occurrence,
+                            5,
+                        )
+                    ),
                 )
-            if (
-                failure_occurrence >= 3
-                and failure_best_win_rate < 0.35
-            ):
                 prior_loop_risk = max(
-                    prior_loop_risk or 0.0, 0.7,
+                    prior_loop_risk or 0.0,
+                    0.7,
                 )
 
+            try:
+                known_traps_list = learner_evidence.get("known_traps")
+                if isinstance(known_traps_list, list):
+                    known_traps = [str(t) for t in known_traps_list]
+                else:
+                    known_traps = None
+            except (TypeError, ValueError):
+                known_traps = None
+        else:
+            known_traps = None
+
         sim = simulate(
-            proposal, self.state,
+            proposal,
+            self.state,
             history=self.history,
             context=context,
             prior_success_prob=prior_success_prob,
             prior_trials=prior_trials,
             prior_loop_risk=prior_loop_risk,
+            known_traps=known_traps,
         )
 
         # ── 4. RISK SCORE ──
         risk = risk_score(
-            proposal, sim, self.state,
+            proposal,
+            sim,
+            self.state,
             policy=self.policy,
         )
 
@@ -631,8 +641,13 @@ class HardKernel:
             # Record rejection + update state.
             self.state.record_action(proposal.action)
             record = self._commit_ledger(
-                proposal, sim, risk, "REJECT",
-                decision.reason, None, None,
+                proposal,
+                sim,
+                risk,
+                "REJECT",
+                decision.reason,
+                None,
+                None,
                 run_id,
             )
             return KernelStepResult(
@@ -668,8 +683,10 @@ class HardKernel:
 
         # Record in outcome history for future simulation.
         self.history.record(
-            proposal.action, context,
-            outcome.success, sim.cost_est,
+            proposal.action,
+            context,
+            outcome.success,
+            sim.cost_est,
         )
 
         executor_out_like = {
@@ -695,7 +712,9 @@ class HardKernel:
             )
         rs.failure_kinds = kinds
         td = pick_next_tier(
-            rs.tier, kinds, self.tier_policy,
+            rs.tier,
+            kinds,
+            self.tier_policy,
         )
         if td.tier != rs.tier:
             old_tier = rs.tier
@@ -715,7 +734,10 @@ class HardKernel:
 
         # ── 7. VERIFY ──
         verification = verify(
-            proposal, outcome, self.state, self.policy,
+            proposal,
+            outcome,
+            self.state,
+            self.policy,
         )
 
         # Adaptive risk tightening: if verification
@@ -727,9 +749,13 @@ class HardKernel:
 
         # ── 8. LEDGER COMMIT ──
         record = self._commit_ledger(
-            proposal, sim, risk,
-            "APPROVE", decision.reason,
-            outcome, verification,
+            proposal,
+            sim,
+            risk,
+            "APPROVE",
+            decision.reason,
+            outcome,
+            verification,
             run_id,
         )
 
@@ -765,13 +791,9 @@ class HardKernel:
             risk=risk.to_dict() if risk else {},
             decision=decision,
             decision_reason=reason,
-            outcome_hash=(
-                outcome.deterministic_hash() if outcome else None
-            ),
+            outcome_hash=(outcome.deterministic_hash() if outcome else None),
             state_hash=self.state.deterministic_hash(),
-            verification=(
-                verification.to_dict() if verification else None
-            ),
+            verification=(verification.to_dict() if verification else None),
             metadata={
                 "action": proposal.action,
                 "intent": proposal.intent,
@@ -802,9 +824,7 @@ class HardKernel:
         the immutable ledger intact.
         """
         seed = int(
-            rng_seed
-            if rng_seed is not None
-            else self.policy.get("rng_seed", 42)
+            rng_seed if rng_seed is not None else self.policy.get("rng_seed", 42)
         )
         p_hash = str(
             policy_hash
@@ -819,7 +839,7 @@ class HardKernel:
             resource_state={
                 "run_id": run_id,
             },
-            )
+        )
         if reset_history:
             self.history = OutcomeHistory(
                 max_entries=int(
@@ -836,7 +856,8 @@ class HardKernel:
         This is the learner-driven adaptive risk mechanism.
         """
         self.state.safety_level = min(
-            2, self.state.safety_level + 1,
+            2,
+            self.state.safety_level + 1,
         )
         # Tighten thresholds in policy.
         current_risk_max = float(self.policy.get("risk_max", 0.65))

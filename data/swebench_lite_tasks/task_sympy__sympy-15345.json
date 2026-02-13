@@ -1,0 +1,30 @@
+{
+  "task_id": "sympy__sympy-15345",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "9ef28fba5b4d6d0168237c9c005a550e6dc27d81",
+  "workdir": "/tmp/swebench_work/sympy__sympy-15345",
+  "issue_text": "mathematica_code gives wrong output with Max\nIf I run the code\r\n\r\n```\r\nx = symbols('x')\r\nmathematica_code(Max(x,2))\r\n```\r\n\r\nthen I would expect the output `'Max[x,2]'` which is valid Mathematica code but instead I get `'Max(2, x)'` which is not valid Mathematica code.\n",
+  "hints": {
+    "failing_tests": [
+      "test_Function"
+    ],
+    "focus_files": [
+      "sympy/printing/mathematica.py"
+    ],
+    "test_patch": "diff --git a/sympy/printing/tests/test_mathematica.py b/sympy/printing/tests/test_mathematica.py\n--- a/sympy/printing/tests/test_mathematica.py\n+++ b/sympy/printing/tests/test_mathematica.py\n@@ -2,7 +2,7 @@\n                         Rational, Integer, Tuple, Derivative)\n from sympy.integrals import Integral\n from sympy.concrete import Sum\n-from sympy.functions import exp, sin, cos, conjugate\n+from sympy.functions import exp, sin, cos, conjugate, Max, Min\n \n from sympy import mathematica_code as mcode\n \n@@ -28,6 +28,7 @@ def test_Function():\n     assert mcode(f(x, y, z)) == \"f[x, y, z]\"\n     assert mcode(sin(x) ** cos(x)) == \"Sin[x]^Cos[x]\"\n     assert mcode(conjugate(x)) == \"Conjugate[x]\"\n+    assert mcode(Max(x,y,z)*Min(y,z)) == \"Max[x, y, z]*Min[y, z]\"\n \n \n def test_Pow():\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_Function\"",
+    "test_full": "python -m pytest -x -q -k \"test_Function\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

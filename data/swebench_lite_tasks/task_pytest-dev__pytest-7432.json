@@ -1,0 +1,28 @@
+{
+  "task_id": "pytest-dev__pytest-7432",
+  "repo_url": "https://github.com/pytest-dev/pytest.git",
+  "repo_ref": "e6e300e729dd33956e5448d8be9a0b1540b4e53a",
+  "workdir": "/tmp/swebench_work/pytest-dev__pytest-7432",
+  "issue_text": "skipping: --runxfail breaks pytest.mark.skip location reporting\npytest versions: 5.4.x, current master\r\n\r\nWhen `@pytest.mark.skip`/`skipif` marks are used to skip a test, for example\r\n\r\n```py\r\nimport pytest\r\n@pytest.mark.skip\r\ndef test_skip_location() -> None:\r\n    assert 0\r\n```\r\n\r\nthe expected skip location reported should point to the item itself, and this is indeed what happens when running with `pytest -rs`:\r\n\r\n```\r\nSKIPPED [1] test_it.py:3: unconditional skip\r\n```\r\n\r\nHowever, adding `pytest -rs --runxfail` breaks this:\r\n\r\n```\r\nSKIPPED [1] src/_pytest/skipping.py:238: unconditional skip\r\n```\r\n\r\nThe `--runxfail` is only about xfail and should not affect this at all.\r\n\r\n---\r\n\r\nHint: the bug is in `src/_pytest/skipping.py`, the `pytest_runtest_makereport` hook.\n",
+  "hints": {
+    "failing_tests": [
+      "testing/test_skipping.py::TestXFail::test_xfail_run_with_skip_mark[test_input1-expected1]"
+    ],
+    "focus_files": [],
+    "test_patch": "diff --git a/testing/test_skipping.py b/testing/test_skipping.py\n--- a/testing/test_skipping.py\n+++ b/testing/test_skipping.py\n@@ -235,6 +235,31 @@ def test_func2():\n             [\"*def test_func():*\", \"*assert 0*\", \"*1 failed*1 pass*\"]\n         )\n \n+    @pytest.mark.parametrize(\n+        \"test_input,expected\",\n+        [\n+            (\n+                [\"-rs\"],\n+                [\"SKIPPED [1] test_sample.py:2: unconditional skip\", \"*1 skipped*\"],\n+            ),\n+            (\n+                [\"-rs\", \"--runxfail\"],\n+                [\"SKIPPED [1] test_sample.py:2: unconditional skip\", \"*1 skipped*\"],\n+            ),\n+        ],\n+    )\n+    def test_xfail_run_with_skip_mark(self, testdir, test_input, expected):\n+        testdir.makepyfile(\n+            test_sample=\"\"\"\n+            import pytest\n+            @pytest.mark.skip\n+            def test_skip_location() -> None:\n+                assert 0\n+        \"\"\"\n+        )\n+        result = testdir.runpytest(*test_input)\n+        result.stdout.fnmatch_lines(expected)\n+\n     def test_xfail_evalfalse_but_fails(self, testdir):\n         item = testdir.getitem(\n             \"\"\"\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[testing]"
+    ],
+    "test_quick": "python -m pytest -x -q testing/test_skipping.py::TestXFail::test_xfail_run_with_skip_mark[test_input1-expected1]",
+    "test_full": "python -m pytest -x -q testing/test_skipping.py::TestXFail::test_xfail_run_with_skip_mark[test_input1-expected1]"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

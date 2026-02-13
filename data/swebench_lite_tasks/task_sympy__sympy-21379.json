@@ -1,0 +1,30 @@
+{
+  "task_id": "sympy__sympy-21379",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "624217179aaf8d094e6ff75b7493ad1ee47599b0",
+  "workdir": "/tmp/swebench_work/sympy__sympy-21379",
+  "issue_text": "Unexpected `PolynomialError` when using simple `subs()` for particular expressions\nI am seeing weird behavior with `subs` for particular expressions with hyperbolic sinusoids with piecewise arguments. When applying `subs`, I obtain an unexpected `PolynomialError`. For context, I was umbrella-applying a casting from int to float of all int atoms for a bunch of random expressions before using a tensorflow lambdify to avoid potential tensorflow type errors. You can pretend the expression below has a `+ 1` at the end, but below is the MWE that I could produce.\r\n\r\nSee the expression below, and the conditions in which the exception arises.\r\n\r\nSympy version: 1.8.dev\r\n\r\n```python\r\nfrom sympy import *\r\nfrom sympy.core.cache import clear_cache\r\n\r\nx, y, z = symbols('x y z')\r\n\r\nclear_cache()\r\nexpr = exp(sinh(Piecewise((x, y > x), (y, True)) / z))\r\n# This works fine\r\nexpr.subs({1: 1.0})\r\n\r\nclear_cache()\r\nx, y, z = symbols('x y z', real=True)\r\nexpr = exp(sinh(Piecewise((x, y > x), (y, True)) / z))\r\n# This fails with \"PolynomialError: Piecewise generators do not make sense\"\r\nexpr.subs({1: 1.0})  # error\r\n# Now run it again (isympy...) w/o clearing cache and everything works as expected without error\r\nexpr.subs({1: 1.0})\r\n```\r\n\r\nI am not really sure where the issue is, but I think it has something to do with the order of assumptions in this specific type of expression. Here is what I found-\r\n\r\n- The error only (AFAIK) happens with `cosh` or `tanh` in place of `sinh`, otherwise it succeeds\r\n- The error goes away if removing the division by `z`\r\n- The error goes away if removing `exp` (but stays for most unary functions, `sin`, `log`, etc.)\r\n- The error only happens with real symbols for `x` and `y` (`z` does not have to be real)\r\n\r\nNot too sure how to debug this one.\n",
+  "hints": {
+    "failing_tests": [
+      "test_Mod"
+    ],
+    "focus_files": [
+      "sympy/core/mod.py"
+    ],
+    "test_patch": "diff --git a/sympy/core/tests/test_arit.py b/sympy/core/tests/test_arit.py\n--- a/sympy/core/tests/test_arit.py\n+++ b/sympy/core/tests/test_arit.py\n@@ -1913,6 +1913,16 @@ def test_Mod():\n     assert Mod(x, y).rewrite(floor) == x - y*floor(x/y)\n     assert ((x - Mod(x, y))/y).rewrite(floor) == floor(x/y)\n \n+    # issue 21373\n+    from sympy.functions.elementary.trigonometric import sinh\n+    from sympy.functions.elementary.piecewise import Piecewise\n+\n+    x_r, y_r = symbols('x_r y_r', real=True)\n+    (Piecewise((x_r, y_r > x_r), (y_r, True)) / z) % 1\n+    expr = exp(sinh(Piecewise((x_r, y_r > x_r), (y_r, True)) / z))\n+    expr.subs({1: 1.0})\n+    sinh(Piecewise((x_r, y_r > x_r), (y_r, True)) * z ** -1.0).is_zero\n+\n \n def test_Mod_Pow():\n     # modular exponentiation\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_Mod\"",
+    "test_full": "python -m pytest -x -q -k \"test_Mod\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

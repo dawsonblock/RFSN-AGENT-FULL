@@ -232,6 +232,33 @@ def bench_run(
     # Derive a repo_id for executor routing (sanitise task_id)
     repo_id = re.sub(r"[^A-Za-z0-9_.-]", "_", task.task_id) if executor_url else ""
 
+    # ── Pre-diagnosis: run failing tests to capture stack traces ──
+    # This gives the proposer real file:line pointers for localization,
+    # dramatically improving fault localization accuracy.
+    pre_diagnosis_output = ""
+    if task.hints.failing_tests:
+        log_event(replay_dir, {"type": "pre_diagnose_start"})
+        diag_tr = run_tests(
+            quick_cmd,
+            task.workdir,
+            timeout=min(120, task.limits.max_runtime_sec),
+        )
+        if diag_tr.exit_code != 0 and diag_tr.stdout_tail.strip():
+            pre_diagnosis_output = diag_tr.stdout_tail
+            # Save to replay dir so proposer can read it
+            diag_path = os.path.join(replay_dir, "pre_diagnosis.txt")
+            with open(diag_path, "w", encoding="utf-8") as f:
+                f.write(pre_diagnosis_output)
+        log_event(
+            replay_dir,
+            {
+                "type": "pre_diagnose_result",
+                "exit_code": diag_tr.exit_code,
+                "has_traceback": bool(pre_diagnosis_output),
+                "output_lines": len(pre_diagnosis_output.splitlines()),
+            },
+        )
+
     # Helper: persist iteration feedback for the proposer
     def _write_feedback(replay_dir: str, feedback: list) -> None:
         path = os.path.join(replay_dir, "feedback.json")

@@ -1,0 +1,17 @@
+[
+  {
+    "iter": 1,
+    "type": "apply_fail",
+    "error": "git apply failed:\nerror: No valid patches in input (allow with \"--allow-empty\")\n\n  I can't seem to find a patch in there anywhere.\n"
+  },
+  {
+    "iter": 2,
+    "type": "apply_fail",
+    "error": "git apply failed:\nerror: No valid patches in input (allow with \"--allow-empty\")\n\n  I can't seem to find a patch in there anywhere.\n"
+  },
+  {
+    "iter": 3,
+    "type": "apply_fail",
+    "error": "git apply failed:\nerror: No valid patches in input (allow with \"--allow-empty\")\n\n  I can't seem to find a patch in there anywhere.\n"
+  }
+]

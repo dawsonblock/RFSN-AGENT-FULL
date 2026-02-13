@@ -1,0 +1,30 @@
+{
+  "task_id": "sympy__sympy-24909",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "d3b4158dea271485e3daa11bf82e69b8dab348ce",
+  "workdir": "/tmp/swebench_work/sympy__sympy-24909",
+  "issue_text": "Bug with milli prefix\nWhat happened:\r\n```\r\nIn [1]: from sympy.physics.units import milli, W\r\nIn [2]: milli*W == 1\r\nOut[2]: True\r\nIn [3]: W*milli\r\nOut[3]: watt*Prefix(milli, m, -3, 10)\r\n```\r\nWhat I expected to happen: milli*W should evaluate to milli watts / mW\r\n\r\n`milli*W` or more generally `milli` times some unit evaluates to the number 1. I have tried this with Watts and Volts, I'm not sure what other cases this happens. I'm using sympy version 1.11.1-1 on Arch Linux with Python 3.10.9. If you cannot reproduce I would be happy to be of any assitance.\n",
+  "hints": {
+    "failing_tests": [
+      "test_prefix_operations"
+    ],
+    "focus_files": [
+      "sympy/physics/units/prefixes.py"
+    ],
+    "test_patch": "diff --git a/sympy/physics/units/tests/test_prefixes.py b/sympy/physics/units/tests/test_prefixes.py\n--- a/sympy/physics/units/tests/test_prefixes.py\n+++ b/sympy/physics/units/tests/test_prefixes.py\n@@ -2,7 +2,7 @@\n from sympy.core.numbers import Rational\n from sympy.core.singleton import S\n from sympy.core.symbol import (Symbol, symbols)\n-from sympy.physics.units import Quantity, length, meter\n+from sympy.physics.units import Quantity, length, meter, W\n from sympy.physics.units.prefixes import PREFIXES, Prefix, prefix_unit, kilo, \\\n     kibi\n from sympy.physics.units.systems import SI\n@@ -17,7 +17,8 @@ def test_prefix_operations():\n \n     dodeca = Prefix('dodeca', 'dd', 1, base=12)\n \n-    assert m * k == 1\n+    assert m * k is S.One\n+    assert m * W == W / 1000\n     assert k * k == M\n     assert 1 / m == k\n     assert k / m == M\n@@ -25,7 +26,7 @@ def test_prefix_operations():\n     assert dodeca * dodeca == 144\n     assert 1 / dodeca == S.One / 12\n     assert k / dodeca == S(1000) / 12\n-    assert dodeca / dodeca == 1\n+    assert dodeca / dodeca is S.One\n \n     m = Quantity(\"fake_meter\")\n     SI.set_quantity_dimension(m, S.One)\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_prefix_operations\"",
+    "test_full": "python -m pytest -x -q -k \"test_prefix_operations\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

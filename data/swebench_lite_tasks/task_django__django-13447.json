@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-13447",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "0456d3e42795481a186db05719300691fe2a1029",
+  "workdir": "/tmp/swebench_work/django__django-13447",
+  "issue_text": "Added model class to app_list context\nDescription\n\t \n\t\t(last modified by Raffaele Salmaso)\n\t \nI need to manipulate the app_list in my custom admin view, and the easiest way to get the result is to have access to the model class (currently the dictionary is a serialized model).\nIn addition I would make the _build_app_dict method public, as it is used by the two views index and app_index.\n",
+  "hints": {
+    "failing_tests": [
+      "test_available_apps (admin_views.test_adminsite.SiteEachContextTest)"
+    ],
+    "focus_files": [
+      "django/contrib/admin/sites.py"
+    ],
+    "test_patch": "diff --git a/tests/admin_views/test_adminsite.py b/tests/admin_views/test_adminsite.py\n--- a/tests/admin_views/test_adminsite.py\n+++ b/tests/admin_views/test_adminsite.py\n@@ -55,7 +55,9 @@ def test_available_apps(self):\n         admin_views = apps[0]\n         self.assertEqual(admin_views['app_label'], 'admin_views')\n         self.assertEqual(len(admin_views['models']), 1)\n-        self.assertEqual(admin_views['models'][0]['object_name'], 'Article')\n+        article = admin_views['models'][0]\n+        self.assertEqual(article['object_name'], 'Article')\n+        self.assertEqual(article['model'], Article)\n \n         # auth.User\n         auth = apps[1]\n@@ -63,6 +65,7 @@ def test_available_apps(self):\n         self.assertEqual(len(auth['models']), 1)\n         user = auth['models'][0]\n         self.assertEqual(user['object_name'], 'User')\n+        self.assertEqual(user['model'], User)\n \n         self.assertEqual(auth['app_url'], '/test_admin/admin/auth/')\n         self.assertIs(auth['has_module_perms'], True)\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q admin_views/test_adminsite.py",
+    "test_full": "python -m pytest -x -q admin_views/test_adminsite.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

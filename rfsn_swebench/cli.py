@@ -158,7 +158,10 @@ def make_direct_proposer(
     api_key: Optional[str] = None,
     base_url: str = "https://api.deepseek.com",
     model: str = "deepseek-chat",
+    strong_model: Optional[str] = None,
     outcome_memory_path: Optional[str] = None,
+    n_candidates: int = 3,
+    candidate_temperature: float = 0.6,
 ):
     """Return a two-stage agentic proposer using any OpenAI-compatible API.
 
@@ -181,6 +184,7 @@ def make_direct_proposer(
         or os.environ.get("OPENAI_API_KEY", "")
         or os.environ.get("LLM_API_KEY", "")
     )
+    resolved_strong = strong_model or os.environ.get("RFSN_STRONG_MODEL", "")
     if not resolved_key:
         raise RuntimeError(
             "Proposer requires an API key. Set DEEPSEEK_API_KEY, "
@@ -260,10 +264,16 @@ def make_direct_proposer(
         *,
         max_tokens: int = 16384,
         temperature: float = 0.0,
+        use_strong: bool = False,
     ) -> str:
-        """Make a single chat completion call."""
+        """Make a single chat completion call.
+
+        If *use_strong* is True and a strong model is configured,
+        routes to the stronger model for complex tasks.
+        """
+        active_model = resolved_strong if (use_strong and resolved_strong) else model
         payload: dict = {
-            "model": model,
+            "model": active_model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -271,7 +281,7 @@ def make_direct_proposer(
         }
         # Reasoner models don't support temperature/max_tokens
         # Gemini 3 has always-on reasoning
-        is_reasoner = "reasoner" in model or "gemini-3" in model
+        is_reasoner = "reasoner" in active_model or "gemini-3" in active_model
         if not is_reasoner:
             payload["temperature"] = temperature
             payload["max_tokens"] = max_tokens
@@ -506,12 +516,76 @@ def make_direct_proposer(
             iter_feedback or last_test_output.strip() or last_test_stderr.strip()
         )
 
-        # --- Determine files to read (cached across iterations) ---
-        if _cached_target_files is not None:
+        # --- Load pre-diagnosis traceback (from runner.py) ---
+        pre_diag_path = os.path.join(replay_dir, "pre_diagnosis.txt")
+        pre_diagnosis = ""
+        if os.path.isfile(pre_diag_path):
+            try:
+                pre_diagnosis = read_text(pre_diag_path)[-4000:]
+            except Exception:
+                pass
+
+        # --- Extract file paths from traceback for re-localization ---
+        def _files_from_traceback(tb: str) -> list[str]:
+            """Parse file paths from Python traceback output."""
+            files: list[str] = []
+            for m in re.finditer(
+                r'File "([^"]+)", line \d+',
+                tb,
+            ):
+                fpath = m.group(1)
+                # Only include project-relative paths, skip stdlib/site-packages
+                if (
+                    "site-packages" not in fpath
+                    and "/lib/python" not in fpath
+                    and os.path.isfile(os.path.join(task.workdir, fpath))
+                ):
+                    files.append(fpath)
+            # Also try relative paths
+            for m in re.finditer(
+                r"(?:^|\s)([A-Za-z0-9_./]+\.py):\d+",
+                tb,
+            ):
+                fpath = m.group(1)
+                if os.path.isfile(os.path.join(task.workdir, fpath)):
+                    files.append(fpath)
+            return list(dict.fromkeys(files))  # dedupe, preserve order
+
+        # --- Determine files to read ---
+        # On retry with cached files, check if re-localization is needed
+        if _cached_target_files is not None and is_retry:
+            # Re-localization: if we have test failure output, extract
+            # additional file pointers from the traceback
+            tb_source = ""
+            if iter_feedback:
+                for fb in reversed(iter_feedback):
+                    if fb.get("type") == "test_fail":
+                        tb_source = fb.get("stdout_tail", "")
+                        break
+            elif last_test_output.strip():
+                tb_source = last_test_output
+
+            if tb_source:
+                tb_files = _files_from_traceback(tb_source)
+                # Add any new files from traceback that aren't already targeted
+                new_files = [f for f in tb_files if f not in _cached_target_files]
+                if new_files:
+                    _cached_target_files = _cached_target_files + new_files[:3]
+                    log_event(
+                        replay_dir,
+                        {
+                            "type": "relocalize_expand",
+                            "new_files": new_files[:3],
+                            "total_files": len(_cached_target_files),
+                        },
+                    )
+            target_files = _cached_target_files
+        elif _cached_target_files is not None:
             target_files = _cached_target_files
         else:
             # Start with hint focus_files (from gold patch in SWE-bench)
             target_files = list(task.hints.focus_files or [])
+
         # If no target files cached or provided, run Stage 1: Locate
         if not target_files:
             locate_prompt = (
@@ -523,6 +597,15 @@ def make_direct_proposer(
                     "\n## Known Failing Tests\n"
                     + "\n".join(task.hints.failing_tests)
                     + "\n"
+                )
+            # Inject pre-diagnosis traceback for precise localization
+            if pre_diagnosis:
+                locate_prompt += (
+                    "\n## Actual Test Failure Traceback\n"
+                    "The following is the REAL error output from running the "
+                    "failing tests. Use the file paths and line numbers to "
+                    "precisely identify which files need to be modified:\n"
+                    f"```\n{pre_diagnosis[-3000:]}\n```\n"
                 )
 
             log_event(replay_dir, {"type": "locate_start"})
@@ -541,6 +624,13 @@ def make_direct_proposer(
                 },
             )
 
+            # Supplement with files from traceback
+            if pre_diagnosis:
+                tb_files = _files_from_traceback(pre_diagnosis)
+                for tf in tb_files:
+                    if tf not in target_files:
+                        target_files.append(tf)
+
             if not target_files:
                 # Absolute fallback: try to find Python files mentioned
                 # in the issue text
@@ -553,12 +643,12 @@ def make_direct_proposer(
             # Cache for subsequent iterations
             _cached_target_files = target_files
 
-        # --- Read file contents ---
+        # --- Read file contents (expanded budget for complex repos) ---
         file_context = read_file_context(
             task.workdir,
             target_files,
-            max_chars_per_file=15000,
-            max_total_chars=60000,
+            max_chars_per_file=30000,
+            max_total_chars=120000,
         )
 
         # --- Read test file contents ---
@@ -602,6 +692,17 @@ def make_direct_proposer(
                 f"## Test Code (read-only — do NOT modify)\n" f"{test_context}\n"
             )
 
+        # Pre-diagnosis traceback (first attempt only — retries get
+        # structured feedback which is more specific)
+        if pre_diagnosis and not is_retry:
+            user_parts.append(
+                "## Actual Test Error Output\n"
+                "The following is the REAL output from running the failing "
+                "tests on the current codebase. Use this to understand the "
+                "root cause:\n"
+                f"```\n{pre_diagnosis[-3000:]}\n```\n"
+            )
+
         # Retry: include structured feedback from ALL previous attempts
         if is_retry:
             if iter_feedback:
@@ -641,38 +742,141 @@ def make_direct_proposer(
                 "type": "patch_start",
                 "is_retry": is_retry,
                 "target_files": target_files,
+                "n_candidates": 1 if is_retry else n_candidates,
             },
         )
 
-        raw_response = _llm_call(
-            system_prompt,
-            user_prompt,
-            max_tokens=16384,
-            temperature=0.2 if is_retry else 0.0,
-        )
+        # Complexity routing: use strong model for retries and complex tasks
+        _task_is_complex = len(target_files) > 3 or len(task.issue_text) > 2000
+        _use_strong_model = is_retry or _task_is_complex
 
-        # --- Try Apply-and-Diff first ---
-        file_blocks = _extract_file_blocks(raw_response)
-        if file_blocks:
+        def _generate_one(temp: float) -> str:
+            """Generate a single candidate patch."""
+            raw = _llm_call(
+                system_prompt,
+                user_prompt,
+                max_tokens=16384,
+                temperature=temp,
+                use_strong=_use_strong_model,
+            )
+            blocks = _extract_file_blocks(raw)
+            if blocks:
+                diff = _apply_and_diff(
+                    task.workdir,
+                    blocks,
+                    target_files,
+                )
+                # Reset workdir after apply-and-diff so next candidate
+                # starts from clean state
+                from .repo import git_reset_hard
+
+                git_reset_hard(task.workdir)
+                # Re-apply test_patch if present
+                if task.hints.test_patch:
+                    from .patcher import apply_unified_diff
+
+                    apply_unified_diff(
+                        task.hints.test_patch,
+                        task.workdir,
+                        strict=True,
+                    )
+                if diff.strip():
+                    return diff
+            return _extract_diff(raw)
+
+        def _quick_validate(patch_diff: str) -> tuple[str, bool, str]:
+            """Apply a candidate patch and run quick tests.
+
+            Returns (diff, passed, test_output).
+            """
+            if not patch_diff.strip():
+                return patch_diff, False, "empty patch"
+            try:
+                from .patcher import apply_unified_diff
+                from .repo import git_reset_hard
+
+                git_reset_hard(task.workdir)
+                if task.hints.test_patch:
+                    apply_unified_diff(
+                        task.hints.test_patch,
+                        task.workdir,
+                        strict=True,
+                    )
+                apply_unified_diff(patch_diff, task.workdir)
+                # Run quick tests
+                from .testsel import choose_quick_tests
+
+                quick_cmd = choose_quick_tests(
+                    task.hints,
+                    task.commands.test_quick,
+                )
+                from .util import run_cmd
+
+                code, out, err, _ = run_cmd(
+                    quick_cmd,
+                    cwd=task.workdir,
+                    timeout_sec=120,
+                )
+                passed = code == 0
+                return patch_diff, passed, out[-2000:] if out else err[-2000:]
+            except Exception as exc:
+                return patch_diff, False, str(exc)[:500]
+            finally:
+                from .repo import git_reset_hard
+
+                git_reset_hard(task.workdir)
+                if task.hints.test_patch:
+                    from .patcher import apply_unified_diff
+
+                    apply_unified_diff(
+                        task.hints.test_patch,
+                        task.workdir,
+                        strict=True,
+                    )
+
+        # --- Single candidate on retry, Best-of-N on first attempt ---
+        if is_retry or n_candidates <= 1:
+            return _generate_one(0.2 if is_retry else 0.0)
+
+        # Best-of-N: generate multiple candidates and pick the best
+        log_event(replay_dir, {"type": "best_of_n_start", "n": n_candidates})
+        candidates: list[str] = []
+
+        # First candidate at temp=0 (deterministic baseline)
+        candidates.append(_generate_one(0.0))
+
+        # Remaining candidates at higher temperature for diversity
+        for _ in range(n_candidates - 1):
+            candidates.append(_generate_one(candidate_temperature))
+
+        # Validate each candidate with quick tests
+        best_candidate = candidates[0]  # fallback to first
+        for ci, cand in enumerate(candidates):
+            cand_diff, passed, test_out = _quick_validate(cand)
             log_event(
                 replay_dir,
                 {
-                    "type": "apply_and_diff",
-                    "file_count": len(file_blocks),
-                    "files": list(file_blocks.keys()),
+                    "type": "candidate_result",
+                    "index": ci,
+                    "passed": passed,
+                    "output_tail": test_out[-200:] if test_out else "",
                 },
             )
-            diff = _apply_and_diff(
-                task.workdir,
-                file_blocks,
-                target_files,
-            )
-            if diff.strip():
-                return diff
+            if passed:
+                log_event(
+                    replay_dir,
+                    {"type": "best_of_n_winner", "index": ci},
+                )
+                return cand_diff
+            # Track best non-passing candidate (prefer non-empty)
+            if cand_diff.strip() and not best_candidate.strip():
+                best_candidate = cand_diff
 
-        # --- Fallback: extract diff directly from response ---
-        log_event(replay_dir, {"type": "fallback_diff_extract"})
-        return _extract_diff(raw_response)
+        log_event(
+            replay_dir,
+            {"type": "best_of_n_no_winner", "using_index": 0},
+        )
+        return best_candidate
 
     return _proposer
 
@@ -765,6 +969,19 @@ def main(argv: Optional[list[str]] = None) -> None:
         default=None,
         help="Path to outcome memory JSONL file for cross-task learning",
     )
+    ap.add_argument(
+        "--n-candidates",
+        type=int,
+        default=3,
+        help="Number of candidate patches to sample per iteration "
+        "(Best-of-N, default: 3). Set to 1 to disable.",
+    )
+    ap.add_argument(
+        "--strong-model",
+        default=None,
+        help="Stronger model for complex tasks/retries. "
+        "Falls back to RFSN_STRONG_MODEL env var.",
+    )
 
     args = ap.parse_args(argv)
     task = load_task(args.task)
@@ -794,7 +1011,9 @@ def main(argv: Optional[list[str]] = None) -> None:
             api_key=args.api_key,
             base_url=args.base_url,
             model=args.model,
+            strong_model=args.strong_model,
             outcome_memory_path=args.outcome_memory,
+            n_candidates=args.n_candidates,
         )
     else:
         proposer = _placeholder_proposer

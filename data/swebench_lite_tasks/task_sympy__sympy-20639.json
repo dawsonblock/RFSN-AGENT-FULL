@@ -1,0 +1,31 @@
+{
+  "task_id": "sympy__sympy-20639",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "eb926a1d0c1158bf43f01eaf673dc84416b5ebb1",
+  "workdir": "/tmp/swebench_work/sympy__sympy-20639",
+  "issue_text": "inaccurate rendering of pi**(1/E)\nThis claims to be version 1.5.dev; I just merged from the project master, so I hope this is current.  I didn't notice this bug among others in printing.pretty.\r\n\r\n```\r\nIn [52]: pi**(1/E)                                                               \r\nOut[52]: \r\n-1___\r\n╲╱ π \r\n\r\n```\r\nLaTeX and str not fooled:\r\n```\r\nIn [53]: print(latex(pi**(1/E)))                                                 \r\n\\pi^{e^{-1}}\r\n\r\nIn [54]: str(pi**(1/E))                                                          \r\nOut[54]: 'pi**exp(-1)'\r\n```\r\n\n",
+  "hints": {
+    "failing_tests": [
+      "test_issue_6285",
+      "test_issue_17616"
+    ],
+    "focus_files": [
+      "sympy/printing/pretty/pretty.py"
+    ],
+    "test_patch": "diff --git a/sympy/printing/pretty/tests/test_pretty.py b/sympy/printing/pretty/tests/test_pretty.py\n--- a/sympy/printing/pretty/tests/test_pretty.py\n+++ b/sympy/printing/pretty/tests/test_pretty.py\n@@ -5942,7 +5942,11 @@ def test_PrettyPoly():\n \n def test_issue_6285():\n     assert pretty(Pow(2, -5, evaluate=False)) == '1 \\n--\\n 5\\n2 '\n-    assert pretty(Pow(x, (1/pi))) == 'pi___\\n\\\\/ x '\n+    assert pretty(Pow(x, (1/pi))) == \\\n+    ' 1 \\n'\\\n+    ' --\\n'\\\n+    ' pi\\n'\\\n+    'x  '\n \n \n def test_issue_6359():\n@@ -7205,6 +7209,51 @@ def test_is_combining():\n         [False, True, False, False]\n \n \n+def test_issue_17616():\n+    assert pretty(pi**(1/exp(1))) == \\\n+   '  / -1\\\\\\n'\\\n+   '  \\e  /\\n'\\\n+   'pi     '\n+\n+    assert upretty(pi**(1/exp(1))) == \\\n+   ' ⎛ -1⎞\\n'\\\n+   ' ⎝ℯ  ⎠\\n'\\\n+   'π     '\n+\n+    assert pretty(pi**(1/pi)) == \\\n+    '  1 \\n'\\\n+    '  --\\n'\\\n+    '  pi\\n'\\\n+    'pi  '\n+\n+    assert upretty(pi**(1/pi)) == \\\n+    ' 1\\n'\\\n+    ' ─\\n'\\\n+    ' π\\n'\\\n+    'π '\n+\n+    assert pretty(pi**(1/EulerGamma)) == \\\n+    '      1     \\n'\\\n+    '  ----------\\n'\\\n+    '  EulerGamma\\n'\\\n+    'pi          '\n+\n+    assert upretty(pi**(1/EulerGamma)) == \\\n+    ' 1\\n'\\\n+    ' ─\\n'\\\n+    ' γ\\n'\\\n+    'π '\n+\n+    z = Symbol(\"x_17\")\n+    assert upretty(7**(1/z)) == \\\n+    'x₁₇___\\n'\\\n+    ' ╲╱ 7 '\n+\n+    assert pretty(7**(1/z)) == \\\n+    'x_17___\\n'\\\n+    '  \\\\/ 7 '\n+\n+\n def test_issue_17857():\n     assert pretty(Range(-oo, oo)) == '{..., -1, 0, 1, ...}'\n     assert pretty(Range(oo, -oo, -1)) == '{..., 1, 0, -1, ...}'\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_issue_6285 or test_issue_17616\"",
+    "test_full": "python -m pytest -x -q -k \"test_issue_6285 or test_issue_17616\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

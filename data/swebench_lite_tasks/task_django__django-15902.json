@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-15902",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "44c24bf02835323d5418512ebe8e76166739ebf8",
+  "workdir": "/tmp/swebench_work/django__django-15902",
+  "issue_text": "\"default.html\" deprecation warning raised for ManagementForm's\nDescription\n\t\nI have a project where I never render forms with the {{ form }} expression. However, I'm still getting the new template deprecation warning because of the formset management form production, during which the template used is insignificant (only hidden inputs are produced).\nIs it worth special-casing this and avoid producing the warning for the management forms?\n",
+  "hints": {
+    "failing_tests": [
+      "Management forms are already rendered with the new div template."
+    ],
+    "focus_files": [
+      "django/forms/formsets.py"
+    ],
+    "test_patch": "diff --git a/tests/forms_tests/tests/test_formsets.py b/tests/forms_tests/tests/test_formsets.py\n--- a/tests/forms_tests/tests/test_formsets.py\n+++ b/tests/forms_tests/tests/test_formsets.py\n@@ -1910,3 +1910,14 @@ def test_warning(self):\n             ChoiceFormSet = formset_factory(Choice)\n             formset = ChoiceFormSet()\n             str(formset)\n+\n+    def test_no_management_form_warning(self):\n+        \"\"\"\n+        Management forms are already rendered with the new div template.\n+        \"\"\"\n+        with isolate_lru_cache(get_default_renderer), self.settings(\n+            FORM_RENDERER=\"django.forms.renderers.DjangoTemplates\"\n+        ):\n+            ChoiceFormSet = formset_factory(Choice, formset=BaseFormSet)\n+            formset = ChoiceFormSet()\n+            str(formset.management_form)\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q -k \"Management\"",
+    "test_full": "python -m pytest -x -q -k \"Management\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "task_id": "scikit-learn__scikit-learn-13497",
+  "repo_url": "https://github.com/scikit-learn/scikit-learn.git",
+  "repo_ref": "26f690961a52946dd2f53bf0fdd4264b2ae5be90",
+  "workdir": "/tmp/swebench_work/scikit-learn__scikit-learn-13497",
+  "issue_text": "Comparing string to array in _estimate_mi\nIn ``_estimate_mi`` there is ``discrete_features == 'auto'`` but discrete features can be an array of indices or a boolean mask.\r\nThis will error in future versions of numpy.\r\nAlso this means we never test this function with discrete features != 'auto', it seems?\n",
+  "hints": {
+    "failing_tests": [
+      "sklearn/feature_selection/tests/test_mutual_info.py::test_mutual_info_options"
+    ],
+    "focus_files": [
+      "sklearn/feature_selection/mutual_info_.py"
+    ],
+    "test_patch": "diff --git a/sklearn/feature_selection/tests/test_mutual_info.py b/sklearn/feature_selection/tests/test_mutual_info.py\n--- a/sklearn/feature_selection/tests/test_mutual_info.py\n+++ b/sklearn/feature_selection/tests/test_mutual_info.py\n@@ -183,18 +183,26 @@ def test_mutual_info_options():\n     X_csr = csr_matrix(X)\n \n     for mutual_info in (mutual_info_regression, mutual_info_classif):\n-        assert_raises(ValueError, mutual_info_regression, X_csr, y,\n+        assert_raises(ValueError, mutual_info, X_csr, y,\n                       discrete_features=False)\n+        assert_raises(ValueError, mutual_info, X, y,\n+                      discrete_features='manual')\n+        assert_raises(ValueError, mutual_info, X_csr, y,\n+                      discrete_features=[True, False, True])\n+        assert_raises(IndexError, mutual_info, X, y,\n+                      discrete_features=[True, False, True, False])\n+        assert_raises(IndexError, mutual_info, X, y, discrete_features=[1, 4])\n \n         mi_1 = mutual_info(X, y, discrete_features='auto', random_state=0)\n         mi_2 = mutual_info(X, y, discrete_features=False, random_state=0)\n-\n-        mi_3 = mutual_info(X_csr, y, discrete_features='auto',\n-                           random_state=0)\n-        mi_4 = mutual_info(X_csr, y, discrete_features=True,\n+        mi_3 = mutual_info(X_csr, y, discrete_features='auto', random_state=0)\n+        mi_4 = mutual_info(X_csr, y, discrete_features=True, random_state=0)\n+        mi_5 = mutual_info(X, y, discrete_features=[True, False, True],\n                            random_state=0)\n+        mi_6 = mutual_info(X, y, discrete_features=[0, 2], random_state=0)\n \n         assert_array_equal(mi_1, mi_2)\n         assert_array_equal(mi_3, mi_4)\n+        assert_array_equal(mi_5, mi_6)\n \n     assert not np.allclose(mi_1, mi_3)\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[tests]"
+    ],
+    "test_quick": "python -m pytest -x -q sklearn/feature_selection/tests/test_mutual_info.py::test_mutual_info_options",
+    "test_full": "python -m pytest -x -q sklearn/feature_selection/tests/test_mutual_info.py::test_mutual_info_options"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

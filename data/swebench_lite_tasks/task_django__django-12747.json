@@ -1,0 +1,32 @@
+{
+  "task_id": "django__django-12747",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "c86201b6ed4f8256b0a0520c08aa674f623d4127",
+  "workdir": "/tmp/swebench_work/django__django-12747",
+  "issue_text": "QuerySet.Delete - inconsistent result when zero objects deleted\nDescription\n\t\nThe result format of the QuerySet.Delete method is a tuple: (X, Y) \nX - is the total amount of deleted objects (including foreign key deleted objects)\nY - is a dictionary specifying counters of deleted objects for each specific model (the key is the _meta.label of the model and the value is counter of deleted objects of this model).\nExample: <class 'tuple'>: (2, {'my_app.FileAccess': 1, 'my_app.File': 1})\nWhen there are zero objects to delete in total - the result is inconsistent:\nFor models with foreign keys - the result will be: <class 'tuple'>: (0, {})\nFor \"simple\" models without foreign key - the result will be: <class 'tuple'>: (0, {'my_app.BlockLibrary': 0})\nI would expect there will be no difference between the two cases: Either both will have the empty dictionary OR both will have dictionary with model-label keys and zero value.\n",
+  "hints": {
+    "failing_tests": [
+      "test_fast_delete_empty_no_update_can_self_select (delete.tests.FastDeleteTests)",
+      "test_model_delete_returns_num_rows (delete.tests.DeletionTests)",
+      "test_queryset_delete_returns_num_rows (delete.tests.DeletionTests)"
+    ],
+    "focus_files": [
+      "django/db/models/deletion.py"
+    ],
+    "test_patch": "diff --git a/tests/delete/tests.py b/tests/delete/tests.py\n--- a/tests/delete/tests.py\n+++ b/tests/delete/tests.py\n@@ -522,11 +522,10 @@ def test_queryset_delete_returns_num_rows(self):\n         existed_objs = {\n             R._meta.label: R.objects.count(),\n             HiddenUser._meta.label: HiddenUser.objects.count(),\n-            A._meta.label: A.objects.count(),\n-            MR._meta.label: MR.objects.count(),\n             HiddenUserProfile._meta.label: HiddenUserProfile.objects.count(),\n         }\n         deleted, deleted_objs = R.objects.all().delete()\n+        self.assertCountEqual(deleted_objs.keys(), existed_objs.keys())\n         for k, v in existed_objs.items():\n             self.assertEqual(deleted_objs[k], v)\n \n@@ -550,13 +549,13 @@ def test_model_delete_returns_num_rows(self):\n         existed_objs = {\n             R._meta.label: R.objects.count(),\n             HiddenUser._meta.label: HiddenUser.objects.count(),\n-            A._meta.label: A.objects.count(),\n             MR._meta.label: MR.objects.count(),\n             HiddenUserProfile._meta.label: HiddenUserProfile.objects.count(),\n             M.m2m.through._meta.label: M.m2m.through.objects.count(),\n         }\n         deleted, deleted_objs = r.delete()\n         self.assertEqual(deleted, sum(existed_objs.values()))\n+        self.assertCountEqual(deleted_objs.keys(), existed_objs.keys())\n         for k, v in existed_objs.items():\n             self.assertEqual(deleted_objs[k], v)\n \n@@ -694,7 +693,7 @@ def test_fast_delete_empty_no_update_can_self_select(self):\n         with self.assertNumQueries(1):\n             self.assertEqual(\n                 User.objects.filter(avatar__desc='missing').delete(),\n-                (0, {'delete.User': 0})\n+                (0, {}),\n             )\n \n     def test_fast_delete_combined_relationships(self):\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q delete/tests.py",
+    "test_full": "python -m pytest -x -q delete/tests.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-12470",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "142ab6846ac09d6d401e26fc8b6b988a583ac0f5",
+  "workdir": "/tmp/swebench_work/django__django-12470",
+  "issue_text": "Inherited model doesn't correctly order by \"-pk\" when specified on Parent.Meta.ordering\nDescription\n\t\nGiven the following model definition:\nfrom django.db import models\nclass Parent(models.Model):\n\tclass Meta:\n\t\tordering = [\"-pk\"]\nclass Child(Parent):\n\tpass\nQuerying the Child class results in the following:\n>>> print(Child.objects.all().query)\nSELECT \"myapp_parent\".\"id\", \"myapp_child\".\"parent_ptr_id\" FROM \"myapp_child\" INNER JOIN \"myapp_parent\" ON (\"myapp_child\".\"parent_ptr_id\" = \"myapp_parent\".\"id\") ORDER BY \"myapp_parent\".\"id\" ASC\nThe query is ordered ASC but I expect the order to be DESC.\n",
+  "hints": {
+    "failing_tests": [
+      "test_inherited_ordering_pk_desc (model_inheritance.tests.ModelInheritanceTests)"
+    ],
+    "focus_files": [
+      "django/db/models/sql/compiler.py"
+    ],
+    "test_patch": "diff --git a/tests/model_inheritance/models.py b/tests/model_inheritance/models.py\n--- a/tests/model_inheritance/models.py\n+++ b/tests/model_inheritance/models.py\n@@ -181,6 +181,8 @@ class GrandParent(models.Model):\n     place = models.ForeignKey(Place, models.CASCADE, null=True, related_name='+')\n \n     class Meta:\n+        # Ordering used by test_inherited_ordering_pk_desc.\n+        ordering = ['-pk']\n         unique_together = ('first_name', 'last_name')\n \n \ndiff --git a/tests/model_inheritance/tests.py b/tests/model_inheritance/tests.py\n--- a/tests/model_inheritance/tests.py\n+++ b/tests/model_inheritance/tests.py\n@@ -7,7 +7,7 @@\n \n from .models import (\n     Base, Chef, CommonInfo, GrandChild, GrandParent, ItalianRestaurant,\n-    MixinModel, ParkingLot, Place, Post, Restaurant, Student, SubBase,\n+    MixinModel, Parent, ParkingLot, Place, Post, Restaurant, Student, SubBase,\n     Supplier, Title, Worker,\n )\n \n@@ -204,6 +204,19 @@ class A(models.Model):\n \n         self.assertEqual(A.attr.called, (A, 'attr'))\n \n+    def test_inherited_ordering_pk_desc(self):\n+        p1 = Parent.objects.create(first_name='Joe', email='joe@email.com')\n+        p2 = Parent.objects.create(first_name='Jon', email='jon@email.com')\n+        expected_order_by_sql = 'ORDER BY %s.%s DESC' % (\n+            connection.ops.quote_name(Parent._meta.db_table),\n+            connection.ops.quote_name(\n+                Parent._meta.get_field('grandparent_ptr').column\n+            ),\n+        )\n+        qs = Parent.objects.all()\n+        self.assertSequenceEqual(qs, [p2, p1])\n+        self.assertIn(expected_order_by_sql, str(qs.query))\n+\n \n class ModelInheritanceDataTests(TestCase):\n     @classmethod\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q model_inheritance/tests.py",
+    "test_full": "python -m pytest -x -q model_inheritance/tests.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

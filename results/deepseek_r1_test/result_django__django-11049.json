@@ -1,0 +1,12 @@
+{
+  "task_id": "django__django-11049",
+  "status": "ABORT",
+  "iters": 3,
+  "final_patch_unified_diff": "",
+  "tests": {},
+  "risk": {
+    "decision": "ALLOW",
+    "reasons": []
+  },
+  "replay_dir": "results/deepseek_r1_test/replays/replays/django__django-11049_1770940037749"
+}

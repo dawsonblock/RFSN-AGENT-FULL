@@ -1,0 +1,30 @@
+{
+  "task_id": "sphinx-doc__sphinx-7738",
+  "repo_url": "https://github.com/sphinx-doc/sphinx.git",
+  "repo_ref": "c087d717f6ed183dd422359bf91210dc59689d63",
+  "workdir": "/tmp/swebench_work/sphinx-doc__sphinx-7738",
+  "issue_text": "overescaped trailing underscore on attribute with napoleon\n**Describe the bug**\r\nAttribute name `hello_` shows up as `hello\\_` in the html (visible backslash) with napoleon.\r\n\r\n**To Reproduce**\r\nSteps to reproduce the behavior:\r\n\r\nempty `__init__.py`\r\n`a.py` contains\r\n```python\r\nclass A:\r\n    \"\"\"\r\n    Attributes\r\n    ----------\r\n    hello_: int\r\n        hi\r\n    \"\"\"\r\n    pass\r\n```\r\nrun `sphinx-quickstart`\r\nadd `'sphinx.ext.autodoc', 'sphinx.ext.napoleon'` to extensions in conf.py.\r\nadd `.. autoclass:: a.A` to index.rst\r\nPYTHONPATH=. make clean html\r\nopen _build/html/index.html in web browser and see the ugly backslash.\r\n\r\n**Expected behavior**\r\nNo backslash, a similar output to what I get for\r\n```rst\r\n    .. attribute:: hello_\r\n        :type: int\r\n\r\n        hi\r\n```\r\n(the type shows up differently as well, but that's not the point here)\r\nOlder versions like 2.4.3 look ok to me.\r\n\r\n**Environment info**\r\n- OS: Linux debian testing\r\n- Python version: 3.8.3\r\n- Sphinx version: 3.0.4\r\n- Sphinx extensions:  sphinx.ext.autodoc, sphinx.ext.napoleon\r\n- Extra tools:\n",
+  "hints": {
+    "failing_tests": [
+      "tests/test_ext_napoleon_docstring.py::NumpyDocstringTest::test_underscore_in_attribute"
+    ],
+    "focus_files": [
+      "sphinx/ext/napoleon/docstring.py"
+    ],
+    "test_patch": "diff --git a/tests/test_ext_napoleon_docstring.py b/tests/test_ext_napoleon_docstring.py\n--- a/tests/test_ext_napoleon_docstring.py\n+++ b/tests/test_ext_napoleon_docstring.py\n@@ -1394,6 +1394,26 @@ def test_underscore_in_attribute(self):\n Attributes\n ----------\n \n+arg_ : type\n+    some description\n+\"\"\"\n+\n+        expected = \"\"\"\n+:ivar arg_: some description\n+:vartype arg_: type\n+\"\"\"\n+\n+        config = Config(napoleon_use_ivar=True)\n+        app = mock.Mock()\n+        actual = str(NumpyDocstring(docstring, config, app, \"class\"))\n+\n+        self.assertEqual(expected, actual)\n+\n+    def test_underscore_in_attribute_strip_signature_backslash(self):\n+        docstring = \"\"\"\n+Attributes\n+----------\n+\n arg_ : type\n     some description\n \"\"\"\n@@ -1404,6 +1424,7 @@ def test_underscore_in_attribute(self):\n \"\"\"\n \n         config = Config(napoleon_use_ivar=True)\n+        config.strip_signature_backslash = True\n         app = mock.Mock()\n         actual = str(NumpyDocstring(docstring, config, app, \"class\"))\n \n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[test]"
+    ],
+    "test_quick": "python -m pytest -x -q tests/test_ext_napoleon_docstring.py::NumpyDocstringTest::test_underscore_in_attribute",
+    "test_full": "python -m pytest -x -q tests/test_ext_napoleon_docstring.py::NumpyDocstringTest::test_underscore_in_attribute"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

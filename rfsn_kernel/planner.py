@@ -15,7 +15,12 @@ Each layer reduces complexity for the next.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rfsn_kernel.memory import MemoryImmuneSystem
+    from rfsn_kernel.simulate import OutcomeHistory
+    from rfsn_kernel.state import SystemState
 
 
 @dataclass
@@ -42,7 +47,7 @@ class TacticalPlan:
     """A structured plan for achieving a subgoal."""
 
     subgoal: Subgoal
-    actions: List[Dict[str, Any]]     # ordered step types
+    actions: List[Dict[str, Any]]  # ordered step types
     expected_outcome: str
     fallback: List[Dict[str, Any]] = field(default_factory=list)
     cost_estimate: float = 0.0
@@ -65,11 +70,11 @@ class StrategicState:
     goal: str = ""
     subgoals: List[Subgoal] = field(default_factory=list)
     current_subgoal_idx: int = 0
-    progress: float = 0.0         # 0.0–1.0
-    stability: float = 1.0        # 1.0=stable, 0.0=unstable
-    stagnation_count: int = 0     # steps without progress
+    progress: float = 0.0  # 0.0–1.0
+    stability: float = 1.0  # 1.0=stable, 0.0=unstable
+    stagnation_count: int = 0  # steps without progress
     total_attempts: int = 0
-    escalation_count: int = 0     # times we re-planned
+    escalation_count: int = 0  # times we re-planned
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -144,7 +149,9 @@ class HierarchicalPlanner:
     # ── Strategic Layer ──
 
     def set_goal(
-        self, goal: str, task_type: str = "fix_generic",
+        self,
+        goal: str,
+        task_type: str = "fix_generic",
     ) -> List[Subgoal]:
         """Decompose a goal into subgoals.
 
@@ -158,10 +165,12 @@ class HierarchicalPlanner:
 
         subgoals: List[Subgoal] = []
         for i, desc in enumerate(template):
-            subgoals.append(Subgoal(
-                goal_id=f"sg-{i + 1}",
-                description=desc,
-            ))
+            subgoals.append(
+                Subgoal(
+                    goal_id=f"sg-{i + 1}",
+                    description=desc,
+                )
+            )
 
         self.state.subgoals = subgoals
         self.state.current_subgoal_idx = 0
@@ -283,6 +292,66 @@ class HierarchicalPlanner:
         self._plans.append(plan)
         return plan
 
+    def rank_actions(
+        self,
+        candidates: List[Dict[str, Any]],
+        state: "SystemState",
+        history: "OutcomeHistory",
+    ) -> List[Dict[str, Any]]:
+        """Rank candidate actions by simulated success probability.
+
+        Calls simulate() for each candidate, sorts by success_prob,
+        and filters out actions with loop_risk > 0.7.
+        """
+        from rfsn_kernel.simulate import simulate
+        from rfsn_kernel.state import Proposal
+
+        scored: List[tuple] = []
+        for cand in candidates:
+            action_type = cand.get("type", "repo_search")
+            proposal = Proposal(action=action_type, params={})
+            sim = simulate(proposal, state, history=history)
+            if sim.loop_risk > 0.7:
+                continue  # filter loops
+            scored.append((sim.success_prob, cand, sim))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [c for _, c, _ in scored]
+
+    def select_template(
+        self,
+        task_type: str,
+        memory: Optional["MemoryImmuneSystem"] = None,
+    ) -> List[str]:
+        """Select decomposition template, adapting from memory if available.
+
+        If memory contains successful patterns for this task_type,
+        use the winning sequence. Otherwise fall back to static templates.
+        """
+        if memory:
+            entries = memory.retrieve_relevant(
+                query=task_type,
+                entry_type="strategy_result",
+                limit=3,
+            )
+            # Look for entries with high success rate.
+            for entry in entries:
+                total = entry.success_count + entry.failure_count
+                if total >= 2 and entry.success_count / total >= 0.6:
+                    # Parse action sequence from content if available.
+                    # Content format: "task_type=X actions=a,b,c success=True"
+                    if "actions=" in entry.content:
+                        actions_str = entry.content.split("actions=")[-1].split()[0]
+                        steps = [s.strip() for s in actions_str.split(",") if s.strip()]
+                        if steps:
+                            return steps
+
+        # Fall back to static templates.
+        return _DECOMPOSITION_TEMPLATES.get(
+            task_type,
+            _DECOMPOSITION_TEMPLATES["fix_generic"],
+        )
+
     # ── Execution Layer Integration ──
 
     def get_execution_context(self) -> Dict[str, Any]:
@@ -306,11 +375,15 @@ class HierarchicalPlanner:
             "stagnation": self.state.stagnation_count,
         }
 
-    def get_planner_guidance(self) -> str:
+    def get_planner_guidance(
+        self,
+        last_error: str = "",
+        memory: Optional["MemoryImmuneSystem"] = None,
+    ) -> str:
         """Generate guidance text for the LLM planner.
 
-        Tells the planner what subgoal to focus on
-        and what phase to use.
+        Tells the planner what subgoal to focus on,
+        what phase to use, and includes lessons from memory.
         """
         sg = self.current_subgoal()
         if not sg:
@@ -319,10 +392,18 @@ class HierarchicalPlanner:
         plan = self._current_plan
         progress_pct = int(self.state.progress * 100)
 
-        lines = [
-            f"## Strategic Context (progress: {progress_pct}%)",
-            f"Current subgoal [{sg.goal_id}]: {sg.description}",
-        ]
+        lines = []
+
+        if last_error:
+            lines.append("## Self-Critique (Previous Step Failed)")
+            lines.append(f"Error: {last_error}")
+            lines.append(
+                "Analysis: The previous action failed. You must adjust your approach."
+            )
+            lines.append("")
+
+        lines.append(f"## Strategic Context (progress: {progress_pct}%)")
+        lines.append(f"Current subgoal [{sg.goal_id}]: {sg.description}")
 
         if plan:
             phase_types = [a["type"] for a in plan.actions]
@@ -335,15 +416,35 @@ class HierarchicalPlanner:
             )
 
         if self.state.stability < 0.5:
-            lines.append(
-                "WARNING: System stability low."
-                " Use conservative actions."
-            )
+            lines.append("WARNING: System stability low." " Use conservative actions.")
 
-        remaining = sum(
-            1 for s in self.state.subgoals if not s.completed
-        )
+        remaining = sum(1 for s in self.state.subgoals if not s.completed)
         lines.append(f"Remaining subgoals: {remaining}")
+
+        # Lessons from memory.
+        if memory:
+            query = f"{sg.description} {self.state.goal}"
+            relevant = memory.retrieve_relevant(
+                query=query,
+                entry_type="action_outcome",
+                limit=3,
+            )
+            if relevant:
+                lines.append("")
+                lines.append("## Lessons Learned (from memory)")
+                for entry in relevant:
+                    total = entry.success_count + entry.failure_count
+                    if total > 0:
+                        wr = entry.success_count / total
+                        label = "✓" if wr >= 0.5 else "✗"
+                    else:
+                        label = "?"
+                        wr = 0.0
+                    lines.append(
+                        f"- [{label}] {entry.content[:120]}"
+                        f" (quality={entry.quality_score:.2f},"
+                        f" win_rate={wr:.0%})"
+                    )
 
         return "\n".join(lines)
 
@@ -365,9 +466,7 @@ class HierarchicalPlanner:
         return {
             "goal": self.state.goal,
             "subgoals_total": len(self.state.subgoals),
-            "subgoals_completed": sum(
-                1 for s in self.state.subgoals if s.completed
-            ),
+            "subgoals_completed": sum(1 for s in self.state.subgoals if s.completed),
             "progress": round(self.state.progress, 3),
             "stability": round(self.state.stability, 3),
             "plans_created": len(self._plans),

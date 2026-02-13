@@ -1,0 +1,31 @@
+{
+  "task_id": "django__django-11905",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "2f72480fbd27896c986c45193e1603e35c0b19a7",
+  "workdir": "/tmp/swebench_work/django__django-11905",
+  "issue_text": "Prevent using __isnull lookup with non-boolean value.\nDescription\n\t \n\t\t(last modified by Mariusz Felisiak)\n\t \n__isnull should not allow for non-boolean values. Using truthy/falsey doesn't promote INNER JOIN to an OUTER JOIN but works fine for a simple queries. Using non-boolean values is ​undocumented and untested. IMO we should raise an error for non-boolean values to avoid confusion and for consistency.\n",
+  "hints": {
+    "failing_tests": [
+      "test_isnull_non_boolean_value (lookup.tests.LookupTests)",
+      "test_iterator (lookup.tests.LookupTests)"
+    ],
+    "focus_files": [
+      "django/db/models/lookups.py"
+    ],
+    "test_patch": "diff --git a/tests/lookup/models.py b/tests/lookup/models.py\n--- a/tests/lookup/models.py\n+++ b/tests/lookup/models.py\n@@ -96,3 +96,15 @@ class Product(models.Model):\n class Stock(models.Model):\n     product = models.ForeignKey(Product, models.CASCADE)\n     qty_available = models.DecimalField(max_digits=6, decimal_places=2)\n+\n+\n+class Freebie(models.Model):\n+    gift_product = models.ForeignKey(Product, models.CASCADE)\n+    stock_id = models.IntegerField(blank=True, null=True)\n+\n+    stock = models.ForeignObject(\n+        Stock,\n+        from_fields=['stock_id', 'gift_product'],\n+        to_fields=['id', 'product'],\n+        on_delete=models.CASCADE,\n+    )\ndiff --git a/tests/lookup/tests.py b/tests/lookup/tests.py\n--- a/tests/lookup/tests.py\n+++ b/tests/lookup/tests.py\n@@ -9,9 +9,10 @@\n from django.db.models.expressions import Exists, OuterRef\n from django.db.models.functions import Substr\n from django.test import TestCase, skipUnlessDBFeature\n+from django.utils.deprecation import RemovedInDjango40Warning\n \n from .models import (\n-    Article, Author, Game, IsNullWithNoneAsRHS, Player, Season, Tag,\n+    Article, Author, Freebie, Game, IsNullWithNoneAsRHS, Player, Season, Tag,\n )\n \n \n@@ -969,3 +970,24 @@ def test_exact_query_rhs_with_selected_columns(self):\n         ).values('max_id')\n         authors = Author.objects.filter(id=authors_max_ids[:1])\n         self.assertEqual(authors.get(), newest_author)\n+\n+    def test_isnull_non_boolean_value(self):\n+        # These tests will catch ValueError in Django 4.0 when using\n+        # non-boolean values for an isnull lookup becomes forbidden.\n+        # msg = (\n+        #     'The QuerySet value for an isnull lookup must be True or False.'\n+        # )\n+        msg = (\n+            'Using a non-boolean value for an isnull lookup is deprecated, '\n+            'use True or False instead.'\n+        )\n+        tests = [\n+            Author.objects.filter(alias__isnull=1),\n+            Article.objects.filter(author__isnull=1),\n+            Season.objects.filter(games__isnull=1),\n+            Freebie.objects.filter(stock__isnull=1),\n+        ]\n+        for qs in tests:\n+            with self.subTest(qs=qs):\n+                with self.assertWarnsMessage(RemovedInDjango40Warning, msg):\n+                    qs.exists()\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q lookup/tests.py",
+    "test_full": "python -m pytest -x -q lookup/tests.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

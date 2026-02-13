@@ -1,0 +1,31 @@
+{
+  "task_id": "django__django-16910",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "4142739af1cda53581af4169dbe16d6cd5e26948",
+  "workdir": "/tmp/swebench_work/django__django-16910",
+  "issue_text": "QuerySet.only() doesn't work with select_related() on a reverse OneToOneField relation.\nDescription\n\t\nOn Django 4.2 calling only() with select_related() on a query using the reverse lookup for a OneToOne relation does not generate the correct query.\nAll the fields from the related model are still included in the generated SQL.\nSample models:\nclass Main(models.Model):\n\tmain_field_1 = models.CharField(blank=True, max_length=45)\n\tmain_field_2 = models.CharField(blank=True, max_length=45)\n\tmain_field_3 = models.CharField(blank=True, max_length=45)\nclass Secondary(models.Model):\n\tmain = models.OneToOneField(Main, primary_key=True, related_name='secondary', on_delete=models.CASCADE)\n\tsecondary_field_1 = models.CharField(blank=True, max_length=45)\n\tsecondary_field_2 = models.CharField(blank=True, max_length=45)\n\tsecondary_field_3 = models.CharField(blank=True, max_length=45)\nSample code:\nMain.objects.select_related('secondary').only('main_field_1', 'secondary__secondary_field_1')\nGenerated query on Django 4.2.1:\nSELECT \"bugtest_main\".\"id\", \"bugtest_main\".\"main_field_1\", \"bugtest_secondary\".\"main_id\", \"bugtest_secondary\".\"secondary_field_1\", \"bugtest_secondary\".\"secondary_field_2\", \"bugtest_secondary\".\"secondary_field_3\" FROM \"bugtest_main\" LEFT OUTER JOIN \"bugtest_secondary\" ON (\"bugtest_main\".\"id\" = \"bugtest_secondary\".\"main_id\")\nGenerated query on Django 4.1.9:\nSELECT \"bugtest_main\".\"id\", \"bugtest_main\".\"main_field_1\", \"bugtest_secondary\".\"main_id\", \"bugtest_secondary\".\"secondary_field_1\" FROM \"bugtest_main\" LEFT OUTER JOIN \"bugtest_secondary\" ON (\"bugtest_main\".\"id\" = \"bugtest_secondary\".\"main_id\")\n",
+  "hints": {
+    "failing_tests": [
+      "test_inheritance_deferred2 (select_related_onetoone.tests.ReverseSelectRelatedTestCase.test_inheritance_deferred2)",
+      "test_reverse_one_to_one_relations (defer_regress.tests.DeferRegressionTest.test_reverse_one_to_one_relations)"
+    ],
+    "focus_files": [
+      "django/db/models/sql/query.py"
+    ],
+    "test_patch": "diff --git a/tests/defer_regress/tests.py b/tests/defer_regress/tests.py\n--- a/tests/defer_regress/tests.py\n+++ b/tests/defer_regress/tests.py\n@@ -178,6 +178,16 @@ def test_reverse_one_to_one_relations(self):\n             self.assertEqual(i.one_to_one_item.name, \"second\")\n         with self.assertNumQueries(1):\n             self.assertEqual(i.value, 42)\n+        with self.assertNumQueries(1):\n+            i = Item.objects.select_related(\"one_to_one_item\").only(\n+                \"name\", \"one_to_one_item__item\"\n+            )[0]\n+            self.assertEqual(i.one_to_one_item.pk, o2o.pk)\n+            self.assertEqual(i.name, \"first\")\n+        with self.assertNumQueries(1):\n+            self.assertEqual(i.one_to_one_item.name, \"second\")\n+        with self.assertNumQueries(1):\n+            self.assertEqual(i.value, 42)\n \n     def test_defer_with_select_related(self):\n         item1 = Item.objects.create(name=\"first\", value=47)\n@@ -277,6 +287,28 @@ def test_defer_many_to_many_ignored(self):\n         with self.assertNumQueries(1):\n             self.assertEqual(Request.objects.defer(\"items\").get(), request)\n \n+    def test_only_many_to_many_ignored(self):\n+        location = Location.objects.create()\n+        request = Request.objects.create(location=location)\n+        with self.assertNumQueries(1):\n+            self.assertEqual(Request.objects.only(\"items\").get(), request)\n+\n+    def test_defer_reverse_many_to_many_ignored(self):\n+        location = Location.objects.create()\n+        request = Request.objects.create(location=location)\n+        item = Item.objects.create(value=1)\n+        request.items.add(item)\n+        with self.assertNumQueries(1):\n+            self.assertEqual(Item.objects.defer(\"request\").get(), item)\n+\n+    def test_only_reverse_many_to_many_ignored(self):\n+        location = Location.objects.create()\n+        request = Request.objects.create(location=location)\n+        item = Item.objects.create(value=1)\n+        request.items.add(item)\n+        with self.assertNumQueries(1):\n+            self.assertEqual(Item.objects.only(\"request\").get(), item)\n+\n \n class DeferDeletionSignalsTests(TestCase):\n     senders = [Item, Proxy]\ndiff --git a/tests/select_related_onetoone/tests.py b/tests/select_related_onetoone/tests.py\n--- a/tests/select_related_onetoone/tests.py\n+++ b/tests/select_related_onetoone/tests.py\n@@ -249,6 +249,9 @@ def test_inheritance_deferred2(self):\n             self.assertEqual(p.child1.name2, \"n2\")\n         p = qs.get(name2=\"n2\")\n         with self.assertNumQueries(0):\n+            self.assertEqual(p.child1.value, 1)\n+            self.assertEqual(p.child1.child4.value4, 4)\n+        with self.assertNumQueries(2):\n             self.assertEqual(p.child1.name1, \"n1\")\n             self.assertEqual(p.child1.child4.name1, \"n1\")\n \n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q select_related_onetoone/tests/ReverseSelectRelatedTestCase.py defer_regress/tests/DeferRegressionTest.py",
+    "test_full": "python -m pytest -x -q select_related_onetoone/tests/ReverseSelectRelatedTestCase.py defer_regress/tests/DeferRegressionTest.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

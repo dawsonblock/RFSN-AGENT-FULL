@@ -1,0 +1,31 @@
+{
+  "task_id": "django__django-15400",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "4c76ffc2d6c77c850b4bef8d9acc197d11c47937",
+  "workdir": "/tmp/swebench_work/django__django-15400",
+  "issue_text": "SimpleLazyObject doesn't implement __radd__\nDescription\n\t\nTechnically, there's a whole bunch of magic methods it doesn't implement, compared to a complete proxy implementation, like that of wrapt.ObjectProxy, but __radd__ being missing is the one that's biting me at the moment.\nAs far as I can tell, the implementation can't just be\n__radd__ = new_method_proxy(operator.radd)\nbecause that doesn't exist, which is rubbish.\n__radd__ = new_method_proxy(operator.attrgetter(\"__radd__\"))\nalso won't work because types may not have that attr, and attrgetter doesn't supress the exception (correctly)\nThe minimal implementation I've found that works for me is:\n\tdef __radd__(self, other):\n\t\tif self._wrapped is empty:\n\t\t\tself._setup()\n\t\treturn other + self._wrapped\n",
+  "hints": {
+    "failing_tests": [
+      "test_add (utils_tests.test_lazyobject.SimpleLazyObjectTestCase)",
+      "test_radd (utils_tests.test_lazyobject.SimpleLazyObjectTestCase)"
+    ],
+    "focus_files": [
+      "django/utils/functional.py"
+    ],
+    "test_patch": "diff --git a/tests/utils_tests/test_lazyobject.py b/tests/utils_tests/test_lazyobject.py\n--- a/tests/utils_tests/test_lazyobject.py\n+++ b/tests/utils_tests/test_lazyobject.py\n@@ -317,6 +317,17 @@ def test_repr(self):\n         self.assertIsInstance(obj._wrapped, int)\n         self.assertEqual(repr(obj), \"<SimpleLazyObject: 42>\")\n \n+    def test_add(self):\n+        obj1 = self.lazy_wrap(1)\n+        self.assertEqual(obj1 + 1, 2)\n+        obj2 = self.lazy_wrap(2)\n+        self.assertEqual(obj2 + obj1, 3)\n+        self.assertEqual(obj1 + obj2, 3)\n+\n+    def test_radd(self):\n+        obj1 = self.lazy_wrap(1)\n+        self.assertEqual(1 + obj1, 2)\n+\n     def test_trace(self):\n         # See ticket #19456\n         old_trace_func = sys.gettrace()\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q utils_tests/test_lazyobject.py",
+    "test_full": "python -m pytest -x -q utils_tests/test_lazyobject.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

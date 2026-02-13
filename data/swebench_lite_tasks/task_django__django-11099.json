@@ -1,0 +1,32 @@
+{
+  "task_id": "django__django-11099",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "d26b2424437dabeeca94d7900b37d2df4410da0c",
+  "workdir": "/tmp/swebench_work/django__django-11099",
+  "issue_text": "UsernameValidator allows trailing newline in usernames\nDescription\n\t\nASCIIUsernameValidator and UnicodeUsernameValidator use the regex \nr'^[\\w.@+-]+$'\nThe intent is to only allow alphanumeric characters as well as ., @, +, and -. However, a little known quirk of Python regexes is that $ will also match a trailing newline. Therefore, the user name validators will accept usernames which end with a newline. You can avoid this behavior by instead using \\A and \\Z to terminate regexes. For example, the validator regex could be changed to\nr'\\A[\\w.@+-]+\\Z'\nin order to reject usernames that end with a newline.\nI am not sure how to officially post a patch, but the required change is trivial - using the regex above in the two validators in contrib.auth.validators.\n",
+  "hints": {
+    "failing_tests": [
+      "test_ascii_validator (auth_tests.test_validators.UsernameValidatorsTests)",
+      "test_unicode_validator (auth_tests.test_validators.UsernameValidatorsTests)",
+      "test_help_text (auth_tests.test_validators.UserAttributeSimilarityValidatorTest)"
+    ],
+    "focus_files": [
+      "django/contrib/auth/validators.py"
+    ],
+    "test_patch": "diff --git a/tests/auth_tests/test_validators.py b/tests/auth_tests/test_validators.py\n--- a/tests/auth_tests/test_validators.py\n+++ b/tests/auth_tests/test_validators.py\n@@ -237,7 +237,7 @@ def test_unicode_validator(self):\n         invalid_usernames = [\n             \"o'connell\", \"عبد ال\",\n             \"zerowidth\\u200Bspace\", \"nonbreaking\\u00A0space\",\n-            \"en\\u2013dash\",\n+            \"en\\u2013dash\", 'trailingnewline\\u000A',\n         ]\n         v = validators.UnicodeUsernameValidator()\n         for valid in valid_usernames:\n@@ -250,7 +250,7 @@ def test_unicode_validator(self):\n \n     def test_ascii_validator(self):\n         valid_usernames = ['glenn', 'GLEnN', 'jean-marc']\n-        invalid_usernames = [\"o'connell\", 'Éric', 'jean marc', \"أحمد\"]\n+        invalid_usernames = [\"o'connell\", 'Éric', 'jean marc', \"أحمد\", 'trailingnewline\\n']\n         v = validators.ASCIIUsernameValidator()\n         for valid in valid_usernames:\n             with self.subTest(valid=valid):\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q auth_tests/test_validators.py",
+    "test_full": "python -m pytest -x -q auth_tests/test_validators.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "task_id": "sympy__sympy-16988",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "e727339af6dc22321b00f52d971cda39e4ce89fb",
+  "workdir": "/tmp/swebench_work/sympy__sympy-16988",
+  "issue_text": "Intersection should remove duplicates\n```python\r\n>>> Intersection({1},{1},{x})\r\nEmptySet()\r\n>>> Intersection({1},{x})\r\n{1}\r\n```\r\nThe answer should be `Piecewise(({1}, Eq(x, 1)), (S.EmptySet, True))` or remain unevaluated.\r\n\r\nThe routine should give the same answer if duplicates are present; my initial guess is that duplicates should just be removed at the outset of instantiation. Ordering them will produce canonical processing.\n",
+  "hints": {
+    "failing_tests": [
+      "test_imageset",
+      "test_intersection"
+    ],
+    "focus_files": [
+      "sympy/sets/sets.py"
+    ],
+    "test_patch": "diff --git a/sympy/sets/tests/test_sets.py b/sympy/sets/tests/test_sets.py\n--- a/sympy/sets/tests/test_sets.py\n+++ b/sympy/sets/tests/test_sets.py\n@@ -21,7 +21,7 @@ def test_imageset():\n     assert imageset(x, abs(x), S.Integers) is S.Naturals0\n     # issue 16878a\n     r = symbols('r', real=True)\n-    assert (1, r) not in imageset(x, (x, x), S.Reals)\n+    assert (1, r) in imageset(x, (x, x), S.Reals) != False\n     assert (r, r) in imageset(x, (x, x), S.Reals)\n     assert 1 + I in imageset(x, x + I, S.Reals)\n     assert {1} not in imageset(x, (x,), S.Reals)\n@@ -342,6 +342,9 @@ def test_intersection():\n     # issue 12178\n     assert Intersection() == S.UniversalSet\n \n+    # issue 16987\n+    assert Intersection({1}, {1}, {x}) == Intersection({1}, {x})\n+\n \n def test_issue_9623():\n     n = Symbol('n')\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_imageset or test_intersection\"",
+    "test_full": "python -m pytest -x -q -k \"test_imageset or test_intersection\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

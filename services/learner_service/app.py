@@ -20,18 +20,18 @@ try:
     from auth import (  # type: ignore[import-not-found]
         ServiceAuthMiddleware,
     )
+
     _HAS_AUTH = True
 except ImportError:
     _HAS_AUTH = False
 
 app = FastAPI()
 if _HAS_AUTH:
-    app.add_middleware(
-        ServiceAuthMiddleware  # type: ignore[possibly-unbound]
-    )
+    app.add_middleware(ServiceAuthMiddleware)  # type: ignore[possibly-unbound]
 
 LEARNER_DB = os.getenv(
-    "LEARNER_DB", "/data/learner.duckdb",
+    "LEARNER_DB",
+    "/data/learner.duckdb",
 )
 store = DuckStore(LEARNER_DB)
 
@@ -41,18 +41,13 @@ store = DuckStore(LEARNER_DB)
 STRATEGIES = PLAYBOOK_IDS
 
 # Build addenda from playbooks.
-_ADDENDA = {
-    pb.playbook_id: pb.prompt_addendum
-    for pb in PLAYBOOKS
-}
+_ADDENDA = {pb.playbook_id: pb.prompt_addendum for pb in PLAYBOOKS}
 
 # ── Failure-class → playbook priors ───────────
 # When the bandit has zero data for a context,
 # use domain knowledge to pick the playbook
 # designed for that failure class.
-_FAILURE_STRATEGY_PRIORS: dict[str, str] = (
-    FAILURE_PLAYBOOK_PRIORS
-)
+_FAILURE_STRATEGY_PRIORS: dict[str, str] = FAILURE_PLAYBOOK_PRIORS
 
 
 def context_key(meta: dict) -> str:
@@ -63,25 +58,14 @@ def context_key(meta: dict) -> str:
     failure types at different pipeline stages.
     """
     lang = (meta.get("lang") or "py").strip().lower()
-    tests = (
-        (meta.get("tests") or "pytest").strip().lower()
-    )
-    fw = (
-        (meta.get("framework") or "unknown")
-        .strip()
-        .lower()
-    )
-    fail = (
-        (meta.get("failure") or "none")
-        .strip()
-        .lower()
-    )
-    stage = (
-        (meta.get("stage") or "unknown")
-        .strip()
-        .lower()
-    )
-    return f"{lang}|{tests}|{fw}|{fail}|{stage}"
+    tests = (meta.get("tests") or "pytest").strip().lower()
+    fw = (meta.get("framework") or "unknown").strip().lower()
+    fail = (meta.get("failure") or "none").strip().lower()
+    stage = (meta.get("stage") or "unknown").strip().lower()
+    repo = (meta.get("repo_id") or "unknown").strip().lower()
+    # Use first 8 chars of repo_id to avoid extremely long keys
+    repo_short = hashlib.sha256(repo.encode()).hexdigest()[:8]
+    return f"{lang}|{tests}|{fw}|{fail}|{stage}|{repo_short}"
 
 
 def _task_hash(repo_id: str, task: str) -> str:
@@ -157,11 +141,9 @@ def _should_reject_ingest(req: IngestReq, task_hash: str) -> tuple[bool, str]:
     if req.patch_hash:
         prev = store.latest_outcome(task_hash)
         if prev:
-            if (
-                prev.get("patch_hash") == req.patch_hash
-                and prev.get("failure_signature", "")
-                == (req.failure_signature or "")
-            ):
+            if prev.get("patch_hash") == req.patch_hash and prev.get(
+                "failure_signature", ""
+            ) == (req.failure_signature or ""):
                 return True, "duplicate_patch_fingerprint"
             if req.tests_total and prev.get("tests_total", 0):
                 if int(req.tests_total) < int(prev.get("tests_total", 0)):
@@ -199,7 +181,8 @@ def suggest(req: SuggestReq):
         if known and known.get("best_strategy_id"):
             sig_boost_sid = known["best_strategy_id"]
             wr = known.get(
-                "best_strategy_win_rate", 0,
+                "best_strategy_win_rate",
+                0,
             )
             failure_hint = (
                 f"Known failure pattern"
@@ -209,10 +192,7 @@ def suggest(req: SuggestReq):
                 f" (win rate: {wr:.0%})."
             )
             if known.get("failure_test"):
-                failure_hint += (
-                    f" Failing test:"
-                    f" {known['failure_test']}."
-                )
+                failure_hint += f" Failing test:" f" {known['failure_test']}."
 
     # Thompson sampling over Beta posteriors,
     # with optional boost for known failures.
@@ -239,14 +219,8 @@ def suggest(req: SuggestReq):
     # If we have zero data and know the failure
     # class, use the prior mapping.
     fc = (req.meta.get("failure") or "").strip()
-    total_trials = sum(
-        post.get(sid, {}).get("trials", 0)
-        for sid in STRATEGIES
-    )
-    if (
-        total_trials == 0
-        and fc in _FAILURE_STRATEGY_PRIORS
-    ):
+    total_trials = sum(post.get(sid, {}).get("trials", 0) for sid in STRATEGIES)
+    if total_trials == 0 and fc in _FAILURE_STRATEGY_PRIORS:
         best_sid = _FAILURE_STRATEGY_PRIORS[fc]
 
     addendum = _ADDENDA[best_sid]
@@ -255,10 +229,24 @@ def suggest(req: SuggestReq):
     past_outcomes: Optional[list] = None
     th = _task_hash(req.repo_id, req.task)
     history = store.lookup_patch_history(
-        th, limit=5,
+        th,
+        limit=5,
     )
     if history:
         past_outcomes = history
+
+    # Identify known traps (actions that failed in this context)
+    known_traps = []
+    if history:
+        # Simple heuristic: if we tried a patch and it failed with the SAME failure signature
+        # as current (or just failed at all?), consider it a trap.
+        # Ideally we'd map (strategy, action) -> outcome, but history is patch-based.
+        # For now, let's just use the 'strategy_id' as a trap if it failed recently.
+        for h in history:
+            if not h["success"] and h["strategy_id"]:
+                # This is loose, but meaningful: if strategy X failed here, warn about it
+                known_traps.append(f"strategy:{h['strategy_id']}")
+            # If we had finer grained action history here, we'd add it.
 
     # Learner recommends; Gate enforces final policy.
     # Constraints MUST match what gate_policy.yaml
@@ -285,20 +273,22 @@ def suggest(req: SuggestReq):
         (known or {}).get("occurrence_count", 0),
     )
     failure_best_win_rate = float(
-        (known or {}).get("best_strategy_win_rate", 0.0)
-        or 0.0,
+        (known or {}).get("best_strategy_win_rate", 0.0) or 0.0,
     )
     kernel_evidence = {
         "strategy_id": best_sid,
         "context_key": ck,
         "prior_success_prob": round(
-            posterior_mean, 4,
+            posterior_mean,
+            4,
         ),
         "prior_trials": trials,
         "failure_occurrence": failure_occurrence,
         "failure_best_win_rate": round(
-            failure_best_win_rate, 4,
+            failure_best_win_rate,
+            4,
         ),
+        "known_traps": list(set(known_traps)),
     }
 
     return SuggestResp(
@@ -356,34 +346,25 @@ def ingest(req: IngestReq):
             tests_failed=req.tests_failed,
             tests_total=req.tests_total,
             failure_class=req.failure_class,
-            failure_signature=(
-                req.failure_signature or ""
-            ),
+            failure_signature=(req.failure_signature or ""),
             strategy_id=req.strategy_id,
             success=bool(req.success),
             dense_reward=req.dense_reward,
         )
 
     # Index the failure signature if present.
-    if (
-        req.failure_signature_hash
-        and req.failure_class
-    ):
+    if req.failure_signature_hash and req.failure_class:
         best_sid = None
         best_wr = None
         if req.success:
             best_sid = req.strategy_id
             best_wr = 1.0
         store.upsert_failure(
-            signature_hash=(
-                req.failure_signature_hash
-            ),
+            signature_hash=(req.failure_signature_hash),
             failure_class=req.failure_class,
             failure_module=req.failure_module or "",
             failure_test=req.failure_test or "",
-            failure_message=(
-                req.failure_message or ""
-            ),
+            failure_message=(req.failure_message or ""),
             repo_id=req.repo_id,
             best_strategy_id=best_sid,
             best_win_rate=best_wr,
@@ -397,6 +378,7 @@ def ingest(req: IngestReq):
 
 
 # ── Query endpoints for outcome intelligence ──
+
 
 @app.get("/outcomes/{repo_id}")
 def get_outcomes(repo_id: str, limit: int = 20):
@@ -439,7 +421,8 @@ def get_failures(
     """Get indexed failure signatures."""
     if failure_class:
         return store.find_similar_failures(
-            failure_class, limit=limit,
+            failure_class,
+            limit=limit,
         )
     rows = store.con.execute(
         """
@@ -462,9 +445,7 @@ def get_failures(
             "failure_test": r[3],
             "occurrence_count": int(r[4]),
             "best_strategy_id": r[5],
-            "best_strategy_win_rate": (
-                float(r[6]) if r[6] else None
-            ),
+            "best_strategy_win_rate": (float(r[6]) if r[6] else None),
         }
         for r in rows
     ]
@@ -493,9 +474,7 @@ def get_strategy_stats():
             "losses": int(r[4]),
             "alpha": float(r[5]),
             "beta": float(r[6]),
-            "win_rate": (
-                int(r[3]) / max(int(r[2]), 1)
-            ),
+            "win_rate": (int(r[3]) / max(int(r[2]), 1)),
         }
         for r in rows
     ]

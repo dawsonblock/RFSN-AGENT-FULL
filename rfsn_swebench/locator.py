@@ -177,6 +177,43 @@ def locate_files(llm_response: str) -> list[str]:
     return []
 
 
+def _ast_safe_truncate(content: str, max_chars: int) -> str:
+    """Truncate Python source at a complete function/class boundary.
+
+    Uses the ``ast`` module to find where top-level definitions end,
+    then truncates at the last complete definition that fits within
+    *max_chars*.  Falls back to raw truncation on parse error.
+    """
+    if len(content) <= max_chars:
+        return content
+    try:
+        import ast
+
+        tree = ast.parse(content)
+    except SyntaxError:
+        return content[:max_chars] + "\n...(truncated)"
+
+    # Collect the end-line of every top-level node
+    lines = content.splitlines(keepends=True)
+    last_safe_end = 0
+    char_offset = 0
+    line_offsets = [0]
+    for line in lines:
+        char_offset += len(line)
+        line_offsets.append(char_offset)
+
+    for node in ast.iter_child_nodes(tree):
+        if not hasattr(node, "end_lineno") or node.end_lineno is None:
+            continue
+        end_offset = line_offsets[min(node.end_lineno, len(lines))]
+        if end_offset <= max_chars:
+            last_safe_end = end_offset
+
+    if last_safe_end > 0:
+        return content[:last_safe_end] + "\n...(truncated at class/function boundary)"
+    return content[:max_chars] + "\n...(truncated)"
+
+
 def read_file_context(
     workdir: str,
     paths: list[str],
@@ -188,6 +225,8 @@ def read_file_context(
 
     Truncates individual files at *max_chars_per_file* and the total
     output at *max_total_chars* to stay within token budgets.
+    Python files use AST-aware truncation to avoid cutting functions
+    in half.
     """
     parts: list[str] = []
     total = 0
@@ -204,14 +243,19 @@ def read_file_context(
         try:
             read_limit = min(max_chars_per_file, max_total_chars - total)
             with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read(read_limit)
+                content = f.read(read_limit + 2000)  # read extra for AST boundary
         except Exception:
             parts.append(f"## File: {rel_path}\n(read error)\n")
             continue
 
         remaining = max_total_chars - total
-        if len(content) > remaining:
-            content = content[:remaining] + "\n...(truncated)"
+        effective_limit = min(read_limit, remaining)
+
+        # AST-aware truncation for Python files
+        if rel_path.endswith(".py") and len(content) > effective_limit:
+            content = _ast_safe_truncate(content, effective_limit)
+        elif len(content) > effective_limit:
+            content = content[:effective_limit] + "\n...(truncated)"
 
         # Add line numbers for easier LLM reference
         numbered_lines = []

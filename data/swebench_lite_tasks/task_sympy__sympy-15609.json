@@ -1,0 +1,30 @@
+{
+  "task_id": "sympy__sympy-15609",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "15f56f3b0006d2ed2c29bde3c43e91618012c849",
+  "workdir": "/tmp/swebench_work/sympy__sympy-15609",
+  "issue_text": "Indexed matrix-expression LaTeX printer is not compilable\n```python\r\ni, j, k = symbols(\"i j k\")\r\nM = MatrixSymbol(\"M\", k, k)\r\nN = MatrixSymbol(\"N\", k, k)\r\nlatex((M*N)[i, j])\r\n```\r\n\r\nThe LaTeX string produced by the last command is:\r\n```\r\n\\sum_{i_{1}=0}^{k - 1} M_{i, _i_1} N_{_i_1, j}\r\n```\r\nLaTeX complains about a double subscript `_`. This expression won't render in MathJax either.\n",
+  "hints": {
+    "failing_tests": [
+      "test_MatrixElement_printing"
+    ],
+    "focus_files": [
+      "sympy/printing/latex.py"
+    ],
+    "test_patch": "diff --git a/sympy/printing/tests/test_latex.py b/sympy/printing/tests/test_latex.py\n--- a/sympy/printing/tests/test_latex.py\n+++ b/sympy/printing/tests/test_latex.py\n@@ -1738,6 +1738,11 @@ def test_MatrixElement_printing():\n     F = C[0, 0].subs(C, A - B)\n     assert latex(F) == r\"\\left(A - B\\right)_{0, 0}\"\n \n+    i, j, k = symbols(\"i j k\")\n+    M = MatrixSymbol(\"M\", k, k)\n+    N = MatrixSymbol(\"N\", k, k)\n+    assert latex((M*N)[i, j]) == r'\\sum_{i_{1}=0}^{k - 1} M_{i, i_{1}} N_{i_{1}, j}'\n+\n \n def test_MatrixSymbol_printing():\n     # test cases for issue #14237\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_MatrixElement_printing\"",
+    "test_full": "python -m pytest -x -q -k \"test_MatrixElement_printing\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

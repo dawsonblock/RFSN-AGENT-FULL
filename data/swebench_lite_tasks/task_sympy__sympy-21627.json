@@ -1,0 +1,30 @@
+{
+  "task_id": "sympy__sympy-21627",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "126f80578140e752ad5135aac77b8ff887eede3e",
+  "workdir": "/tmp/swebench_work/sympy__sympy-21627",
+  "issue_text": "Bug: maximum recusion depth error when checking is_zero of cosh expression\nThe following code causes a `RecursionError: maximum recursion depth exceeded while calling a Python object` error when checked if it is zero:\r\n```\r\nexpr =sympify(\"cosh(acos(-i + acosh(-g + i)))\")\r\nexpr.is_zero\r\n```\n",
+  "hints": {
+    "failing_tests": [
+      "test_Abs"
+    ],
+    "focus_files": [
+      "sympy/functions/elementary/complexes.py"
+    ],
+    "test_patch": "diff --git a/sympy/functions/elementary/tests/test_complexes.py b/sympy/functions/elementary/tests/test_complexes.py\n--- a/sympy/functions/elementary/tests/test_complexes.py\n+++ b/sympy/functions/elementary/tests/test_complexes.py\n@@ -464,6 +464,8 @@ def test_Abs():\n     # issue 19627\n     f = Function('f', positive=True)\n     assert sqrt(f(x)**2) == f(x)\n+    # issue 21625\n+    assert unchanged(Abs, S(\"im(acos(-i + acosh(-g + i)))\"))\n \n \n def test_Abs_rewrite():\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_Abs\"",
+    "test_full": "python -m pytest -x -q -k \"test_Abs\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

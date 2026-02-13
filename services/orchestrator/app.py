@@ -22,6 +22,7 @@ from context_fingerprint import (  # type: ignore[import-not-found]
     compute_dense_reward,
     extract_test_nodes,
 )
+
 try:
     from phase_tracker import PhaseTracker  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover
@@ -37,11 +38,13 @@ from prompts import (  # type: ignore[import-not-found]
 
 # ── Hard RFSN Kernel (v2) ─────────────────────
 import sys as _sys
-_sys.path.insert(0, os.path.join(
-    os.path.dirname(os.path.dirname(
-        os.path.dirname(os.path.abspath(__file__))
-    )),
-))
+
+_sys.path.insert(
+    0,
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    ),
+)
 try:
     from rfsn_kernel.kernel import (
         HardKernel,
@@ -80,27 +83,51 @@ try:
     from rfsn_kernel.scheduler import (
         Scheduler,
     )
+
     _HAS_HARD_KERNEL = True
 except ImportError:
     _HAS_HARD_KERNEL = False
 
+# ── Kernel-required guard ──────────────────────────────────
+# When RFSN_KERNEL_REQUIRED=1 (default), the orchestrator
+# MUST have the hard kernel available. A silent fallback to
+# ungated execution is a security hole.
+_KERNEL_REQUIRED = os.getenv("RFSN_KERNEL_REQUIRED", "1") == "1"
+if not _HAS_HARD_KERNEL:
+    if _KERNEL_REQUIRED and os.getenv("RFSN_DEV_MODE", "0") != "1":
+        raise SystemExit(
+            "FATAL: RFSN hard kernel failed to import and "
+            "RFSN_KERNEL_REQUIRED=1. All actions would bypass "
+            "the security gate. Set RFSN_KERNEL_REQUIRED=0 to "
+            "override (NOT recommended for production)."
+        )
+    print(
+        "CRITICAL: RFSN hard kernel unavailable — "
+        "ALL security gating is DISABLED. "
+        "Set RFSN_KERNEL_REQUIRED=1 to enforce.",
+        flush=True,
+    )
+
 import sys
+
 sys.path.insert(0, "/shared")
 try:
     from auth import (  # type: ignore[import-not-found]
         ServiceAuthMiddleware,
         auth_headers,
     )
+
     _HAS_AUTH = True
 except ImportError:
     _HAS_AUTH = False
-    def auth_headers(): return {}
+
+    def auth_headers():
+        return {}
+
 
 app = FastAPI()
 if _HAS_AUTH:
-    app.add_middleware(
-        ServiceAuthMiddleware  # type: ignore[possibly-unbound]
-    )
+    app.add_middleware(ServiceAuthMiddleware)  # type: ignore[possibly-unbound]
 
 
 def _ui_html() -> str:
@@ -127,6 +154,7 @@ def ui_root():
 def ui_page():
     return _ui_html()
 
+
 LLM_URL = os.getenv("LLM_URL", "http://llm_service:8001")
 TOOL_GATEWAY_URL = os.getenv("TOOL_GATEWAY_URL", "http://tool_gateway:8002")
 EXECUTOR_URL = os.getenv("EXECUTOR_URL", "http://executor:8003")
@@ -145,10 +173,12 @@ _REPO_ROOT = os.path.dirname(
     )
 )
 _LOCAL_POLICY_DIR = os.path.join(
-    _REPO_ROOT, "policies",
+    _REPO_ROOT,
+    "policies",
 )
 _POLICY_DIR = os.getenv(
-    "RFSN_POLICY_DIR", "/policies",
+    "RFSN_POLICY_DIR",
+    "/policies",
 )
 
 
@@ -205,16 +235,18 @@ TOOL_ALLOWLIST = _load_yaml("tool_allowlist.yaml")
 def _compile_policy_hash() -> str:
     """Hash all policy YAML files to a single hex digest."""
     h = hashlib.sha256()
-    for name in sorted([
-        "command_templates.yaml",
-        "deps_policy.yaml",
-        "diff_guard.yaml",
-        "gate_policy.yaml",
-        "gate_policy_tiers.yaml",
-        "llm_cassette.yaml",
-        "test_policy.yaml",
-        "tool_allowlist.yaml",
-    ]):
+    for name in sorted(
+        [
+            "command_templates.yaml",
+            "deps_policy.yaml",
+            "diff_guard.yaml",
+            "gate_policy.yaml",
+            "gate_policy_tiers.yaml",
+            "llm_cassette.yaml",
+            "test_policy.yaml",
+            "tool_allowlist.yaml",
+        ]
+    ):
         found = False
         for path in _policy_candidates(name):
             try:
@@ -231,18 +263,24 @@ def _compile_policy_hash() -> str:
 
 POLICY_HASH = _compile_policy_hash()
 REPLAY_BASE_DIR = os.getenv(
-    "RFSN_REPLAY_DIR", "/data/replay",
+    "RFSN_REPLAY_DIR",
+    "/data/replay",
 )
 REPLAY_MANIFEST_DIR = os.path.join(
-    REPLAY_BASE_DIR, "manifests",
+    REPLAY_BASE_DIR,
+    "manifests",
 )
 LEARNER_DB_PATH = os.getenv(
     "RFSN_LEARNER_DB_PATH",
     "/data/learner.duckdb",
 )
-DETERMINISTIC_RUN_ID = os.getenv(
-    "RFSN_DETERMINISTIC_RUN_ID", "0",
-) == "1"
+DETERMINISTIC_RUN_ID = (
+    os.getenv(
+        "RFSN_DETERMINISTIC_RUN_ID",
+        "0",
+    )
+    == "1"
+)
 
 
 def _file_sha256(path: str) -> str:
@@ -308,17 +346,10 @@ def _repo_head(repo_id: str) -> str:
             with open(packed, "r", encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
-                    if (
-                        not line
-                        or line.startswith("#")
-                        or line.startswith("^")
-                    ):
+                    if not line or line.startswith("#") or line.startswith("^"):
                         continue
                     parts = line.split(" ", 1)
-                    if (
-                        len(parts) == 2
-                        and parts[1].strip() == ref
-                    ):
+                    if len(parts) == 2 and parts[1].strip() == ref:
                         return parts[0].strip()
     except Exception:
         return ""
@@ -328,7 +359,8 @@ def _repo_head(repo_id: str) -> str:
 def _replay_manifest_path(run_id: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", run_id)[:128]
     return os.path.join(
-        REPLAY_MANIFEST_DIR, f"{safe}.json",
+        REPLAY_MANIFEST_DIR,
+        f"{safe}.json",
     )
 
 
@@ -342,6 +374,37 @@ def _replay_bundle_dir(repo_id: str, run_id: str) -> str:
     return out
 
 
+_SNAPSHOT_EXCLUDE_DIRS = {
+    ".git",
+    "__pycache__",
+    ".venv",
+    "node_modules",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "dist",
+    "build",
+    ".tox",
+}
+_MAX_SNAPSHOT_FILE_BYTES = int(
+    os.getenv("RFSN_MAX_SNAPSHOT_FILE_BYTES", "50000000"),
+)
+_MAX_SNAPSHOT_BYTES = int(
+    os.getenv("RFSN_MAX_SNAPSHOT_BYTES", "250000000"),
+)
+
+
+def _snapshot_tar_filter(
+    ti: tarfile.TarInfo,
+) -> tarfile.TarInfo | None:
+    parts = [p for p in ti.name.replace("\\", "/").split("/") if p]
+    if any(seg in _SNAPSHOT_EXCLUDE_DIRS for seg in parts):
+        return None
+    if ti.size and ti.size > _MAX_SNAPSHOT_FILE_BYTES:
+        return None
+    return ti
+
+
 def _capture_repo_snapshot(repo_id: str, run_id: str, label: str) -> str:
     repo_path = _repo_abs_path(repo_id)
     if not os.path.isdir(repo_path):
@@ -350,7 +413,15 @@ def _capture_repo_snapshot(repo_id: str, run_id: str, label: str) -> str:
     out_path = os.path.join(out_dir, f"repo_{label}.tar.gz")
     try:
         with tarfile.open(out_path, "w:gz") as tf:
-            tf.add(repo_path, arcname="repo")
+            tf.add(
+                repo_path,
+                arcname="repo",
+                filter=_snapshot_tar_filter,
+            )
+        # Enforce total snapshot size cap.
+        if os.path.getsize(out_path) > _MAX_SNAPSHOT_BYTES:
+            os.remove(out_path)
+            return ""
         return out_path
     except Exception:
         return ""
@@ -414,7 +485,8 @@ def _write_replay_manifest(run_id: str, manifest: dict) -> None:
         tmp = f"{path}.tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(
-                manifest, f,
+                manifest,
+                f,
                 sort_keys=True,
                 ensure_ascii=False,
                 indent=2,
@@ -443,12 +515,14 @@ def _replay_manifest_check(manifest: dict) -> dict:
     ]
     status = str(manifest.get("status", "running"))
     if status != "running":
-        required_nonempty.extend([
-            "repo_snapshot_start",
-            "repo_snapshot_end",
-            "requirements_lock",
-            "executor_env_manifest_path",
-        ])
+        required_nonempty.extend(
+            [
+                "repo_snapshot_start",
+                "repo_snapshot_end",
+                "requirements_lock",
+                "executor_env_manifest_path",
+            ]
+        )
     missing: list[str] = []
     for k in required_nonempty:
         v = manifest.get(k)
@@ -501,7 +575,8 @@ def _init_replay_manifest(
             "rfsn-blessed@sha256:208a2c2dac42ed9b3ca023b30cd815518070930274592844511aa34de21b6360",
         ),
         "strict_image_digest": os.getenv(
-            "RFSN_STRICT_IMAGE_DIGEST", "1",
+            "RFSN_STRICT_IMAGE_DIGEST",
+            "1",
         ),
         "sandbox_mode": "warm" if WARM_SANDBOX else "cold",
         "sandbox_image_hash": str(
@@ -514,9 +589,7 @@ def _init_replay_manifest(
         "executor_env_manifest": {},
         "repo_head": _repo_head(repo_id) or "unknown",
         "learner_db_path": LEARNER_DB_PATH,
-        "learner_db_hash": (
-            _file_sha256(LEARNER_DB_PATH) or "missing"
-        ),
+        "learner_db_hash": (_file_sha256(LEARNER_DB_PATH) or "missing"),
         "results_count": 0,
         "replay_verify": {},
     }
@@ -578,6 +651,7 @@ def _finalize_replay_manifest(
     ctx["replay_manifest"] = manifest
     _RUN_CONTEXT[run_id] = ctx
     _write_replay_manifest(run_id, manifest)
+
 
 # ── Episode determinism ──────────────────────
 # Seed Python random from RFSN_SEED so that any
@@ -662,12 +736,15 @@ class _LedgerSink:
             return {
                 "ok": False,
                 "entries": 0,
-                "errors": [{
-                    "line": 0,
-                    "error": "hard kernel unavailable",
-                }],
+                "errors": [
+                    {
+                        "line": 0,
+                        "error": "hard kernel unavailable",
+                    }
+                ],
             }
         return self._kernel.ledger.verify_chain()
+
 
 # ── Hard kernel v2 (simulation + risk + replay) ─
 _KERNEL_REJECT_RISK_SCORE = float(
@@ -683,8 +760,7 @@ _KERNEL_RISK_MAX = float(
     )
 )
 _READ_BUDGET = (
-    GATE_POLICY.get("step_budgets", {})
-    .get("repo_read_range", {})
+    GATE_POLICY.get("step_budgets", {}).get("repo_read_range", {})
     if isinstance(GATE_POLICY.get("step_budgets", {}), dict)
     else {}
 )
@@ -714,23 +790,46 @@ if _HAS_HARD_KERNEL:
             "fail_cluster_threshold": 8,
             "max_lines_per_read": int(
                 _READ_BUDGET.get(
-                    "max_lines_per_read", 300,
+                    "max_lines_per_read",
+                    300,
                 )
             ),
             "blocked_read_prefixes": (
-                GATE_POLICY.get("blocked_read_prefixes", [])
-                or []
+                GATE_POLICY.get("blocked_read_prefixes", []) or []
             ),
             "blocked_read_suffixes": (
-                GATE_POLICY.get("blocked_read_suffixes", [])
-                or []
+                GATE_POLICY.get("blocked_read_suffixes", []) or []
             ),
             "allowed_command_templates": sorted(
+                list((TOOL_ALLOWLIST.get("command_templates") or {}).keys())
+            ),
+            # ── Patch budget enforcement (kernel single-source) ──
+            "max_patch_files": int(
+                GATE_POLICY.get("max_patch_files", 0) or 0,
+            ),
+            "max_patch_total_lines": int(
+                GATE_POLICY.get("max_patch_total_lines", 0) or 0,
+            ),
+            "max_added_lines": int(
+                GATE_POLICY.get("max_added_lines", 0) or 0,
+            ),
+            "max_deleted_lines": int(
+                GATE_POLICY.get("max_deleted_lines", 0) or 0,
+            ),
+            # ── Forbid flags (kernel hard gate) ──
+            "forbid_test_edits": bool(
+                GATE_POLICY.get("forbid_test_edits", False),
+            ),
+            "forbid_ci_edits": bool(
+                GATE_POLICY.get("forbid_ci_edits", False),
+            ),
+            "forbid_dep_manifest_edits": bool(
+                GATE_POLICY.get("forbid_dep_manifest_edits", False),
+            ),
+            # ── Policy-driven test template validation ──
+            "allowed_test_templates": sorted(
                 list(
-                    (
-                        TOOL_ALLOWLIST.get("command_templates")
-                        or {}
-                    ).keys()
+                    (_load_yaml("command_templates.yaml").get("templates") or {}).keys()
                 )
             ),
         },
@@ -745,10 +844,16 @@ if _HAS_HARD_KERNEL:
         contradiction_max=0.6,
         max_entries=2000,
     )
+    # Persist memory across runs.
+    _MEMORY_PATH = os.path.join(
+        os.environ.get("DATA_DIR", "data"),
+        "memory_immune_system.jsonl",
+    )
+    _memory.load(_MEMORY_PATH)
 else:
     _hard_kernel = None  # type: ignore[assignment]
-    _planner = None      # type: ignore[assignment]
-    _memory = None       # type: ignore[assignment]
+    _planner = None  # type: ignore[assignment]
+    _memory = None  # type: ignore[assignment]
 
 ledger = _LedgerSink(_hard_kernel)
 
@@ -761,7 +866,8 @@ def _policy_tier_for_run(
 
     rs = _hard_kernel.run_state.get(run_id)
     tiers = (_hard_kernel.tier_policy or {}).get(
-        "tiers", {},
+        "tiers",
+        {},
     )
     cfg = tiers.get(rs.tier)
     if not isinstance(cfg, dict):
@@ -772,10 +878,7 @@ def _policy_tier_for_run(
 
 
 def _default_cmd_plan() -> dict:
-    templates = (
-        TOOL_ALLOWLIST.get("command_templates")
-        or {}
-    )
+    templates = TOOL_ALLOWLIST.get("command_templates") or {}
     default_tests = []
     for name in (
         "python:pytest",
@@ -789,16 +892,14 @@ def _default_cmd_plan() -> dict:
         "workdir_id": "workdir_0",
         "test_templates": default_tests,
         "lint_templates": [
-            t for t in (
+            t
+            for t in (
                 "python:ruff",
                 "node:lint",
             )
             if t in templates
         ],
-        "build_templates": [
-            t for t in ("tsc",)
-            if t in templates
-        ],
+        "build_templates": [t for t in ("tsc",) if t in templates],
     }
 
 
@@ -938,13 +1039,15 @@ def _bootstrap_command_plan(
     if ex1["ok"] and ex1["out"]:
         _METRICS["steps_executed"] += 1
         out = ex1["out"]
-        ledger.append({
-            "type": "STEP_RESULT",
-            "run_id": run_id,
-            "iter": 0,
-            "step": detect_proj_step,
-            "out": out,
-        })
+        ledger.append(
+            {
+                "type": "STEP_RESULT",
+                "run_id": run_id,
+                "iter": 0,
+                "step": detect_proj_step,
+                "out": out,
+            }
+        )
         parsed = _parse_payload_json(out.get("payload"))
         if parsed and isinstance(parsed.get("profile"), dict):
             project_profile = parsed.get("profile", {})
@@ -962,44 +1065,48 @@ def _bootstrap_command_plan(
     if ex2["ok"] and ex2["out"]:
         _METRICS["steps_executed"] += 1
         out = ex2["out"]
-        ledger.append({
-            "type": "STEP_RESULT",
-            "run_id": run_id,
-            "iter": 0,
-            "step": detect_wd_step,
-            "out": out,
-        })
+        ledger.append(
+            {
+                "type": "STEP_RESULT",
+                "run_id": run_id,
+                "iter": 0,
+                "step": detect_wd_step,
+                "out": out,
+            }
+        )
         parsed = _parse_payload_json(out.get("payload"))
         wd = parsed.get("workdirs") if parsed else None
         if isinstance(wd, list):
-            workdirs = [
-                x for x in wd if isinstance(x, dict)
-            ]
+            workdirs = [x for x in wd if isinstance(x, dict)]
 
     if not workdirs:
-        workdirs = [{
-            "id": "workdir_0",
-            "rel": ".",
-            "markers": [],
-        }]
+        workdirs = [
+            {
+                "id": "workdir_0",
+                "rel": ".",
+                "markers": [],
+            }
+        ]
     cmd_plan = infer_commands(
-        project_profile, workdirs,
+        project_profile,
+        workdirs,
     )
     if not cmd_plan.get("workdir_id"):
-        cmd_plan["workdir_id"] = str(
-            workdirs[0].get("id", "workdir_0")
-        )
+        cmd_plan["workdir_id"] = str(workdirs[0].get("id", "workdir_0"))
     if not cmd_plan.get("test_templates"):
         cmd_plan["test_templates"] = _default_cmd_plan().get(
-            "test_templates", [],
+            "test_templates",
+            [],
         )
     ctx["cmd_plan"] = cmd_plan
 
-    ledger.append({
-        "type": "CMD_INFERRED",
-        "run_id": run_id,
-        "plan": cmd_plan,
-    })
+    ledger.append(
+        {
+            "type": "CMD_INFERRED",
+            "run_id": run_id,
+            "plan": cmd_plan,
+        }
+    )
 
 
 def _end_kernel_run(run_id: str) -> None:
@@ -1020,26 +1127,27 @@ def _end_kernel_run(run_id: str) -> None:
 
 
 def stable_id(
-    prefix: str, *parts: str, n: int = 10,
+    prefix: str,
+    *parts: str,
+    n: int = 10,
 ) -> str:
-    h = hashlib.sha256(
-        ("|".join(parts)).encode("utf-8")
-    ).hexdigest()
+    h = hashlib.sha256(("|".join(parts)).encode("utf-8")).hexdigest()
     return f"{prefix}-{h[:n]}"
 
 
 def venv_exists(repo_id: str) -> bool:
-    return os.path.exists(
-        f"/data/venv/{repo_id}/bin/activate"
-    )
+    return os.path.exists(f"/data/venv/{repo_id}/bin/activate")
 
 
 def is_tests_only_task(task: str) -> bool:
     t = (task or "").lower()
     triggers = [
-        "run pytest", "run tests",
-        "confirm green", "make no changes",
-        "tests only", "no changes",
+        "run pytest",
+        "run tests",
+        "confirm green",
+        "make no changes",
+        "tests only",
+        "no changes",
     ]
     return (
         any(x in t for x in triggers)
@@ -1152,7 +1260,8 @@ def _collect_repo_chat_context(
             found[rel] = True
     profile = {
         "has_python": any(
-            k in found for k in [
+            k in found
+            for k in [
                 "pyproject.toml",
                 "requirements.txt",
                 "setup.py",
@@ -1160,7 +1269,8 @@ def _collect_repo_chat_context(
             ]
         ),
         "has_node": any(
-            k in found for k in [
+            k in found
+            for k in [
                 "package.json",
                 "pnpm-lock.yaml",
                 "yarn.lock",
@@ -1198,8 +1308,13 @@ def _collect_repo_chat_context(
     max_depth = 4
     while queue and len(workdirs) < 10:
         rel, depth = queue.pop(0)
-        abs_dir = repo_path if rel == "." else os.path.join(
-            repo_path, rel,
+        abs_dir = (
+            repo_path
+            if rel == "."
+            else os.path.join(
+                repo_path,
+                rel,
+            )
         )
         try:
             entries = list(os.scandir(abs_dir))
@@ -1210,11 +1325,13 @@ def _collect_repo_chat_context(
             if os.path.exists(os.path.join(abs_dir, m)):
                 marker_hits.append(m)
         if marker_hits:
-            workdirs.append({
-                "id": f"workdir_{len(workdirs)}",
-                "rel": rel,
-                "markers": sorted(marker_hits),
-            })
+            workdirs.append(
+                {
+                    "id": f"workdir_{len(workdirs)}",
+                    "rel": rel,
+                    "markers": sorted(marker_hits),
+                }
+            )
         if depth >= max_depth:
             continue
         for entry in entries:
@@ -1226,9 +1343,11 @@ def _collect_repo_chat_context(
             queue.append((child, depth + 1))
 
     terms = _chat_terms(query)
-    pattern = "|".join(
-        re.escape(t) for t in terms
-    ) if terms else "README|setup|pyproject|package|main"
+    pattern = (
+        "|".join(re.escape(t) for t in terms)
+        if terms
+        else "README|setup|pyproject|package|main"
+    )
     try:
         query_re = re.compile(pattern, re.IGNORECASE)
     except re.error:
@@ -1236,10 +1355,33 @@ def _collect_repo_chat_context(
         warnings.append("invalid query regex; fallback applied")
 
     allowed_exts = {
-        ".py", ".js", ".ts", ".jsx", ".tsx", ".go", ".rs", ".java",
-        ".rb", ".c", ".cpp", ".h", ".hpp", ".cs", ".swift", ".kt",
-        ".scala", ".toml", ".yaml", ".yml", ".json", ".cfg", ".ini",
-        ".md", ".rst", ".txt", ".sh",
+        ".py",
+        ".js",
+        ".ts",
+        ".jsx",
+        ".tsx",
+        ".go",
+        ".rs",
+        ".java",
+        ".rb",
+        ".c",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".cs",
+        ".swift",
+        ".kt",
+        ".scala",
+        ".toml",
+        ".yaml",
+        ".yml",
+        ".json",
+        ".cfg",
+        ".ini",
+        ".md",
+        ".rst",
+        ".txt",
+        ".sh",
     }
     scan_limit = 1200
     scanned = 0
@@ -1291,11 +1433,13 @@ def _collect_repo_chat_context(
             with open(abs_path, "rb") as f:
                 data = f.read(65536)
             content = data.decode("utf-8", errors="replace")[:3500]
-            snippets.append({
-                "path": p,
-                "sha256": hashlib.sha256(data).hexdigest(),
-                "content": content,
-            })
+            snippets.append(
+                {
+                    "path": p,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "content": content,
+                }
+            )
         except Exception:
             continue
 
@@ -1349,10 +1493,7 @@ def health():
     return {
         "ok": all_ok,
         "deps": deps,
-        "kernel_loaded": (
-            _HAS_HARD_KERNEL
-            and _hard_kernel is not None
-        ),
+        "kernel_loaded": (_HAS_HARD_KERNEL and _hard_kernel is not None),
         "policies": {
             "deps": bool(DEPS_POLICY),
             "test": bool(TEST_POLICY),
@@ -1381,10 +1522,36 @@ _TEXT_CHAT_ITER: dict[str, int] = {}
 _SAFE_REPO_ID = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 _SAFE_THREAD_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 _CHAT_STOPWORDS = {
-    "the", "and", "for", "with", "this", "that", "what", "where",
-    "when", "from", "into", "about", "repo", "repository", "file",
-    "files", "code", "does", "have", "just", "need", "show", "tell",
-    "please", "there", "their", "your", "ours", "ourselves", "you",
+    "the",
+    "and",
+    "for",
+    "with",
+    "this",
+    "that",
+    "what",
+    "where",
+    "when",
+    "from",
+    "into",
+    "about",
+    "repo",
+    "repository",
+    "file",
+    "files",
+    "code",
+    "does",
+    "have",
+    "just",
+    "need",
+    "show",
+    "tell",
+    "please",
+    "there",
+    "their",
+    "your",
+    "ours",
+    "ourselves",
+    "you",
 }
 _MAX_CONCURRENT_RUNS = int(
     os.getenv("RFSN_MAX_CONCURRENT_RUNS", "2"),
@@ -1393,8 +1560,7 @@ _RUN_MAX_SECONDS = int(
     os.getenv("RFSN_RUN_MAX_SECONDS", "900"),
 )
 _SCHEDULER = (
-    Scheduler(max_concurrent=_MAX_CONCURRENT_RUNS)
-    if _HAS_HARD_KERNEL else None
+    Scheduler(max_concurrent=_MAX_CONCURRENT_RUNS) if _HAS_HARD_KERNEL else None
 )
 
 
@@ -1445,14 +1611,16 @@ def repos_import(req: RepoImportReq):
     if r.status_code != 200:
         raise HTTPException(r.status_code, r.text)
     out = r.json()
-    ledger.append({
-        "type": "REPO_IMPORTED",
-        "run_id": "",
-        "repo_id": out.get("repo_id", ""),
-        "repo_url": out.get("repo_url", ""),
-        "head": out.get("head", ""),
-        "branch": out.get("branch", ""),
-    })
+    ledger.append(
+        {
+            "type": "REPO_IMPORTED",
+            "run_id": "",
+            "repo_id": out.get("repo_id", ""),
+            "repo_url": out.get("repo_url", ""),
+            "head": out.get("head", ""),
+            "branch": out.get("branch", ""),
+        }
+    )
     return out
 
 
@@ -1506,17 +1674,16 @@ def chat_repo(req: RepoChatReq):
         },
         {
             "role": "system",
-            "content": (
-                f"REPO_CONTEXT repo_id={repo_id}\n"
-                + context_blob
-            ),
+            "content": (f"REPO_CONTEXT repo_id={repo_id}\n" + context_blob),
         },
     ]
     messages.extend(history[-12:])
-    messages.append({
-        "role": "user",
-        "content": message,
-    })
+    messages.append(
+        {
+            "role": "user",
+            "content": message,
+        }
+    )
 
     fallback_reason = ""
     try:
@@ -1540,8 +1707,7 @@ def chat_repo(req: RepoChatReq):
         ]
         if files:
             lines.append(
-                "Relevant files: "
-                + ", ".join(files[:6]),
+                "Relevant files: " + ", ".join(files[:6]),
             )
         if profile:
             lines.append(
@@ -1555,32 +1721,32 @@ def chat_repo(req: RepoChatReq):
             lines.append(
                 "Detected workdirs: "
                 + ", ".join(
-                    str(w.get("id", ""))
-                    for w in workdirs[:6]
-                    if isinstance(w, dict)
+                    str(w.get("id", "")) for w in workdirs[:6] if isinstance(w, dict)
                 ),
             )
         if not files:
-            lines.append(
-                "No matching files found for this query yet."
-            )
+            lines.append("No matching files found for this query yet.")
         reply = "\n".join(lines)
 
-    history.extend([
-        {"role": "user", "content": message},
-        {"role": "assistant", "content": reply},
-    ])
+    history.extend(
+        [
+            {"role": "user", "content": message},
+            {"role": "assistant", "content": reply},
+        ]
+    )
     if len(history) > 30:
         del history[:-30]
     _prune_chat_threads()
 
-    ledger.append({
-        "type": "CHAT_TURN",
-        "run_id": thread_id,
-        "repo_id": repo_id,
-        "iter": iter_num,
-        "files": context.get("files", []),
-    })
+    ledger.append(
+        {
+            "type": "CHAT_TURN",
+            "run_id": thread_id,
+            "repo_id": repo_id,
+            "iter": iter_num,
+            "files": context.get("files", []),
+        }
+    )
 
     return {
         "ok": True,
@@ -1631,10 +1797,12 @@ def chat_text(req: TextChatReq):
         },
     ]
     messages.extend(history[-16:])
-    messages.append({
-        "role": "user",
-        "content": message,
-    })
+    messages.append(
+        {
+            "role": "user",
+            "content": message,
+        }
+    )
 
     fallback_reason = ""
     try:
@@ -1656,19 +1824,23 @@ def chat_text(req: TextChatReq):
             "entry or switch cassette mode to record."
         )
 
-    history.extend([
-        {"role": "user", "content": message},
-        {"role": "assistant", "content": reply},
-    ])
+    history.extend(
+        [
+            {"role": "user", "content": message},
+            {"role": "assistant", "content": reply},
+        ]
+    )
     if len(history) > 40:
         del history[:-40]
     _prune_text_chat_threads()
 
-    ledger.append({
-        "type": "TEXT_CHAT_TURN",
-        "run_id": thread_id,
-        "iter": iter_num,
-    })
+    ledger.append(
+        {
+            "type": "TEXT_CHAT_TURN",
+            "run_id": thread_id,
+            "iter": iter_num,
+        }
+    )
 
     return {
         "ok": True,
@@ -1721,7 +1893,8 @@ def chat_text_thread_delete(thread_id: str):
 def policy_tier_for_run(run_id: str):
     if not (_HAS_HARD_KERNEL and _hard_kernel):
         raise HTTPException(
-            500, "HardKernel not available",
+            500,
+            "HardKernel not available",
         )
     tier, name, cfg = _policy_tier_for_run(run_id)
     rs = _hard_kernel.run_state.get(run_id)
@@ -1756,9 +1929,7 @@ def _tail_lines_backwards(
         f.seek(0, os.SEEK_END)
         pos = f.tell()
         while pos > 0 and len(lines) < max_lines:
-            read_size = (
-                block_size if pos >= block_size else pos
-            )
+            read_size = block_size if pos >= block_size else pos
             pos -= read_size
             f.seek(pos, os.SEEK_SET)
             chunk = f.read(read_size)
@@ -1767,25 +1938,20 @@ def _tail_lines_backwards(
             remainder = parts[0]
             complete = parts[1:]
             for i in range(
-                len(complete) - 1, -1, -1,
+                len(complete) - 1,
+                -1,
+                -1,
             ):
                 if len(lines) >= max_lines:
                     break
                 s = complete[i].strip()
                 if s:
                     lines.append(s)
-        if (
-            pos == 0
-            and remainder.strip()
-            and len(lines) < max_lines
-        ):
+        if pos == 0 and remainder.strip() and len(lines) < max_lines:
             lines.append(remainder.strip())
 
     lines.reverse()
-    return [
-        b.decode("utf-8", errors="replace")
-        for b in lines
-    ]
+    return [b.decode("utf-8", errors="replace") for b in lines]
 
 
 def _tail_jsonl(path: str, max_lines: int) -> list[dict]:
@@ -1836,16 +2002,10 @@ def _filter_events(
         return "KERNEL_COMMIT"
 
     if run_id:
-        events = [
-            e for e in events
-            if _event_run_id(e) == run_id
-        ]
+        events = [e for e in events if _event_run_id(e) == run_id]
     if types:
         want = set(types)
-        events = [
-            e for e in events
-            if _event_type(e) in want
-        ]
+        events = [e for e in events if _event_type(e) in want]
     return events
 
 
@@ -1897,18 +2057,8 @@ def ledger_tail(
     run_id: Optional[str] = None,
     type: Optional[str] = None,
 ):
-    types = (
-        [
-            t.strip()
-            for t in type.split(",")
-            if t.strip()
-        ]
-        if type else None
-    )
-    events = [
-        _normalize_ledger_event(e)
-        for e in _tail_jsonl(HARD_LEDGER_PATH, n)
-    ]
+    types = [t.strip() for t in type.split(",") if t.strip()] if type else None
+    events = [_normalize_ledger_event(e) for e in _tail_jsonl(HARD_LEDGER_PATH, n)]
     events = _filter_events(events, run_id, types)
     return {
         "path": HARD_LEDGER_PATH,
@@ -1923,18 +2073,8 @@ def ledger_for_run(
     n: int = 2000,
     type: Optional[str] = None,
 ):
-    types = (
-        [
-            t.strip()
-            for t in type.split(",")
-            if t.strip()
-        ]
-        if type else None
-    )
-    events = [
-        _normalize_ledger_event(e)
-        for e in _tail_jsonl(HARD_LEDGER_PATH, n)
-    ]
+    types = [t.strip() for t in type.split(",") if t.strip()] if type else None
+    events = [_normalize_ledger_event(e) for e in _tail_jsonl(HARD_LEDGER_PATH, n)]
     events = _filter_events(events, run_id, types)
     return {
         "run_id": run_id,
@@ -1996,11 +2136,13 @@ def kernel_replay_manifest(run_id: str):
             }
         except Exception as exc:
             raise HTTPException(
-                500, f"manifest read failed: {exc}",
+                500,
+                f"manifest read failed: {exc}",
             ) from exc
     ctx = _RUN_CONTEXT.get(run_id)
     if isinstance(ctx, dict) and isinstance(
-        ctx.get("replay_manifest"), dict,
+        ctx.get("replay_manifest"),
+        dict,
     ):
         return {
             "run_id": run_id,
@@ -2013,7 +2155,8 @@ def kernel_replay_manifest(run_id: str):
 @app.get("/kernel/replay/manifest/check/{run_id}")
 def kernel_replay_manifest_check(run_id: str):
     m = kernel_replay_manifest(run_id).get(
-        "manifest", {},
+        "manifest",
+        {},
     )
     check = _replay_manifest_check(
         m if isinstance(m, dict) else {},
@@ -2023,7 +2166,8 @@ def kernel_replay_manifest_check(run_id: str):
         "ok": check.get("ok", False),
         "missing": check.get("missing", []),
         "required_count": check.get(
-            "required_count", 0,
+            "required_count",
+            0,
         ),
     }
 
@@ -2068,7 +2212,9 @@ def _sandbox_destroy(run_id: str, repo_id: str):
 
 
 def run_step(
-    repo_id: str, it: int, step: dict,
+    repo_id: str,
+    it: int,
+    step: dict,
     run_id: str | None = None,
     tier: int | None = None,
     warm_sandbox: bool | None = None,
@@ -2124,15 +2270,15 @@ def execute_approved_step(
         run_ctx = _ensure_run_context(run_id)
         tier_now, _, _ = _policy_tier_for_run(run_id)
         if _memory:
-            _hard_kernel.state.memory_version = (
-                _memory.memory_version
+            _hard_kernel.state.memory_version = _memory.memory_version
+        if (
+            _hard_kernel.state.resource_state.get(
+                "run_id",
+                "",
             )
-        if _hard_kernel.state.resource_state.get(
-            "run_id", "",
-        ) != run_id:
-            _hard_kernel.state.resource_state[
-                "run_id"
-            ] = run_id
+            != run_id
+        ):
+            _hard_kernel.state.resource_state["run_id"] = run_id
         exec_meta: dict = {
             "cache_hit": False,
             "cache_key": "",
@@ -2161,7 +2307,9 @@ def execute_approved_step(
                     "network_reason": "",
                 }
                 payload = json.dumps(
-                    r, sort_keys=True, separators=(",", ":"),
+                    r,
+                    sort_keys=True,
+                    separators=(",", ":"),
                 )
                 return Outcome(
                     success=False,
@@ -2174,20 +2322,23 @@ def execute_approved_step(
             r: dict
             if isinstance(cache, SimCache):
                 cache_key = cache.key(
-                    s, str(s.get("workdir_id") or ""),
+                    s,
+                    str(s.get("workdir_id") or ""),
                 )
                 hit = cache.get(cache_key)
                 if isinstance(hit, dict):
                     exec_meta["cache_hit"] = True
                     exec_meta["cache_key"] = cache_key
                     r = hit
-                    ledger.append({
-                        "type": "SIM_CACHE_HIT",
-                        "run_id": run_id,
-                        "iter": it,
-                        "cache_key": cache_key,
-                        "step_type": s.get("type", ""),
-                    })
+                    ledger.append(
+                        {
+                            "type": "SIM_CACHE_HIT",
+                            "run_id": run_id,
+                            "iter": it,
+                            "cache_key": cache_key,
+                            "step_type": s.get("type", ""),
+                        }
+                    )
                 else:
                     r = run_step(
                         repo_id,
@@ -2221,7 +2372,8 @@ def execute_approved_step(
             return Outcome(
                 success=ok,
                 exit_code=r.get(
-                    "status", 1,
+                    "status",
+                    1,
                 ),
                 payload=payload[:30000],
                 logs=str(
@@ -2245,27 +2397,16 @@ def execute_approved_step(
             "type": "HARD_KERNEL_STEP",
             "run_id": run_id,
             "iter": it,
-            "tier": _hard_kernel.run_state.get(
-                run_id
-            ).tier,
+            "tier": _hard_kernel.run_state.get(run_id).tier,
             "phase": kr.phase,
             "approved": kr.approved,
             "success": kr.success,
             "error": kr.error,
-            "reason": (
-                kr.decision.reason
-                if kr.decision else ""
-            ),
+            "reason": (kr.decision.reason if kr.decision else ""),
             "sim_cache_hit": bool(exec_meta.get("cache_hit", False)),
             "sim_cache_key": str(exec_meta.get("cache_key", "")),
-            "risk": (
-                kr.risk.to_dict()
-                if kr.risk else None
-            ),
-            "simulation": (
-                kr.simulation.to_dict()
-                if kr.simulation else None
-            ),
+            "risk": (kr.risk.to_dict() if kr.risk else None),
+            "simulation": (kr.simulation.to_dict() if kr.simulation else None),
         }
         if step_num is not None:
             hard_rec["step_num"] = step_num
@@ -2273,9 +2414,7 @@ def execute_approved_step(
 
         if not kr.approved:
             reason = (
-                kr.decision.reason
-                if kr.decision
-                else (kr.error or "kernel_reject")
+                kr.decision.reason if kr.decision else (kr.error or "kernel_reject")
             )
             return {
                 "ok": False,
@@ -2296,35 +2435,30 @@ def execute_approved_step(
                 out = {}
         if not out:
             out = {
-                "status": (
-                    kr.outcome.exit_code
-                    if kr.outcome else 1
-                ),
-                "payload": (
-                    kr.outcome.payload
-                    if kr.outcome else ""
-                ),
-                "logs": (
-                    kr.outcome.logs
-                    if kr.outcome else ""
-                ),
-                "seconds": (
-                    kr.outcome.duration_sec
-                    if kr.outcome else 0
-                ),
+                "status": (kr.outcome.exit_code if kr.outcome else 1),
+                "payload": (kr.outcome.payload if kr.outcome else ""),
+                "logs": (kr.outcome.logs if kr.outcome else ""),
+                "seconds": (kr.outcome.duration_sec if kr.outcome else 0),
             }
 
         if _memory:
-            _memory.admit(MemoryEntry(
-                content=(
-                    f"action={step.get('type')}"
-                    f" success={kr.success}"
-                    f" risk={kr.risk.total_risk:.2f}"
-                    if kr.risk else ""
-                ),
-                source="kernel",
-                entry_type="action_outcome",
-            ))
+            _memory.admit(
+                MemoryEntry(
+                    content=(
+                        f"action={step.get('type')}"
+                        f" success={kr.success}"
+                        f" risk={kr.risk.total_risk:.2f}"
+                        if kr.risk
+                        else ""
+                    ),
+                    source="kernel",
+                    entry_type="action_outcome",
+                )
+            )
+            try:
+                _memory.append_save(_MEMORY_PATH)
+            except Exception:
+                pass  # non-critical — best effort persistence
 
         return {
             "ok": True,
@@ -2342,8 +2476,10 @@ def execute_approved_step(
 
 
 def llm_chat(
-    messages: list, run_id: str,
-    call_index: int, repo_id: str,
+    messages: list,
+    run_id: str,
+    call_index: int,
+    repo_id: str,
     scenario: str,
     *,
     max_retries: int = 3,
@@ -2370,12 +2506,13 @@ def llm_chat(
             if r.status_code == 429:
                 # Rate-limited — back off
                 _METRICS["llm_retries"] += 1
-                wait = 2 ** attempt
+                wait = 2**attempt
                 time.sleep(wait)
                 continue
             if r.status_code != 200:
                 raise HTTPException(
-                    r.status_code, r.text,
+                    r.status_code,
+                    r.text,
                 )
             return r.json()
         except requests.exceptions.Timeout:
@@ -2383,24 +2520,24 @@ def llm_chat(
             last_exc = requests.exceptions.Timeout(
                 f"attempt {attempt + 1}",
             )
-            time.sleep(2 ** attempt)
+            time.sleep(2**attempt)
         except HTTPException:
             raise
         except Exception as exc:
             last_exc = exc
             _METRICS["llm_retries"] += 1
-            time.sleep(2 ** attempt)
+            time.sleep(2**attempt)
     raise HTTPException(
         502,
-        f"LLM unreachable after {max_retries}"
-        f" retries: {last_exc}",
+        f"LLM unreachable after {max_retries}" f" retries: {last_exc}",
     )
 
 
 def failure_signature(text: str) -> str:
     """Deterministic signature for learner bucketing."""
     blob = (text or "").encode(
-        "utf-8", errors="ignore",
+        "utf-8",
+        errors="ignore",
     )[:20000]
     return hashlib.sha256(blob).hexdigest()[:16]
 
@@ -2454,9 +2591,7 @@ def learner_suggest(
         "context_key": ck,
         "strategy_id": "PB_generic_fix",
         "prompt_addendum": (
-            "Strategy: search first,"
-            " narrow reads,"
-            " patch minimal. No refactor."
+            "Strategy: search first," " narrow reads," " patch minimal. No refactor."
         ),
         "constraints": {
             "max_patch_files": 3,
@@ -2495,7 +2630,8 @@ def learner_ingest(
 ) -> None:
     repo_path = f"/data/repos/{repo_id}"
     ctx = build_context(
-        repo_path, last_fail,
+        repo_path,
+        last_fail,
     )
     # Inject stage into meta so the learner
     # includes it in the context_key.
@@ -2524,21 +2660,26 @@ def learner_ingest(
         "tests_failed": tests_failed,
         "tests_total": tests_total,
         "failure_class": parsed.get(
-            "failure_class", "",
+            "failure_class",
+            "",
         ),
         "dense_reward": dense_reward,
         # Structured failure fields
         "failure_module": parsed.get(
-            "failure_module", "",
+            "failure_module",
+            "",
         ),
         "failure_test": parsed.get(
-            "failure_test", "",
+            "failure_test",
+            "",
         ),
         "failure_message": parsed.get(
-            "failure_message", "",
+            "failure_message",
+            "",
         ),
         "failure_signature_hash": parsed.get(
-            "signature_hash", "",
+            "signature_hash",
+            "",
         ),
     }
     try:
@@ -2558,14 +2699,24 @@ def run(req: RunReq):
     scenario = req.scenario or "golden"
     if DETERMINISTIC_RUN_ID:
         run_id = stable_id(
-            "run", SEED, req.repo_id, req.task,
-            str(req.max_iters), scenario, n=10,
+            "run",
+            SEED,
+            req.repo_id,
+            req.task,
+            str(req.max_iters),
+            scenario,
+            n=10,
         )
     else:
         run_id = stable_id(
-            "run", SEED, req.repo_id, req.task,
-            str(req.max_iters), scenario,
-            str(time.time_ns()), n=12,
+            "run",
+            SEED,
+            req.repo_id,
+            req.task,
+            str(req.max_iters),
+            scenario,
+            str(time.time_ns()),
+            n=12,
         )
     run_seed = int(
         hashlib.sha256(
@@ -2589,76 +2740,77 @@ def run(req: RunReq):
             "too many active runs",
         )
     run_ctx = _ensure_run_context(run_id)
-    run_ctx["force_cold_sandbox"] = (
-        str(scenario).strip().lower() == "replay"
-    )
+    run_ctx["force_cold_sandbox"] = str(scenario).strip().lower() == "replay"
     env_snapshot = (
         snapshot_environment(
             repo_path=f"/data/repos/{req.repo_id}",
             seed=run_seed,
         )
-        if _HAS_HARD_KERNEL else {"env_hash": ""}
+        if _HAS_HARD_KERNEL
+        else {"env_hash": ""}
     )
     if _HAS_HARD_KERNEL and _hard_kernel:
         _hard_kernel.reset_for_run(
             run_id=run_id,
             rng_seed=run_seed,
             env_hash=env_snapshot.get(
-                "env_hash", "",
+                "env_hash",
+                "",
             ),
-            memory_version=(
-                _memory.memory_version
-                if _memory else "0"
-            ),
+            memory_version=(_memory.memory_version if _memory else "0"),
             policy_hash=POLICY_HASH,
             reset_history=True,
         )
     if _HAS_HARD_KERNEL and _planner:
         _planner.reset()
 
-    ledger.append({
-        "type": "RUN_START",
-        "run_id": run_id,
-        "repo_id": req.repo_id,
-        "task": req.task,
-        "scenario": scenario,
-        "policy_hash": POLICY_HASH,
-        "seed": SEED,
-        "episode_seed": run_seed,
-        "env_hash": env_snapshot.get(
-            "env_hash", "",
-        ),
-        "memory_version": (
-            _hard_kernel.state.memory_version
-            if _HAS_HARD_KERNEL and _hard_kernel
-            else ""
-        ),
-        "scheduler": (
-            _SCHEDULER.stats()
-            if _SCHEDULER else {}
-        ),
-    })
+    ledger.append(
+        {
+            "type": "RUN_START",
+            "run_id": run_id,
+            "repo_id": req.repo_id,
+            "task": req.task,
+            "scenario": scenario,
+            "policy_hash": POLICY_HASH,
+            "seed": SEED,
+            "episode_seed": run_seed,
+            "env_hash": env_snapshot.get(
+                "env_hash",
+                "",
+            ),
+            "memory_version": (
+                _hard_kernel.state.memory_version
+                if _HAS_HARD_KERNEL and _hard_kernel
+                else ""
+            ),
+            "scheduler": (_SCHEDULER.stats() if _SCHEDULER else {}),
+        }
+    )
 
     # ── Warm sandbox lifecycle ─────────────────
     force_cold = bool(run_ctx.get("force_cold_sandbox", False))
     sb_info = None if force_cold else _sandbox_create(run_id, req.repo_id)
     if force_cold:
-        ledger.append({
-            "type": "SANDBOX_WARM_DISABLED",
-            "run_id": run_id,
-            "reason": "replay_mode",
-        })
+        ledger.append(
+            {
+                "type": "SANDBOX_WARM_DISABLED",
+                "run_id": run_id,
+                "reason": "replay_mode",
+            }
+        )
     if sb_info:
-        ledger.append({
-            "type": "SANDBOX_CREATED",
-            "run_id": run_id,
-            "container_id": sb_info.get(
-                "container_id",
-            ),
-            "image_hash": sb_info.get(
-                "image_hash",
-            ),
-        })
+        ledger.append(
+            {
+                "type": "SANDBOX_CREATED",
+                "run_id": run_id,
+                "container_id": sb_info.get(
+                    "container_id",
+                ),
+                "image_hash": sb_info.get(
+                    "image_hash",
+                ),
+            }
+        )
     replay_manifest = _init_replay_manifest(
         run_id=run_id,
         repo_id=req.repo_id,
@@ -2689,13 +2841,16 @@ def run(req: RunReq):
     )
     run_ctx["replay_manifest"] = replay_manifest
     _write_replay_manifest(
-        run_id, run_ctx["replay_manifest"],
+        run_id,
+        run_ctx["replay_manifest"],
     )
-    ledger.append({
-        "type": "REPLAY_MANIFEST_UPDATED",
-        "run_id": run_id,
-        "status": "running",
-    })
+    ledger.append(
+        {
+            "type": "REPLAY_MANIFEST_UPDATED",
+            "run_id": run_id,
+            "status": "running",
+        }
+    )
 
     # Deterministic repo introspection + command inference.
     _bootstrap_command_plan(
@@ -2709,56 +2864,59 @@ def run(req: RunReq):
         it = 1
         steps = []
         tier_now, _, _ = _policy_tier_for_run(run_id)
-        deps_needed = (
-            DEPS_POLICY.get("enabled", True)
-            and not venv_exists(req.repo_id)
-        )
+        deps_needed = DEPS_POLICY.get("enabled", True) and not venv_exists(req.repo_id)
         deps_tier_ok = tier_now >= int(
             GATE_POLICY.get("network_min_tier", 2),
         )
         if deps_needed and deps_tier_ok:
-            steps.append({
-                "id": "auto-deps",
-                "type": "ensure_deps",
-                "manifest": DEPS_POLICY.get(
-                    "manifest", "requirements.txt"
-                ),
-                "timeout_s": int(
-                    DEPS_POLICY.get(
-                        "max_install_seconds", 420
-                    )
-                ),
-            })
+            steps.append(
+                {
+                    "id": "auto-deps",
+                    "type": "ensure_deps",
+                    "manifest": DEPS_POLICY.get("manifest", "requirements.txt"),
+                    "timeout_s": int(DEPS_POLICY.get("max_install_seconds", 420)),
+                }
+            )
         elif deps_needed:
-            ledger.append({
-                "type": "AUTO_DEPS_SKIPPED",
-                "run_id": run_id,
-                "iter": it,
-                "reason": "tier_below_network_min_tier",
-                "tier": tier_now,
-                "network_min_tier": int(
-                    GATE_POLICY.get("network_min_tier", 2),
-                ),
-            })
-        steps.append({
-            "id": "t1",
-            "type": "run_tests",
-            "template_id": "pytest_targeted",
-            "template_params": {"target": "tests"},
-            "timeout_s": 240,
-        })
-        steps.append({
-            "id": "t2",
-            "type": "run_tests",
-            "template_id": "pytest_suite",
-            "template_params": {"target": ""},
-            "timeout_s": 900,
-        })
+            ledger.append(
+                {
+                    "type": "AUTO_DEPS_SKIPPED",
+                    "run_id": run_id,
+                    "iter": it,
+                    "reason": "tier_below_network_min_tier",
+                    "tier": tier_now,
+                    "network_min_tier": int(
+                        GATE_POLICY.get("network_min_tier", 2),
+                    ),
+                }
+            )
+        steps.append(
+            {
+                "id": "t1",
+                "type": "run_tests",
+                "template_id": "pytest_targeted",
+                "template_params": {"target": "tests"},
+                "timeout_s": 240,
+            }
+        )
+        steps.append(
+            {
+                "id": "t2",
+                "type": "run_tests",
+                "template_id": "pytest_suite",
+                "template_params": {"target": ""},
+                "timeout_s": 900,
+            }
+        )
         bundle = {
             "intent": "tests-only fast path",
             "bundle_id": stable_id(
-                "b", SEED, req.repo_id,
-                req.task, "fast", scenario,
+                "b",
+                SEED,
+                req.repo_id,
+                req.task,
+                "fast",
+                scenario,
                 n=8,
             ),
             "steps": steps,
@@ -2767,15 +2925,18 @@ def run(req: RunReq):
                 "no_new_failures": True,
             },
         }
-        ledger.append({
-            "type": "BUNDLE_PROPOSED",
-            "run_id": run_id,
-            "bundle": bundle,
-        })
+        ledger.append(
+            {
+                "type": "BUNDLE_PROPOSED",
+                "run_id": run_id,
+                "bundle": bundle,
+            }
+        )
 
         results = []
         for i_step, s in enumerate(
-            steps, start=1,
+            steps,
+            start=1,
         ):
             ex = execute_approved_step(
                 req.repo_id,
@@ -2790,12 +2951,14 @@ def run(req: RunReq):
             if not ex["ok"]:
                 _METRICS["gate_rejections"] += 1
                 _sandbox_destroy(run_id, req.repo_id)
-                ledger.append({
-                    "type": "RUN_END",
-                    "run_id": run_id,
-                    "status": "rejected",
-                    "reason": ex["reason"],
-                })
+                ledger.append(
+                    {
+                        "type": "RUN_END",
+                        "run_id": run_id,
+                        "status": "rejected",
+                        "reason": ex["reason"],
+                    }
+                )
                 _finalize_replay_manifest(
                     run_id=run_id,
                     status="rejected",
@@ -2806,29 +2969,35 @@ def run(req: RunReq):
                 return {
                     "run_id": run_id,
                     "status": "rejected",
-                    "errors": [{
-                        "code": "HARD_KERNEL_REJECT",
-                        "msg": ex["reason"],
-                    }],
+                    "errors": [
+                        {
+                            "code": "HARD_KERNEL_REJECT",
+                            "msg": ex["reason"],
+                        }
+                    ],
                     "results": results,
                 }
             _METRICS["steps_executed"] += 1
             out = ex["out"]
-            ledger.append({
-                "type": "STEP_RESULT",
-                "run_id": run_id,
-                "iter": it,
-                "step": s,
-                "out": out,
-            })
+            ledger.append(
+                {
+                    "type": "STEP_RESULT",
+                    "run_id": run_id,
+                    "iter": it,
+                    "step": s,
+                    "out": out,
+                }
+            )
             results.append({"step": s, "out": out})
             if out.get("status", 0) != 0:
                 _sandbox_destroy(run_id, req.repo_id)
-                ledger.append({
-                    "type": "RUN_END",
-                    "run_id": run_id,
-                    "status": "fail",
-                })
+                ledger.append(
+                    {
+                        "type": "RUN_END",
+                        "run_id": run_id,
+                        "status": "fail",
+                    }
+                )
                 _finalize_replay_manifest(
                     run_id=run_id,
                     status="fail",
@@ -2842,11 +3011,13 @@ def run(req: RunReq):
                     "results": results,
                 }
         _sandbox_destroy(run_id, req.repo_id)
-        ledger.append({
-            "type": "RUN_END",
-            "run_id": run_id,
-            "status": "ok",
-        })
+        ledger.append(
+            {
+                "type": "RUN_END",
+                "run_id": run_id,
+                "status": "ok",
+            }
+        )
         _METRICS["runs_ok"] += 1
         _finalize_replay_manifest(
             run_id=run_id,
@@ -2873,7 +3044,8 @@ def run(req: RunReq):
     # Per-iteration step budget (hard cap per iter).
     MAX_STEPS_PER_ITER = int(
         GATE_POLICY.get(
-            "max_steps_per_bundle", 15,
+            "max_steps_per_bundle",
+            15,
         ),
     )
     ENFORCE_TESTS = bool(
@@ -2883,7 +3055,8 @@ def run(req: RunReq):
         1,
         int(
             GATE_POLICY.get(
-                "patch_verify_window_steps", 4,
+                "patch_verify_window_steps",
+                4,
             )
         ),
     )
@@ -2894,130 +3067,129 @@ def run(req: RunReq):
 
     for it in range(1, req.max_iters + 1):
         if _SCHEDULER and not _SCHEDULER.budget_ok(run_id):
-            ledger.append({
-                "type": "RUN_BUDGET_EXCEEDED",
-                "run_id": run_id,
-                "iter": it,
-            })
+            ledger.append(
+                {
+                    "type": "RUN_BUDGET_EXCEEDED",
+                    "run_id": run_id,
+                    "iter": it,
+                }
+            )
             last_fail = "run budget exceeded"
             break
-        fail_ctx = (
-            "\n\nLast iteration failure:\n"
-            + last_fail
-            if last_fail else ""
-        )
+        fail_ctx = "\n\nLast iteration failure:\n" + last_fail if last_fail else ""
 
         sug = learner_suggest(
-            req.repo_id, req.task, last_fail,
+            req.repo_id,
+            req.task,
+            last_fail,
             last_stage,
         )
         last_strategy = sug.get("strategy_id")
-        constraints = (
-            sug.get("constraints") or {}
-        )
+        constraints = sug.get("constraints") or {}
 
-        ledger.append({
-            "type": "LEARNER_SUGGESTED",
-            "run_id": run_id,
-            "iter": it,
-            "strategy_id": sug.get(
-                "strategy_id",
-            ),
-            "playbook_id": sug.get(
-                "playbook_id",
-            ),
-            "context_key": sug.get(
-                "context_key",
-            ),
-            "constraints": constraints,
-            "failure_hint": sug.get(
-                "failure_hint",
-            ),
-        })
+        ledger.append(
+            {
+                "type": "LEARNER_SUGGESTED",
+                "run_id": run_id,
+                "iter": it,
+                "strategy_id": sug.get(
+                    "strategy_id",
+                ),
+                "playbook_id": sug.get(
+                    "playbook_id",
+                ),
+                "context_key": sug.get(
+                    "context_key",
+                ),
+                "constraints": constraints,
+                "failure_hint": sug.get(
+                    "failure_hint",
+                ),
+            }
+        )
 
         # Build failure hint string for prompt.
         failure_hint_text = ""
         if sug.get("failure_hint"):
-            failure_hint_text = (
-                "\n\n[LEARNER HINT] "
-                + sug["failure_hint"]
-            )
+            failure_hint_text = "\n\n[LEARNER HINT] " + sug["failure_hint"]
         # Build past-outcomes context.
         past_text = ""
         if sug.get("past_outcomes"):
             past_items = sug["past_outcomes"][:3]
             past_lines = []
             for po in past_items:
-                label = (
-                    "PASS" if po.get("success")
-                    else "FAIL"
-                )
+                label = "PASS" if po.get("success") else "FAIL"
                 past_lines.append(
                     f"  - [{label}]"
                     f" strategy={po.get('strategy_id', '?')}"
                     f" files={po.get('patch_files', '?')}"
                     f" reward={po.get('dense_reward', 0):.2f}"
                 )
-            past_text = (
-                "\n\n[PAST ATTEMPTS]\n"
-                + "\n".join(past_lines)
-            )
+            past_text = "\n\n[PAST ATTEMPTS]\n" + "\n".join(past_lines)
 
         # Build playbook guidance text.
-        pb_guidance = sug.get(
-            "playbook_guidance", "",
-        ) or ""
-        if pb_guidance:
-            pb_guidance = (
-                "## Playbook (follow in order)\n"
-                + pb_guidance
+        pb_guidance = (
+            sug.get(
+                "playbook_guidance",
+                "",
             )
+            or ""
+        )
+        if pb_guidance:
+            pb_guidance = "## Playbook (follow in order)\n" + pb_guidance
 
         # ── Hierarchical planner guidance ─────
         strategic_guidance = ""
         if _HAS_HARD_KERNEL and _planner:
             if it == 1 and not _planner.state.goal:
-                fail_cls = (
-                    parse_failure_signature(
-                        last_fail,
-                    ).get("failure_class", "")
-                )
+                fail_cls = parse_failure_signature(
+                    last_fail,
+                ).get("failure_class", "")
                 task_type = _planner.classify_task(
-                    req.task, fail_cls,
+                    req.task,
+                    fail_cls,
                 )
                 _planner.set_goal(
-                    req.task, task_type,
+                    task_type,
                 )
-            strategic_guidance = (
-                _planner.get_planner_guidance()
+            strategic_guidance = _planner.get_planner_guidance(
+                last_error=last_fail if it > 1 else "",
+                memory=_memory,
             )
 
         prompt = USER_TEMPLATE.format(
             repo_id=req.repo_id,
             task=(
-                req.task + fail_ctx
-                + failure_hint_text + past_text
-                + ("\n\n" + strategic_guidance
-                   if strategic_guidance else "")
+                req.task
+                + fail_ctx
+                + failure_hint_text
+                + past_text
+                + ("\n\n" + strategic_guidance if strategic_guidance else "")
             ),
             learner_addendum=sug.get(
-                "prompt_addendum", "",
+                "prompt_addendum",
+                "",
             ),
             playbook_guidance=pb_guidance,
             max_patch_files=constraints.get(
-                "max_patch_files", 3,
+                "max_patch_files",
+                3,
             ),
             max_patch_total_lines=constraints.get(
-                "max_patch_total_lines", 80,
+                "max_patch_total_lines",
+                80,
             ),
             max_added_lines=constraints.get(
-                "max_added_lines", 40,
+                "max_added_lines",
+                40,
             ),
             max_deleted_lines=constraints.get(
-                "max_deleted_lines", 40,
+                "max_deleted_lines",
+                40,
             ),
             forbid_test_edits=constraints.get(
-                "forbid_test_edits", True,
+                "forbid_test_edits",
+                True,
             ),
             max_steps=MAX_STEPS_PER_ITER,
         )
@@ -3039,7 +3211,8 @@ def run(req: RunReq):
             {"role": "user", "content": prompt},
         ]
         cmd_plan = _ensure_run_context(run_id).get(
-            "cmd_plan", _default_cmd_plan(),
+            "cmd_plan",
+            _default_cmd_plan(),
         )
         messages.insert(
             2,
@@ -3055,10 +3228,7 @@ def run(req: RunReq):
         )
 
         # Auto-inject ensure_deps if needed.
-        deps_needed = (
-            DEPS_POLICY.get("enabled", True)
-            and not venv_exists(req.repo_id)
-        )
+        deps_needed = DEPS_POLICY.get("enabled", True) and not venv_exists(req.repo_id)
         deps_tier_ok = tier >= int(
             GATE_POLICY.get("network_min_tier", 2),
         )
@@ -3078,97 +3248,108 @@ def run(req: RunReq):
                 ),
             }
             dep_bundle_id = stable_id(
-                "dep", SEED, req.repo_id,
-                str(it), scenario, n=8,
+                "dep",
+                SEED,
+                req.repo_id,
+                str(it),
+                scenario,
+                n=8,
             )
             ex = execute_approved_step(
-                req.repo_id, it, dep_step,
+                req.repo_id,
+                it,
+                dep_step,
                 run_id,
                 context_hash=sug.get(
-                    "context_key", "",
+                    "context_key",
+                    "",
                 ),
                 intent="auto deps",
                 bundle_id=dep_bundle_id,
                 step_num=0,
                 learner_evidence=sug.get(
-                    "kernel_evidence", {},
+                    "kernel_evidence",
+                    {},
                 ),
             )
             if not ex["ok"]:
                 _METRICS["gate_rejections"] += 1
                 last_stage = "gate_reject"
-                last_fail = (
-                    "Auto-deps rejected by"
-                    " hard kernel: "
-                    + ex["reason"]
+                last_fail = "Auto-deps rejected by" " hard kernel: " + ex["reason"]
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "HARD KERNEL REJECTED"
+                            " auto-deps step:"
+                            f" {ex['reason']}\n"
+                            "Continue with another"
+                            " approach."
+                        ),
+                    }
                 )
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "HARD KERNEL REJECTED"
-                        " auto-deps step:"
-                        f" {ex['reason']}\n"
-                        "Continue with another"
-                        " approach."
-                    ),
-                })
             else:
                 _METRICS["steps_executed"] += 1
                 total_steps_used += 1
                 dep_out = ex["out"]
-                ledger.append({
-                    "type": "STEP_RESULT",
-                    "run_id": run_id,
-                    "iter": it,
-                    "step": dep_step,
-                    "out": dep_out,
-                })
-                # Tell the LLM deps are installed.
-                messages.append({
-                    "role": "assistant",
-                    "content": json.dumps({
+                ledger.append(
+                    {
+                        "type": "STEP_RESULT",
+                        "run_id": run_id,
+                        "iter": it,
                         "step": dep_step,
-                        "done": False,
-                        "intent": (
-                            "auto-install deps"
-                        ),
-                    }),
-                })
-                dep_status = (
-                    "ok"
-                    if dep_out.get("status", 0) == 0
-                    else "FAILED"
+                        "out": dep_out,
+                    }
                 )
+                # Tell the LLM deps are installed.
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": json.dumps(
+                            {
+                                "step": dep_step,
+                                "done": False,
+                                "intent": ("auto-install deps"),
+                            }
+                        ),
+                    }
+                )
+                dep_status = "ok" if dep_out.get("status", 0) == 0 else "FAILED"
                 if dep_status != "ok":
                     last_stage = "deps"
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        TRANSCRIPT_TEMPLATE.format(
-                            step_num=0,
-                            step_json=json.dumps(
-                                dep_step,
-                            ),
-                            status=dep_status,
-                            output=(
-                                dep_out.get(
-                                    "logs", "",
-                                )[-2000:]
-                            ),
-                        )
-                    ),
-                })
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            TRANSCRIPT_TEMPLATE.format(
+                                step_num=0,
+                                step_json=json.dumps(
+                                    dep_step,
+                                ),
+                                status=dep_status,
+                                output=(
+                                    dep_out.get(
+                                        "logs",
+                                        "",
+                                    )[-2000:]
+                                ),
+                            )
+                        ),
+                    }
+                )
         elif deps_needed:
-            ledger.append({
-                "type": "AUTO_DEPS_SKIPPED",
-                "run_id": run_id,
-                "iter": it,
-                "reason": "tier_below_network_min_tier",
-                "tier": tier,
-                "network_min_tier": int(
-                    GATE_POLICY.get("network_min_tier", 2),
-                ),
-            })
+            ledger.append(
+                {
+                    "type": "AUTO_DEPS_SKIPPED",
+                    "run_id": run_id,
+                    "iter": it,
+                    "reason": "tier_below_network_min_tier",
+                    "tier": tier,
+                    "network_min_tier": int(
+                        GATE_POLICY.get("network_min_tier", 2),
+                    ),
+                }
+            )
 
         # ── Inner step loop for this iteration ──
         iter_steps_used = 0
@@ -3200,29 +3381,29 @@ def run(req: RunReq):
                 last_fail = "run budget exceeded"
                 break
             if total_steps_used >= MAX_TOTAL_STEPS:
-                last_fail = (
-                    "Total step budget exhausted"
-                )
+                last_fail = "Total step budget exhausted"
                 break
 
             # Ask LLM for next step.
             call_index += 1
-            ledger.append({
-                "type": "LLM_CALL",
-                "run_id": run_id,
-                "call_index": call_index,
-                "iter": it,
-            })
+            ledger.append(
+                {
+                    "type": "LLM_CALL",
+                    "run_id": run_id,
+                    "call_index": call_index,
+                    "iter": it,
+                }
+            )
             try:
                 llm = llm_chat(
-                    messages, run_id,
+                    messages,
+                    run_id,
                     call_index,
-                    req.repo_id, scenario,
+                    req.repo_id,
+                    scenario,
                 )
             except Exception:
-                last_fail = (
-                    "LLM call failed"
-                )
+                last_fail = "LLM call failed"
                 break
 
             content = llm.get("content", "")
@@ -3232,38 +3413,43 @@ def run(req: RunReq):
             if resp is None:
                 # Append structured parse error
                 # and let LLM try again (1 retry).
-                messages.append({
-                    "role": "assistant",
-                    "content": content,
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": content,
+                    }
+                )
                 # Tell LLM exactly what's wrong.
                 snippet = content[:200].replace(
-                    "\n", " ",
+                    "\n",
+                    " ",
                 )
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "PARSE ERROR: your response"
-                        " is not valid JSON.\n"
-                        f"Received: {snippet!r}\n\n"
-                        "Requirements:\n"
-                        "1. Return ONLY a JSON"
-                        " object — no markdown,"
-                        " no commentary.\n"
-                        '2. Required keys: "step"'
-                        ' (dict|null), "done"'
-                        ' (bool), "intent"'
-                        " (string).\n"
-                        "3. When done=true, step"
-                        " must be null.\n"
-                        "4. Example:\n"
-                        '   {"step": {"id":"s1",'
-                        ' "type":"repo_search",'
-                        ' "pattern":"foo"},'
-                        ' "done": false,'
-                        ' "intent": "find foo"}\n'
-                    ),
-                })
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "PARSE ERROR: your response"
+                            " is not valid JSON.\n"
+                            f"Received: {snippet!r}\n\n"
+                            "Requirements:\n"
+                            "1. Return ONLY a JSON"
+                            " object — no markdown,"
+                            " no commentary.\n"
+                            '2. Required keys: "step"'
+                            ' (dict|null), "done"'
+                            ' (bool), "intent"'
+                            " (string).\n"
+                            "3. When done=true, step"
+                            " must be null.\n"
+                            "4. Example:\n"
+                            '   {"step": {"id":"s1",'
+                            ' "type":"repo_search",'
+                            ' "pattern":"foo"},'
+                            ' "done": false,'
+                            ' "intent": "find foo"}\n'
+                        ),
+                    }
+                )
                 continue
 
             # Validate required keys.
@@ -3271,114 +3457,126 @@ def run(req: RunReq):
                 resp.keys(),
             )
             if missing:
-                messages.append({
-                    "role": "assistant",
-                    "content": content,
-                })
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "SCHEMA ERROR: missing"
-                        " required keys:"
-                        f" {sorted(missing)}.\n"
-                        "Your JSON must have"
-                        ' "step", "done",'
-                        ' and "intent".'
-                    ),
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": content,
+                    }
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "SCHEMA ERROR: missing"
+                            " required keys:"
+                            f" {sorted(missing)}.\n"
+                            "Your JSON must have"
+                            ' "step", "done",'
+                            ' and "intent".'
+                        ),
+                    }
+                )
                 continue
 
             if not isinstance(resp.get("done"), bool):
-                messages.append({
-                    "role": "assistant",
-                    "content": content,
-                })
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "SCHEMA ERROR: 'done'"
-                        " must be a boolean."
-                    ),
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": content,
+                    }
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": ("SCHEMA ERROR: 'done'" " must be a boolean."),
+                    }
+                )
                 continue
 
             if (
                 not isinstance(resp.get("intent"), str)
                 or not resp.get("intent", "").strip()
             ):
-                messages.append({
-                    "role": "assistant",
-                    "content": content,
-                })
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "SCHEMA ERROR: 'intent'"
-                        " must be a non-empty string."
-                    ),
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": content,
+                    }
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "SCHEMA ERROR: 'intent'" " must be a non-empty string."
+                        ),
+                    }
+                )
                 continue
 
             # Check if LLM says done.
             if resp.get("done", False):
                 if resp.get("step") is not None:
-                    messages.append({
-                        "role": "assistant",
-                        "content": content,
-                    })
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "SCHEMA ERROR: when"
-                            " done=true, step must"
-                            " be null."
-                        ),
-                    })
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": content,
+                        }
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "SCHEMA ERROR: when" " done=true, step must" " be null."
+                            ),
+                        }
+                    )
                     continue
-                ledger.append({
-                    "type": "LLM_DONE",
-                    "run_id": run_id,
-                    "iter": it,
-                    "intent": resp.get(
-                        "intent", "",
-                    ),
-                })
+                ledger.append(
+                    {
+                        "type": "LLM_DONE",
+                        "run_id": run_id,
+                        "iter": it,
+                        "intent": resp.get(
+                            "intent",
+                            "",
+                        ),
+                    }
+                )
                 break
 
             step = resp.get("step")
             if not step or not isinstance(
-                step, dict,
+                step,
+                dict,
             ):
-                messages.append({
-                    "role": "assistant",
-                    "content": content,
-                })
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "Invalid response: 'step'"
-                        " must be a dict."
-                        " Try again."
-                    ),
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": content,
+                    }
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Invalid response: 'step'" " must be a dict." " Try again."
+                        ),
+                    }
+                )
                 continue
 
             # Normalize step.
             if not step.get("id"):
-                step["id"] = (
-                    f"s{iter_steps_used + 1}"
-                )
+                step["id"] = f"s{iter_steps_used + 1}"
             run_ctx = _ensure_run_context(run_id)
             cmd_plan = run_ctx.get(
-                "cmd_plan", _default_cmd_plan(),
+                "cmd_plan",
+                _default_cmd_plan(),
             )
 
             # Deterministic command selection: convert run_tests
             # into run_cmd_template using inferred templates/workdir.
-            if (
-                step.get("type") == "run_tests"
-                and isinstance(cmd_plan, dict)
-            ):
+            if step.get("type") == "run_tests" and isinstance(cmd_plan, dict):
                 tests = cmd_plan.get("test_templates")
                 if isinstance(tests, list) and tests:
                     step = {
@@ -3391,9 +3589,7 @@ def run(req: RunReq):
                                 "workdir_0",
                             )
                         ),
-                        "timeout_s": int(
-                            step.get("timeout_s") or 240
-                        ),
+                        "timeout_s": int(step.get("timeout_s") or 240),
                     }
 
             if step.get("type") == "apply_patch":
@@ -3423,93 +3619,109 @@ def run(req: RunReq):
                 )
                 baseline_key = str(
                     run_ctx.get(
-                        "baseline_test_template", "",
+                        "baseline_test_template",
+                        "",
                     )
                 )
                 if baseline_key and test_key != baseline_key:
-                    if (
-                        reset_baseline
-                        and not bool(patch_verify.get("pending"))
-                    ):
+                    if reset_baseline and not bool(patch_verify.get("pending")):
                         run_ctx["baseline_test_template"] = test_key
-                        ledger.append({
-                            "type": "BASELINE_TEST_TEMPLATE_RESET",
-                            "run_id": run_id,
-                            "iter": it,
-                            "baseline": baseline_key,
-                            "new_template": test_key,
-                        })
+                        ledger.append(
+                            {
+                                "type": "BASELINE_TEST_TEMPLATE_RESET",
+                                "run_id": run_id,
+                                "iter": it,
+                                "baseline": baseline_key,
+                                "new_template": test_key,
+                            }
+                        )
                     else:
-                        messages.append({
-                            "role": "assistant",
-                            "content": content,
-                        })
-                        messages.append({
-                            "role": "user",
-                            "content": (
-                                "TEMPLATE LOCK: test template must remain stable."
-                                f" baseline={baseline_key}"
-                                f" attempted={test_key}."
-                                " To reset baseline explicitly, set"
-                                " step.reset_test_baseline=true"
-                                " on a test step (only when no pending"
-                                " post-patch verification is active)."
-                            ),
-                        })
-                        ledger.append({
-                            "type": "TEMPLATE_LOCK_REJECT",
-                            "run_id": run_id,
-                            "iter": it,
-                            "baseline": baseline_key,
-                            "attempted": test_key,
-                            "reset_requested": bool(reset_baseline),
-                        })
+                        messages.append(
+                            {
+                                "role": "assistant",
+                                "content": content,
+                            }
+                        )
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "TEMPLATE LOCK: test template must remain stable."
+                                    f" baseline={baseline_key}"
+                                    f" attempted={test_key}."
+                                    " To reset baseline explicitly, set"
+                                    " step.reset_test_baseline=true"
+                                    " on a test step (only when no pending"
+                                    " post-patch verification is active)."
+                                ),
+                            }
+                        )
+                        ledger.append(
+                            {
+                                "type": "TEMPLATE_LOCK_REJECT",
+                                "run_id": run_id,
+                                "iter": it,
+                                "baseline": baseline_key,
+                                "attempted": test_key,
+                                "reset_requested": bool(reset_baseline),
+                            }
+                        )
                         continue
                 if not baseline_key:
                     run_ctx["baseline_test_template"] = test_key
-                    ledger.append({
-                        "type": "BASELINE_TEST_TEMPLATE_SET",
-                        "run_id": run_id,
-                        "iter": it,
-                        "template": test_key,
-                    })
+                    ledger.append(
+                        {
+                            "type": "BASELINE_TEST_TEMPLATE_SET",
+                            "run_id": run_id,
+                            "iter": it,
+                            "template": test_key,
+                        }
+                    )
 
             # ── RFSN phase transition check ──
             step_type = step.get("type", "")
-            phase_ok, phase_err = (
-                phase.check_transition(step_type)
-            )
+            phase_ok, phase_err = phase.check_transition(step_type)
             if not phase_ok:
-                messages.append({
-                    "role": "assistant",
-                    "content": content,
-                })
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "PHASE VIOLATION: "
-                        + phase_err
-                        + "\nCurrent phase: "
-                        + phase.phase
-                        + ". Adjust your step"
-                        " type and try again."
-                    ),
-                })
-                ledger.append({
-                    "type": "PHASE_VIOLATION",
-                    "run_id": run_id,
-                    "iter": it,
-                    "current_phase": phase.phase,
-                    "attempted_type": step_type,
-                    "error": phase_err,
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": content,
+                    }
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "PHASE VIOLATION: "
+                            + phase_err
+                            + "\nCurrent phase: "
+                            + phase.phase
+                            + ". Adjust your step"
+                            " type and try again."
+                        ),
+                    }
+                )
+                ledger.append(
+                    {
+                        "type": "PHASE_VIOLATION",
+                        "run_id": run_id,
+                        "iter": it,
+                        "current_phase": phase.phase,
+                        "attempted_type": step_type,
+                        "error": phase_err,
+                    }
+                )
                 continue
 
             bundle_id = stable_id(
-                "b", SEED, req.repo_id,
-                req.task, str(it),
+                "b",
+                SEED,
+                req.repo_id,
+                req.task,
+                str(it),
                 str(iter_steps_used),
-                scenario, n=8,
+                scenario,
+                n=8,
             )
             approved_step = step
 
@@ -3519,34 +3731,41 @@ def run(req: RunReq):
                 approved_step,
                 run_id,
                 context_hash=sug.get(
-                    "context_key", "",
+                    "context_key",
+                    "",
                 ),
                 intent=resp.get(
-                    "intent", "",
+                    "intent",
+                    "",
                 ),
                 bundle_id=bundle_id,
                 step_num=iter_steps_used + 1,
                 learner_evidence=sug.get(
-                    "kernel_evidence", {},
+                    "kernel_evidence",
+                    {},
                 ),
             )
             if not ex["ok"]:
                 _METRICS["gate_rejections"] += 1
                 last_stage = "gate_reject"
-                messages.append({
-                    "role": "assistant",
-                    "content": content,
-                })
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "HARD KERNEL REJECTED"
-                        " (simulation/risk):"
-                        f" {ex['reason']}\n"
-                        "Try a different"
-                        " approach."
-                    ),
-                })
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": content,
+                    }
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "HARD KERNEL REJECTED"
+                            " (simulation/risk):"
+                            f" {ex['reason']}\n"
+                            "Try a different"
+                            " approach."
+                        ),
+                    }
+                )
                 continue
 
             _METRICS["steps_executed"] += 1
@@ -3554,17 +3773,21 @@ def run(req: RunReq):
             total_steps_used += 1
             out = ex["out"]
 
-            ledger.append({
-                "type": "STEP_RESULT",
-                "run_id": run_id,
-                "iter": it,
-                "step": approved_step,
-                "out": out,
-            })
-            iter_results.append({
-                "step": approved_step,
-                "out": out,
-            })
+            ledger.append(
+                {
+                    "type": "STEP_RESULT",
+                    "run_id": run_id,
+                    "iter": it,
+                    "step": approved_step,
+                    "out": out,
+                }
+            )
+            iter_results.append(
+                {
+                    "step": approved_step,
+                    "out": out,
+                }
+            )
 
             # Advance RFSN phase.
             phase.advance(
@@ -3573,14 +3796,8 @@ def run(req: RunReq):
 
             # Determine status.
             step_status = out.get("status", 0)
-            status_label = (
-                "ok" if step_status == 0
-                else f"FAILED (exit {step_status})"
-            )
-            if (
-                approved_step.get("type") == "apply_patch"
-                and int(step_status) == 0
-            ):
+            status_label = "ok" if step_status == 0 else f"FAILED (exit {step_status})"
+            if approved_step.get("type") == "apply_patch" and int(step_status) == 0:
                 patch_verify = {
                     "pending": True,
                     "steps_since_patch": 0,
@@ -3588,16 +3805,21 @@ def run(req: RunReq):
                     "suite_ok": False,
                     "generic_ok_count": 0,
                 }
-                ledger.append({
-                    "type": "PATCH_APPLIED_AWAITING_TESTS",
-                    "run_id": run_id,
-                    "iter": it,
-                    "window_steps": PATCH_VERIFY_WINDOW_STEPS,
-                })
+                ledger.append(
+                    {
+                        "type": "PATCH_APPLIED_AWAITING_TESTS",
+                        "run_id": run_id,
+                        "iter": it,
+                        "window_steps": PATCH_VERIFY_WINDOW_STEPS,
+                    }
+                )
             elif bool(patch_verify.get("pending")):
-                patch_verify["steps_since_patch"] = int(
-                    patch_verify.get("steps_since_patch", 0),
-                ) + 1
+                patch_verify["steps_since_patch"] = (
+                    int(
+                        patch_verify.get("steps_since_patch", 0),
+                    )
+                    + 1
+                )
 
             if (
                 bool(patch_verify.get("pending"))
@@ -3610,35 +3832,41 @@ def run(req: RunReq):
                 elif variant == "suite":
                     patch_verify["suite_ok"] = True
                 else:
-                    patch_verify["generic_ok_count"] = int(
-                        patch_verify.get("generic_ok_count", 0),
-                    ) + 1
+                    patch_verify["generic_ok_count"] = (
+                        int(
+                            patch_verify.get("generic_ok_count", 0),
+                        )
+                        + 1
+                    )
                 if _patch_verify_ok(patch_verify):
                     patch_verify["pending"] = False
-                    ledger.append({
-                        "type": "PATCH_VERIFIED_BY_TESTS",
-                        "run_id": run_id,
-                        "iter": it,
-                        "variant": variant or "generic",
-                        "counts": {
-                            "targeted_ok": bool(
-                                patch_verify.get("targeted_ok"),
-                            ),
-                            "suite_ok": bool(
-                                patch_verify.get("suite_ok"),
-                            ),
-                            "generic_ok_count": int(
-                                patch_verify.get("generic_ok_count", 0),
-                            ),
-                        },
-                    })
+                    ledger.append(
+                        {
+                            "type": "PATCH_VERIFIED_BY_TESTS",
+                            "run_id": run_id,
+                            "iter": it,
+                            "variant": variant or "generic",
+                            "counts": {
+                                "targeted_ok": bool(
+                                    patch_verify.get("targeted_ok"),
+                                ),
+                                "suite_ok": bool(
+                                    patch_verify.get("suite_ok"),
+                                ),
+                                "generic_ok_count": int(
+                                    patch_verify.get("generic_ok_count", 0),
+                                ),
+                            },
+                        }
+                    )
 
             if (
                 ENFORCE_TESTS
                 and bool(patch_verify.get("pending"))
                 and int(
                     patch_verify.get("steps_since_patch", 0),
-                ) >= PATCH_VERIFY_WINDOW_STEPS
+                )
+                >= PATCH_VERIFY_WINDOW_STEPS
                 and not _patch_verify_ok(patch_verify)
             ):
                 last_stage = "tests"
@@ -3648,24 +3876,29 @@ def run(req: RunReq):
                     " (or two deterministic test passes)"
                     f" within {PATCH_VERIFY_WINDOW_STEPS} steps after apply_patch."
                 )
-                ledger.append({
-                    "type": "PATCH_VERIFY_TIMEOUT",
-                    "run_id": run_id,
-                    "iter": it,
-                    "steps_since_patch": int(
-                        patch_verify.get("steps_since_patch", 0),
-                    ),
-                })
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "PATCH VERIFY INVARIANT: you applied a patch but did not"
-                        " complete required post-patch test verification in time."
-                    ),
-                })
+                ledger.append(
+                    {
+                        "type": "PATCH_VERIFY_TIMEOUT",
+                        "run_id": run_id,
+                        "iter": it,
+                        "steps_since_patch": int(
+                            patch_verify.get("steps_since_patch", 0),
+                        ),
+                    }
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "PATCH VERIFY INVARIANT: you applied a patch but did not"
+                            " complete required post-patch test verification in time."
+                        ),
+                    }
+                )
                 break
             repair_state = run_ctx.get(
-                "repair", {
+                "repair",
+                {
                     "phase": "SEARCH",
                     "attempt": 0,
                     "max_attempts": 3,
@@ -3673,9 +3906,7 @@ def run(req: RunReq):
                 },
             )
             if isinstance(repair_state, dict):
-                cur_phase = str(
-                    repair_state.get("phase", "SEARCH")
-                )
+                cur_phase = str(repair_state.get("phase", "SEARCH"))
                 updated = update_state(
                     repair_state,
                     cur_phase,
@@ -3687,20 +3918,18 @@ def run(req: RunReq):
                     updated,
                 )
                 run_ctx["repair"] = updated
-                ledger.append({
-                    "type": "REPAIR_PHASE",
-                    "run_id": run_id,
-                    "iter": it,
-                    "phase": cur_phase,
-                    "next_phase": nxt,
-                    "status": int(step_status),
-                    "attempt": int(
-                        updated.get("attempt", 0)
-                    ),
-                    "can_retry": bool(
-                        updated.get("can_retry", True)
-                    ),
-                })
+                ledger.append(
+                    {
+                        "type": "REPAIR_PHASE",
+                        "run_id": run_id,
+                        "iter": it,
+                        "phase": cur_phase,
+                        "next_phase": nxt,
+                        "status": int(step_status),
+                        "attempt": int(updated.get("attempt", 0)),
+                        "can_retry": bool(updated.get("can_retry", True)),
+                    }
+                )
 
             # Extract payload for feedback.
             payload = out.get("payload")
@@ -3710,7 +3939,8 @@ def run(req: RunReq):
             # the transcript (capped at 3000 chars
             # to control token usage).
             if payload and isinstance(
-                payload, str,
+                payload,
+                str,
             ):
                 output_text = payload[-3000:]
             else:
@@ -3718,38 +3948,47 @@ def run(req: RunReq):
 
             # Append assistant response + tool
             # output to messages as transcript.
-            messages.append({
-                "role": "assistant",
-                "content": content,
-            })
-            messages.append({
-                "role": "user",
-                "content": (
-                    TRANSCRIPT_TEMPLATE.format(
-                        step_num=iter_steps_used,
-                        step_json=json.dumps(
-                            approved_step,
-                        ),
-                        status=status_label,
-                        output=output_text,
-                    )
-                ),
-            })
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": content,
+                }
+            )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        TRANSCRIPT_TEMPLATE.format(
+                            step_num=iter_steps_used,
+                            step_json=json.dumps(
+                                approved_step,
+                            ),
+                            status=status_label,
+                            output=output_text,
+                        )
+                    ),
+                }
+            )
 
             # If this was a failing test step,
             # record for learner but keep going
             # (LLM may want to retry/adapt).
             if step_status != 0:
-                if approved_step.get(
-                    "type",
-                ) == "apply_patch":
+                if (
+                    approved_step.get(
+                        "type",
+                    )
+                    == "apply_patch"
+                ):
                     last_stage = "apply_patch"
-                    ledger.append({
-                        "type": "PATCH_REJECTED",
-                        "run_id": run_id,
-                        "iter": it,
-                        "status": step_status,
-                    })
+                    ledger.append(
+                        {
+                            "type": "PATCH_REJECTED",
+                            "run_id": run_id,
+                            "iter": it,
+                            "status": step_status,
+                        }
+                    )
 
             # Track test counts for dense reward.
             if _is_test_step(approved_step):
@@ -3764,11 +4003,9 @@ def run(req: RunReq):
                 if new_counts:
                     prev_test_counts = curr_test_counts
                     curr_test_counts = new_counts
-                    iter_dense_reward = (
-                        compute_dense_reward(
-                            prev_test_counts,
-                            curr_test_counts,
-                        )
+                    iter_dense_reward = compute_dense_reward(
+                        prev_test_counts,
+                        curr_test_counts,
                     )
                 # ── Targeted test node injection ─
                 # When tests fail, extract the
@@ -3782,47 +4019,40 @@ def run(req: RunReq):
                         node_list = " ".join(
                             failed_nodes[:5],
                         )
-                        messages.append({
-                            "role": "user",
-                            "content": (
-                                "HINT: Failing test"
-                                " nodes extracted:\n"
-                                f"  {node_list}\n"
-                                "Use pytest_targeted"
-                                " with one of these"
-                                " as the target for"
-                                " faster feedback."
-                            ),
-                        })
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    "HINT: Failing test"
+                                    " nodes extracted:\n"
+                                    f"  {node_list}\n"
+                                    "Use pytest_targeted"
+                                    " with one of these"
+                                    " as the target for"
+                                    " faster feedback."
+                                ),
+                            }
+                        )
                     last_fail = log_text[-5000:]
                     last_stage = "tests"
                     # Planner: record stagnation.
-                    if (
-                        _HAS_HARD_KERNEL
-                        and _planner
-                    ):
-                        stagnant = (
-                            _planner
-                            .record_no_progress()
-                        )
+                    if _HAS_HARD_KERNEL and _planner:
+                        stagnant = _planner.record_no_progress()
                         if stagnant:
                             _planner.escalate()
                 else:
                     last_stage = "success"
                     # Planner: advance subgoal.
-                    if (
-                        _HAS_HARD_KERNEL
-                        and _planner
-                    ):
+                    if _HAS_HARD_KERNEL and _planner:
                         _planner.advance_subgoal()
                         if _hard_kernel:
-                            _hard_kernel\
-                                .adaptive_relax()
+                            _hard_kernel.adaptive_relax()
 
             # Track patch metadata for outcome DB.
             if approved_step.get("type") == "apply_patch":
                 patch_text = approved_step.get(
-                    "patch", "",
+                    "patch",
+                    "",
                 )
                 iter_patch_hash = hashlib.sha256(
                     patch_text.encode("utf-8"),
@@ -3838,10 +4068,7 @@ def run(req: RunReq):
                 # Count added/deleted lines.
                 p_add = p_del = 0
                 for pline in patch_text.splitlines():
-                    if (
-                        pline.startswith("+++")
-                        or pline.startswith("---")
-                    ):
+                    if pline.startswith("+++") or pline.startswith("---"):
                         continue
                     if pline.startswith("+"):
                         p_add += 1
@@ -3853,31 +4080,22 @@ def run(req: RunReq):
             # If tests passed, hint the LLM to
             # either declare done or continue.
             if _is_test_step(approved_step) and step_status == 0:
-                messages.append({
-                    "role": "user",
-                    "content": DONE_PROMPT,
-                })
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": DONE_PROMPT,
+                    }
+                )
 
         # ── End of inner step loop ──
         # Check if this iteration succeeded.
-        test_results = [
-            r for r in iter_results
-            if _is_test_step(r["step"])
-        ]
-        tests_passed = (
-            test_results
-            and all(
-                r["out"].get("status", 1) == 0
-                for r in test_results
-            )
+        test_results = [r for r in iter_results if _is_test_step(r["step"])]
+        tests_passed = test_results and all(
+            r["out"].get("status", 1) == 0 for r in test_results
         )
-        has_patch = any(
-            r["step"].get("type") == "apply_patch"
-            for r in iter_results
-        )
+        has_patch = any(r["step"].get("type") == "apply_patch" for r in iter_results)
         patch_applied = any(
-            r["step"].get("type") == "apply_patch"
-            and r["out"].get("status", 1) == 0
+            r["step"].get("type") == "apply_patch" and r["out"].get("status", 1) == 0
             for r in iter_results
         )
         if (
@@ -3892,50 +4110,50 @@ def run(req: RunReq):
                     "Patch applied without required post-patch verification"
                     " tests (targeted+suite or two deterministic passes)."
                 )
-            ledger.append({
-                "type": "PATCH_VERIFY_MISSING",
-                "run_id": run_id,
-                "iter": it,
-                "details": {
-                    "steps_since_patch": int(
-                        patch_verify.get("steps_since_patch", 0),
-                    ),
-                    "targeted_ok": bool(
-                        patch_verify.get("targeted_ok"),
-                    ),
-                    "suite_ok": bool(
-                        patch_verify.get("suite_ok"),
-                    ),
-                    "generic_ok_count": int(
-                        patch_verify.get("generic_ok_count", 0),
-                    ),
-                },
-            })
+            ledger.append(
+                {
+                    "type": "PATCH_VERIFY_MISSING",
+                    "run_id": run_id,
+                    "iter": it,
+                    "details": {
+                        "steps_since_patch": int(
+                            patch_verify.get("steps_since_patch", 0),
+                        ),
+                        "targeted_ok": bool(
+                            patch_verify.get("targeted_ok"),
+                        ),
+                        "suite_ok": bool(
+                            patch_verify.get("suite_ok"),
+                        ),
+                        "generic_ok_count": int(
+                            patch_verify.get("generic_ok_count", 0),
+                        ),
+                    },
+                }
+            )
 
-        if tests_passed and (
-            not has_patch or patch_applied
-        ):
+        if tests_passed and (not has_patch or patch_applied):
             # Run static analysis if configured.
-            if TEST_POLICY.get(
-                "suite_on_success", False
-            ):
+            if TEST_POLICY.get("suite_on_success", False):
                 sa_steps = []
-                for sa_tmpl in TEST_POLICY.get(
-                    "static_templates", []
-                ):
-                    sa_steps.append({
-                        "id": f"auto-{sa_tmpl}",
-                        "type": "run_tests",
-                        "template_id": sa_tmpl,
-                        "template_params": {
-                            "target": "",
-                        },
-                        "timeout_s": 300,
-                    })
+                for sa_tmpl in TEST_POLICY.get("static_templates", []):
+                    sa_steps.append(
+                        {
+                            "id": f"auto-{sa_tmpl}",
+                            "type": "run_tests",
+                            "template_id": sa_tmpl,
+                            "template_params": {
+                                "target": "",
+                            },
+                            "timeout_s": 300,
+                        }
+                    )
                 if sa_steps:
                     sa_bundle_id = stable_id(
-                        "sa", run_id,
-                        str(it), n=8,
+                        "sa",
+                        run_id,
+                        str(it),
+                        n=8,
                     )
                     for i_sa, sa_s in enumerate(
                         sa_steps,
@@ -3947,35 +4165,37 @@ def run(req: RunReq):
                             sa_s,
                             run_id,
                             context_hash=sug.get(
-                                "context_key", "",
+                                "context_key",
+                                "",
                             ),
                             intent="static analysis",
                             bundle_id=sa_bundle_id,
                             step_num=1000 + i_sa,
                             learner_evidence=sug.get(
-                                "kernel_evidence", {},
+                                "kernel_evidence",
+                                {},
                             ),
                         )
                         if not ex["ok"]:
-                            _METRICS[
-                                "gate_rejections"
-                            ] += 1
+                            _METRICS["gate_rejections"] += 1
                             last_stage = "gate_reject"
                             last_fail = (
                                 "Static analysis"
                                 " rejected by"
-                                " hard kernel: "
-                                + ex["reason"]
+                                " hard kernel: " + ex["reason"]
                             )
                             _sandbox_destroy(
-                                run_id, req.repo_id,
+                                run_id,
+                                req.repo_id,
                             )
-                            ledger.append({
-                                "type": "RUN_END",
-                                "run_id": run_id,
-                                "status": "rejected",
-                                "reason": ex["reason"],
-                            })
+                            ledger.append(
+                                {
+                                    "type": "RUN_END",
+                                    "run_id": run_id,
+                                    "status": "rejected",
+                                    "reason": ex["reason"],
+                                }
+                            )
                             _finalize_replay_manifest(
                                 run_id=run_id,
                                 status="rejected",
@@ -3986,34 +4206,40 @@ def run(req: RunReq):
                             return {
                                 "run_id": run_id,
                                 "status": "rejected",
-                                "errors": [{
-                                    "code": "HARD_KERNEL_REJECT",
-                                    "msg": ex["reason"],
-                                }],
+                                "errors": [
+                                    {
+                                        "code": "HARD_KERNEL_REJECT",
+                                        "msg": ex["reason"],
+                                    }
+                                ],
                                 "results": iter_results,
                             }
                         _METRICS["steps_executed"] += 1
                         sa_out = ex["out"]
-                        ledger.append({
-                            "type": (
-                                "STEP_RESULT"
-                            ),
-                            "run_id": run_id,
-                            "iter": it,
-                            "step": sa_s,
-                            "out": sa_out,
-                        })
-                        iter_results.append({
-                            "step": sa_s,
-                            "out": sa_out,
-                        })
+                        ledger.append(
+                            {
+                                "type": ("STEP_RESULT"),
+                                "run_id": run_id,
+                                "iter": it,
+                                "step": sa_s,
+                                "out": sa_out,
+                            }
+                        )
+                        iter_results.append(
+                            {
+                                "step": sa_s,
+                                "out": sa_out,
+                            }
+                        )
 
             _sandbox_destroy(run_id, req.repo_id)
-            ledger.append({
-                "type": "RUN_END",
-                "run_id": run_id,
-                "status": "ok",
-            })
+            ledger.append(
+                {
+                    "type": "RUN_END",
+                    "run_id": run_id,
+                    "status": "ok",
+                }
+            )
             learner_ingest(
                 run_id,
                 last_strategy or "unknown",
@@ -4027,16 +4253,13 @@ def run(req: RunReq):
                 patch_deleted=iter_patch_deleted,
                 test_exit_code=iter_test_exit,
                 tests_passed=(
-                    curr_test_counts.get("passed", 0)
-                    if curr_test_counts else 0
+                    curr_test_counts.get("passed", 0) if curr_test_counts else 0
                 ),
                 tests_failed=(
-                    curr_test_counts.get("failed", 0)
-                    if curr_test_counts else 0
+                    curr_test_counts.get("failed", 0) if curr_test_counts else 0
                 ),
                 tests_total=(
-                    curr_test_counts.get("total", 0)
-                    if curr_test_counts else 0
+                    curr_test_counts.get("total", 0) if curr_test_counts else 0
                 ),
                 dense_reward=1.0,
                 stage="success",
@@ -4058,10 +4281,7 @@ def run(req: RunReq):
         # Iteration failed — carry failure context
         # forward to next iteration.
         if not last_fail:
-            last_fail = (
-                "Iteration ended without"
-                " passing tests"
-            )
+            last_fail = "Iteration ended without" " passing tests"
         # Record for learner.
         learner_ingest(
             run_id,
@@ -4076,28 +4296,21 @@ def run(req: RunReq):
             patch_added=iter_patch_added,
             patch_deleted=iter_patch_deleted,
             test_exit_code=iter_test_exit,
-            tests_passed=(
-                curr_test_counts.get("passed", 0)
-                if curr_test_counts else 0
-            ),
-            tests_failed=(
-                curr_test_counts.get("failed", 0)
-                if curr_test_counts else 0
-            ),
-            tests_total=(
-                curr_test_counts.get("total", 0)
-                if curr_test_counts else 0
-            ),
+            tests_passed=(curr_test_counts.get("passed", 0) if curr_test_counts else 0),
+            tests_failed=(curr_test_counts.get("failed", 0) if curr_test_counts else 0),
+            tests_total=(curr_test_counts.get("total", 0) if curr_test_counts else 0),
             dense_reward=iter_dense_reward,
             stage=last_stage,
         )
 
     _sandbox_destroy(run_id, req.repo_id)
-    ledger.append({
-        "type": "RUN_END",
-        "run_id": run_id,
-        "status": "fail",
-    })
+    ledger.append(
+        {
+            "type": "RUN_END",
+            "run_id": run_id,
+            "status": "fail",
+        }
+    )
     learner_ingest(
         run_id,
         last_strategy or "unknown",
@@ -4111,18 +4324,9 @@ def run(req: RunReq):
         patch_added=iter_patch_added,
         patch_deleted=iter_patch_deleted,
         test_exit_code=iter_test_exit,
-        tests_passed=(
-            curr_test_counts.get("passed", 0)
-            if curr_test_counts else 0
-        ),
-        tests_failed=(
-            curr_test_counts.get("failed", 0)
-            if curr_test_counts else 0
-        ),
-        tests_total=(
-            curr_test_counts.get("total", 0)
-            if curr_test_counts else 0
-        ),
+        tests_passed=(curr_test_counts.get("passed", 0) if curr_test_counts else 0),
+        tests_failed=(curr_test_counts.get("failed", 0) if curr_test_counts else 0),
+        tests_total=(curr_test_counts.get("total", 0) if curr_test_counts else 0),
         dense_reward=iter_dense_reward,
         stage=last_stage,
     )

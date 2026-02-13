@@ -1,0 +1,34 @@
+{
+  "task_id": "psf__requests-863",
+  "repo_url": "https://github.com/psf/requests.git",
+  "repo_ref": "a0df2cbb10419037d11d04352b3175405ab52941",
+  "workdir": "/tmp/swebench_work/psf__requests-863",
+  "issue_text": "Allow lists in the dict values of the hooks argument\nCurrently the Request class has a .register_hook() method but it parses the dictionary it expects from it's hooks argument weirdly: the argument can only specify one hook function per hook.  If you pass in a list of hook functions per hook the code in Request.**init**() will wrap the list in a list which then fails when the hooks are consumed (since a list is not callable).  This is especially annoying since you can not use multiple hooks from a session.  The only way to get multiple hooks now is to create the request object without sending it, then call .register_hook() multiple times and then finally call .send().\n\nThis would all be much easier if Request.**init**() parsed the hooks parameter in a way that it accepts lists as it's values.\n\n",
+  "hints": {
+    "failing_tests": [
+      "tests/test_requests.py::RequestsTestSuite::test_POSTBIN_GET_POST_FILES_WITH_HEADERS",
+      "tests/test_requests.py::RequestsTestSuite::test_nonurlencoded_postdata",
+      "tests/test_requests.py::RequestsTestSuite::test_prefetch_redirect_bug",
+      "tests/test_requests.py::RequestsTestSuite::test_urlencoded_post_data"
+    ],
+    "focus_files": [
+      "requests/models.py"
+    ],
+    "test_patch": "diff --git a/tests/test_requests.py b/tests/test_requests.py\n--- a/tests/test_requests.py\n+++ b/tests/test_requests.py\n@@ -744,6 +744,40 @@ def add_bar_header(args):\n             assert 'foo' in response.text\n             assert 'bar' in response.text\n \n+    def test_allow_list_of_hooks_to_register_hook(self):\n+        \"\"\"Issue 785: https://github.com/kennethreitz/requests/issues/785\"\"\"\n+        def add_foo_header(args):\n+            if not args.get('headers'):\n+                args['headers'] = {}\n+\n+            args['headers'].update({\n+                'X-Foo': 'foo'\n+            })\n+\n+            return args\n+\n+        def add_bar_header(args):\n+            if not args.get('headers'):\n+                args['headers'] = {}\n+\n+            args['headers'].update({\n+                'X-Bar': 'bar'\n+            })\n+\n+            return args\n+\n+        def assert_hooks_are_callable(hooks):\n+            for h in hooks['args']:\n+                assert callable(h) is True\n+\n+        hooks = [add_foo_header, add_bar_header]\n+        r = requests.models.Request()\n+        r.register_hook('args', hooks)\n+        assert_hooks_are_callable(r.hooks)\n+\n+        r = requests.models.Request(hooks={'args': hooks})\n+        assert_hooks_are_callable(r.hooks)\n+\n     def test_session_persistent_cookies(self):\n \n         s = requests.session()\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[socks]",
+      "pip install pytest-httpbin trustme"
+    ],
+    "test_quick": "python -m pytest -x -q tests/test_requests.py::RequestsTestSuite::test_POSTBIN_GET_POST_FILES_WITH_HEADERS tests/test_requests.py::RequestsTestSuite::test_nonurlencoded_postdata tests/test_requests.py::RequestsTestSuite::test_prefetch_redirect_bug tests/test_requests.py::RequestsTestSuite::test_urlencoded_post_data",
+    "test_full": "python -m pytest -x -q tests/test_requests.py::RequestsTestSuite::test_POSTBIN_GET_POST_FILES_WITH_HEADERS tests/test_requests.py::RequestsTestSuite::test_nonurlencoded_postdata tests/test_requests.py::RequestsTestSuite::test_prefetch_redirect_bug tests/test_requests.py::RequestsTestSuite::test_urlencoded_post_data"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

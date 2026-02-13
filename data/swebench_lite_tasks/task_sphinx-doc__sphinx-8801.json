@@ -1,0 +1,30 @@
+{
+  "task_id": "sphinx-doc__sphinx-8801",
+  "repo_url": "https://github.com/sphinx-doc/sphinx.git",
+  "repo_ref": "7ca279e33aebb60168d35e6be4ed059f4a68f2c1",
+  "workdir": "/tmp/swebench_work/sphinx-doc__sphinx-8801",
+  "issue_text": "autodoc: The annotation only member in superclass is treated as \"undocumented\"\n**Describe the bug**\r\nautodoc: The annotation only member in superclass is treated as \"undocumented\".\r\n\r\n**To Reproduce**\r\n\r\n```\r\n# example.py\r\nclass Foo:\r\n    \"\"\"docstring\"\"\"\r\n    attr1: int  #: docstring\r\n\r\n\r\nclass Bar(Foo):\r\n    \"\"\"docstring\"\"\"\r\n    attr2: str  #: docstring\r\n```\r\n```\r\n# index.rst\r\n.. autoclass:: example.Bar\r\n   :members:\r\n   :inherited-members:\r\n```\r\n\r\n`Bar.attr1` is not documented. It will be shown if I give `:undoc-members:` option to the autoclass directive call. It seems the attribute is treated as undocumented.\r\n\r\n**Expected behavior**\r\nIt should be shown.\r\n\r\n**Your project**\r\nNo\r\n\r\n**Screenshots**\r\nNo\r\n\r\n**Environment info**\r\n- OS: Mac\r\n- Python version: 3.9.1\r\n- Sphinx version: HEAD of 3.x\r\n- Sphinx extensions: sphinx.ext.autodoc\r\n- Extra tools: No\r\n\r\n**Additional context**\r\nNo\r\n\n",
+  "hints": {
+    "failing_tests": [
+      "tests/test_ext_autodoc_autoclass.py::test_uninitialized_attributes"
+    ],
+    "focus_files": [
+      "sphinx/ext/autodoc/importer.py"
+    ],
+    "test_patch": "diff --git a/tests/roots/test-ext-autodoc/target/uninitialized_attributes.py b/tests/roots/test-ext-autodoc/target/uninitialized_attributes.py\nnew file mode 100644\n--- /dev/null\n+++ b/tests/roots/test-ext-autodoc/target/uninitialized_attributes.py\n@@ -0,0 +1,8 @@\n+class Base:\n+    attr1: int  #: docstring\n+    attr2: str\n+\n+\n+class Derived(Base):\n+    attr3: int  #: docstring\n+    attr4: str\ndiff --git a/tests/test_ext_autodoc_autoclass.py b/tests/test_ext_autodoc_autoclass.py\n--- a/tests/test_ext_autodoc_autoclass.py\n+++ b/tests/test_ext_autodoc_autoclass.py\n@@ -106,6 +106,73 @@ def test_inherited_instance_variable(app):\n     ]\n \n \n+@pytest.mark.skipif(sys.version_info < (3, 6), reason='py36+ is available since python3.6.')\n+@pytest.mark.sphinx('html', testroot='ext-autodoc')\n+def test_uninitialized_attributes(app):\n+    options = {\"members\": None,\n+               \"inherited-members\": True}\n+    actual = do_autodoc(app, 'class', 'target.uninitialized_attributes.Derived', options)\n+    assert list(actual) == [\n+        '',\n+        '.. py:class:: Derived()',\n+        '   :module: target.uninitialized_attributes',\n+        '',\n+        '',\n+        '   .. py:attribute:: Derived.attr1',\n+        '      :module: target.uninitialized_attributes',\n+        '      :type: int',\n+        '',\n+        '      docstring',\n+        '',\n+        '',\n+        '   .. py:attribute:: Derived.attr3',\n+        '      :module: target.uninitialized_attributes',\n+        '      :type: int',\n+        '',\n+        '      docstring',\n+        '',\n+    ]\n+\n+\n+@pytest.mark.skipif(sys.version_info < (3, 6), reason='py36+ is available since python3.6.')\n+@pytest.mark.sphinx('html', testroot='ext-autodoc')\n+def test_undocumented_uninitialized_attributes(app):\n+    options = {\"members\": None,\n+               \"inherited-members\": True,\n+               \"undoc-members\": True}\n+    actual = do_autodoc(app, 'class', 'target.uninitialized_attributes.Derived', options)\n+    assert list(actual) == [\n+        '',\n+        '.. py:class:: Derived()',\n+        '   :module: target.uninitialized_attributes',\n+        '',\n+        '',\n+        '   .. py:attribute:: Derived.attr1',\n+        '      :module: target.uninitialized_attributes',\n+        '      :type: int',\n+        '',\n+        '      docstring',\n+        '',\n+        '',\n+        '   .. py:attribute:: Derived.attr2',\n+        '      :module: target.uninitialized_attributes',\n+        '      :type: str',\n+        '',\n+        '',\n+        '   .. py:attribute:: Derived.attr3',\n+        '      :module: target.uninitialized_attributes',\n+        '      :type: int',\n+        '',\n+        '      docstring',\n+        '',\n+        '',\n+        '   .. py:attribute:: Derived.attr4',\n+        '      :module: target.uninitialized_attributes',\n+        '      :type: str',\n+        '',\n+    ]\n+\n+\n def test_decorators(app):\n     actual = do_autodoc(app, 'class', 'target.decorator.Baz')\n     assert list(actual) == [\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[test]"
+    ],
+    "test_quick": "python -m pytest -x -q tests/test_ext_autodoc_autoclass.py::test_uninitialized_attributes",
+    "test_full": "python -m pytest -x -q tests/test_ext_autodoc_autoclass.py::test_uninitialized_attributes"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

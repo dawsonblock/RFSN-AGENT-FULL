@@ -1,0 +1,31 @@
+{
+  "task_id": "sphinx-doc__sphinx-8627",
+  "repo_url": "https://github.com/sphinx-doc/sphinx.git",
+  "repo_ref": "332d80ba8433aea41c3709fa52737ede4405072b",
+  "workdir": "/tmp/swebench_work/sphinx-doc__sphinx-8627",
+  "issue_text": "autodoc isn't able to resolve struct.Struct type annotations\n**Describe the bug**\r\nIf `struct.Struct` is declared in any type annotations, I get `class reference target not found: Struct`\r\n\r\n**To Reproduce**\r\nSimple `index.rst`\r\n```\r\nHello World\r\n===========\r\n\r\ncode docs\r\n=========\r\n\r\n.. automodule:: helloworld.helloworld\r\n```\r\n\r\nSimple `helloworld.py`\r\n```\r\nimport struct\r\nimport pathlib\r\n\r\ndef consume_struct(_: struct.Struct) -> None:\r\n    pass\r\n\r\ndef make_struct() -> struct.Struct:\r\n    mystruct = struct.Struct('HH')\r\n    return mystruct\r\n\r\ndef make_path() -> pathlib.Path:\r\n    return pathlib.Path()\r\n```\r\n\r\nCommand line:\r\n```\r\npython3 -m sphinx -b html docs/ doc-out -nvWT\r\n```\r\n\r\n**Expected behavior**\r\nIf you comment out the 2 functions that have `Struct` type annotations, you'll see that `pathlib.Path` resolves fine and shows up in the resulting documentation. I'd expect that `Struct` would also resolve correctly.\r\n\r\n**Your project**\r\nn/a\r\n\r\n**Screenshots**\r\nn/a\r\n\r\n**Environment info**\r\n- OS: Ubuntu 18.04, 20.04\r\n- Python version: 3.8.2\r\n- Sphinx version: 3.2.1\r\n- Sphinx extensions:  'sphinx.ext.autodoc',\r\n              'sphinx.ext.autosectionlabel',\r\n              'sphinx.ext.intersphinx',\r\n              'sphinx.ext.doctest',\r\n              'sphinx.ext.todo'\r\n- Extra tools: \r\n\r\n**Additional context**\r\n\r\n\r\n- [e.g. URL or Ticket]\r\n\r\n\n",
+  "hints": {
+    "failing_tests": [
+      "tests/test_util_typing.py::test_restify",
+      "tests/test_util_typing.py::test_stringify"
+    ],
+    "focus_files": [
+      "sphinx/util/typing.py"
+    ],
+    "test_patch": "diff --git a/tests/test_util_typing.py b/tests/test_util_typing.py\n--- a/tests/test_util_typing.py\n+++ b/tests/test_util_typing.py\n@@ -10,6 +10,7 @@\n \n import sys\n from numbers import Integral\n+from struct import Struct\n from typing import (Any, Callable, Dict, Generator, List, NewType, Optional, Tuple, TypeVar,\n                     Union)\n \n@@ -43,6 +44,7 @@ def test_restify():\n     assert restify(str) == \":class:`str`\"\n     assert restify(None) == \":obj:`None`\"\n     assert restify(Integral) == \":class:`numbers.Integral`\"\n+    assert restify(Struct) == \":class:`struct.Struct`\"\n     assert restify(Any) == \":obj:`Any`\"\n \n \n@@ -124,6 +126,7 @@ def test_stringify():\n     assert stringify(str) == \"str\"\n     assert stringify(None) == \"None\"\n     assert stringify(Integral) == \"numbers.Integral\"\n+    assert restify(Struct) == \":class:`struct.Struct`\"\n     assert stringify(Any) == \"Any\"\n \n \n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[test]"
+    ],
+    "test_quick": "python -m pytest -x -q tests/test_util_typing.py::test_restify tests/test_util_typing.py::test_stringify",
+    "test_full": "python -m pytest -x -q tests/test_util_typing.py::test_restify tests/test_util_typing.py::test_stringify"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

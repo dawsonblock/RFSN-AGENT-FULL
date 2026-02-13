@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-13158",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "7af8f4127397279d19ef7c7899e93018274e2f9b",
+  "workdir": "/tmp/swebench_work/django__django-13158",
+  "issue_text": "QuerySet.none() on combined queries returns all results.\nDescription\n\t\nI came across this issue on Stack Overflow. I'm not 100% sure it's a bug, but it does seem strange. With this code (excuse the bizarre example filtering):\nclass Publication(models.Model):\n\tpass\nclass Article(models.Model):\n\tpublications = models.ManyToManyField(to=Publication, blank=True, null=True)\nclass ArticleForm(forms.ModelForm):\n\tpublications = forms.ModelMultipleChoiceField(\n\t\tPublication.objects.filter(id__lt=2) | Publication.objects.filter(id__gt=5),\n\t\trequired=False,\n\t)\n\tclass Meta:\n\t\tmodel = Article\n\t\tfields = [\"publications\"]\nclass ArticleAdmin(admin.ModelAdmin):\n\tform = ArticleForm\nThis works well. However, changing the ModelMultipleChoiceField queryset to use union() breaks things.\npublications = forms.ModelMultipleChoiceField(\n\tPublication.objects.filter(id__lt=2).union(\n\t\tPublication.objects.filter(id__gt=5)\n\t),\n\trequired=False,\n)\nThe form correctly shows only the matching objects. However, if you submit this form while empty (i.e. you didn't select any publications), ALL objects matching the queryset will be added. Using the OR query, NO objects are added, as I'd expect.\n",
+  "hints": {
+    "failing_tests": [
+      "test_union_none (queries.test_qs_combinators.QuerySetSetOperationTests)"
+    ],
+    "focus_files": [
+      "django/db/models/sql/query.py"
+    ],
+    "test_patch": "diff --git a/tests/queries/test_qs_combinators.py b/tests/queries/test_qs_combinators.py\n--- a/tests/queries/test_qs_combinators.py\n+++ b/tests/queries/test_qs_combinators.py\n@@ -51,6 +51,13 @@ def test_union_distinct(self):\n         self.assertEqual(len(list(qs1.union(qs2, all=True))), 20)\n         self.assertEqual(len(list(qs1.union(qs2))), 10)\n \n+    def test_union_none(self):\n+        qs1 = Number.objects.filter(num__lte=1)\n+        qs2 = Number.objects.filter(num__gte=8)\n+        qs3 = qs1.union(qs2)\n+        self.assertSequenceEqual(qs3.none(), [])\n+        self.assertNumbersEqual(qs3, [0, 1, 8, 9], ordered=False)\n+\n     @skipUnlessDBFeature('supports_select_intersection')\n     def test_intersection_with_empty_qs(self):\n         qs1 = Number.objects.all()\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q queries/test_qs_combinators.py",
+    "test_full": "python -m pytest -x -q queries/test_qs_combinators.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

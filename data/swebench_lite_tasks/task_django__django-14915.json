@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-14915",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "903aaa35e5ceaa33bfc9b19b7f6da65ce5a91dd4",
+  "workdir": "/tmp/swebench_work/django__django-14915",
+  "issue_text": "ModelChoiceIteratorValue is not hashable.\nDescription\n\t\nRecently I migrated from Django 3.0 to Django 3.1. In my code, I add custom data-* attributes to the select widget options. After the upgrade some of those options broke. Error is {TypeError}unhashable type: 'ModelChoiceIteratorValue'.\nExample (this one breaks):\n\tdef create_option(self, name, value, label, selected, index, subindex=None, attrs=None):\n\t\tcontext = super().create_option(name, value, label, selected, index, subindex, attrs)\n\t\tif not value:\n\t\t\treturn context\n\t\tif value in self.show_fields: # This is a dict {1: ['first_name', 'last_name']}\n\t\t\tcontext['attrs']['data-fields'] = json.dumps(self.show_fields[value])\nHowever, working with arrays is not an issue:\n\tdef create_option(self, name, value, label, selected, index, subindex=None, attrs=None):\n\t\tcontext = super().create_option(name, value, label, selected, index, subindex, attrs)\n\t\tif not value:\n\t\t\treturn context\n\t\tif value in allowed_values: # This is an array [1, 2]\n\t\t\t...\n",
+  "hints": {
+    "failing_tests": [
+      "test_choice_value_hash (model_forms.test_modelchoicefield.ModelChoiceFieldTests)"
+    ],
+    "focus_files": [
+      "django/forms/models.py"
+    ],
+    "test_patch": "diff --git a/tests/model_forms/test_modelchoicefield.py b/tests/model_forms/test_modelchoicefield.py\n--- a/tests/model_forms/test_modelchoicefield.py\n+++ b/tests/model_forms/test_modelchoicefield.py\n@@ -2,7 +2,7 @@\n \n from django import forms\n from django.core.exceptions import ValidationError\n-from django.forms.models import ModelChoiceIterator\n+from django.forms.models import ModelChoiceIterator, ModelChoiceIteratorValue\n from django.forms.widgets import CheckboxSelectMultiple\n from django.template import Context, Template\n from django.test import TestCase\n@@ -341,6 +341,12 @@ class CustomModelMultipleChoiceField(forms.ModelMultipleChoiceField):\n </div>\"\"\" % (self.c1.pk, self.c2.pk, self.c3.pk),\n         )\n \n+    def test_choice_value_hash(self):\n+        value_1 = ModelChoiceIteratorValue(self.c1.pk, self.c1)\n+        value_2 = ModelChoiceIteratorValue(self.c2.pk, self.c2)\n+        self.assertEqual(hash(value_1), hash(ModelChoiceIteratorValue(self.c1.pk, None)))\n+        self.assertNotEqual(hash(value_1), hash(value_2))\n+\n     def test_choices_not_fetched_when_not_rendering(self):\n         with self.assertNumQueries(1):\n             field = forms.ModelChoiceField(Category.objects.order_by('-name'))\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q model_forms/test_modelchoicefield.py",
+    "test_full": "python -m pytest -x -q model_forms/test_modelchoicefield.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "task_id": "sphinx-doc__sphinx-7975",
+  "repo_url": "https://github.com/sphinx-doc/sphinx.git",
+  "repo_ref": "4ec6cbe341fd84468c448e20082c778043bbea4b",
+  "workdir": "/tmp/swebench_work/sphinx-doc__sphinx-7975",
+  "issue_text": "Two sections called Symbols in index\nWhen using index entries with the following leading characters: _@_, _£_, and _←_ I get two sections called _Symbols_ in the HTML output, the first containing all _@_ entries before ”normal” words and the second containing _£_ and _←_ entries after the ”normal” words.  Both have the same anchor in HTML so the links at the top of the index page contain two _Symbols_ links, one before the letters and one after, but both lead to the first section.\n\n",
+  "hints": {
+    "failing_tests": [
+      "tests/test_environment_indexentries.py::test_create_single_index"
+    ],
+    "focus_files": [
+      "sphinx/environment/adapters/indexentries.py"
+    ],
+    "test_patch": "diff --git a/tests/test_environment_indexentries.py b/tests/test_environment_indexentries.py\n--- a/tests/test_environment_indexentries.py\n+++ b/tests/test_environment_indexentries.py\n@@ -25,12 +25,14 @@ def test_create_single_index(app):\n             \".. index:: ёлка\\n\"\n             \".. index:: ‏תירבע‎\\n\"\n             \".. index:: 9-symbol\\n\"\n-            \".. index:: &-symbol\\n\")\n+            \".. index:: &-symbol\\n\"\n+            \".. index:: £100\\n\")\n     restructuredtext.parse(app, text)\n     index = IndexEntries(app.env).create_index(app.builder)\n     assert len(index) == 6\n     assert index[0] == ('Symbols', [('&-symbol', [[('', '#index-9')], [], None]),\n-                                    ('9-symbol', [[('', '#index-8')], [], None])])\n+                                    ('9-symbol', [[('', '#index-8')], [], None]),\n+                                    ('£100', [[('', '#index-10')], [], None])])\n     assert index[1] == ('D', [('docutils', [[('', '#index-0')], [], None])])\n     assert index[2] == ('P', [('pip', [[], [('install', [('', '#index-2')]),\n                                             ('upgrade', [('', '#index-3')])], None]),\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[test]"
+    ],
+    "test_quick": "python -m pytest -x -q tests/test_environment_indexentries.py::test_create_single_index",
+    "test_full": "python -m pytest -x -q tests/test_environment_indexentries.py::test_create_single_index"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

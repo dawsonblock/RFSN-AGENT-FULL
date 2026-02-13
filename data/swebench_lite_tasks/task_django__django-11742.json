@@ -1,0 +1,31 @@
+{
+  "task_id": "django__django-11742",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "fee75d2aed4e58ada6567c464cfd22e89dc65f4a",
+  "workdir": "/tmp/swebench_work/django__django-11742",
+  "issue_text": "Add check to ensure max_length fits longest choice.\nDescription\n\t\nThere is currently no check to ensure that Field.max_length is large enough to fit the longest value in Field.choices.\nThis would be very helpful as often this mistake is not noticed until an attempt is made to save a record with those values that are too long.\n",
+  "hints": {
+    "failing_tests": [
+      "test_choices_in_max_length (invalid_models_tests.test_ordinary_fields.CharFieldTests)",
+      "test_choices_named_group (invalid_models_tests.test_ordinary_fields.CharFieldTests)"
+    ],
+    "focus_files": [
+      "django/db/models/fields/__init__.py"
+    ],
+    "test_patch": "diff --git a/tests/invalid_models_tests/test_ordinary_fields.py b/tests/invalid_models_tests/test_ordinary_fields.py\n--- a/tests/invalid_models_tests/test_ordinary_fields.py\n+++ b/tests/invalid_models_tests/test_ordinary_fields.py\n@@ -304,6 +304,32 @@ class Model(models.Model):\n \n         self.assertEqual(Model._meta.get_field('field').check(), [])\n \n+    def test_choices_in_max_length(self):\n+        class Model(models.Model):\n+            field = models.CharField(\n+                max_length=2, choices=[\n+                    ('ABC', 'Value Too Long!'), ('OK', 'Good')\n+                ],\n+            )\n+            group = models.CharField(\n+                max_length=2, choices=[\n+                    ('Nested', [('OK', 'Good'), ('Longer', 'Longer')]),\n+                    ('Grouped', [('Bad', 'Bad')]),\n+                ],\n+            )\n+\n+        for name, choice_max_length in (('field', 3), ('group', 6)):\n+            with self.subTest(name):\n+                field = Model._meta.get_field(name)\n+                self.assertEqual(field.check(), [\n+                    Error(\n+                        \"'max_length' is too small to fit the longest value \"\n+                        \"in 'choices' (%d characters).\" % choice_max_length,\n+                        obj=field,\n+                        id='fields.E009',\n+                    ),\n+                ])\n+\n     def test_bad_db_index_value(self):\n         class Model(models.Model):\n             field = models.CharField(max_length=10, db_index='bad')\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q invalid_models_tests/test_ordinary_fields.py",
+    "test_full": "python -m pytest -x -q invalid_models_tests/test_ordinary_fields.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

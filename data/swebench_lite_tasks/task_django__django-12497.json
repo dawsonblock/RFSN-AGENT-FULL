@@ -1,0 +1,31 @@
+{
+  "task_id": "django__django-12497",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "a4881f5e5d7ee38b7e83301331a0b4962845ef8a",
+  "workdir": "/tmp/swebench_work/django__django-12497",
+  "issue_text": "Wrong hint about recursive relationship.\nDescription\n\t \n\t\t(last modified by Matheus Cunha Motta)\n\t \nWhen there's more than 2 ForeignKeys in an intermediary model of a m2m field and no through_fields have been set, Django will show an error with the following hint:\nhint=(\n\t'If you want to create a recursive relationship, '\n\t'use ForeignKey(\"%s\", symmetrical=False, through=\"%s\").'\nBut 'symmetrical' and 'through' are m2m keyword arguments, not ForeignKey.\nThis was probably a small mistake where the developer thought ManyToManyField but typed ForeignKey instead. And the symmetrical=False is an outdated requirement to recursive relationships with intermediary model to self, not required since 3.0. I'll provide a PR with a proposed correction shortly after.\nEdit: fixed description.\n",
+  "hints": {
+    "failing_tests": [
+      "test_ambiguous_relationship_model_from (invalid_models_tests.test_relative_fields.RelativeFieldTests)",
+      "test_ambiguous_relationship_model_to (invalid_models_tests.test_relative_fields.RelativeFieldTests)"
+    ],
+    "focus_files": [
+      "django/db/models/fields/related.py"
+    ],
+    "test_patch": "diff --git a/tests/invalid_models_tests/test_relative_fields.py b/tests/invalid_models_tests/test_relative_fields.py\n--- a/tests/invalid_models_tests/test_relative_fields.py\n+++ b/tests/invalid_models_tests/test_relative_fields.py\n@@ -128,7 +128,36 @@ class ThroughModel(models.Model):\n             ),\n         ])\n \n-    def test_ambiguous_relationship_model(self):\n+    def test_ambiguous_relationship_model_from(self):\n+        class Person(models.Model):\n+            pass\n+\n+        class Group(models.Model):\n+            field = models.ManyToManyField('Person', through='AmbiguousRelationship')\n+\n+        class AmbiguousRelationship(models.Model):\n+            person = models.ForeignKey(Person, models.CASCADE)\n+            first_group = models.ForeignKey(Group, models.CASCADE, related_name='first')\n+            second_group = models.ForeignKey(Group, models.CASCADE, related_name='second')\n+\n+        field = Group._meta.get_field('field')\n+        self.assertEqual(field.check(from_model=Group), [\n+            Error(\n+                \"The model is used as an intermediate model by \"\n+                \"'invalid_models_tests.Group.field', but it has more than one \"\n+                \"foreign key from 'Group', which is ambiguous. You must \"\n+                \"specify which foreign key Django should use via the \"\n+                \"through_fields keyword argument.\",\n+                hint=(\n+                    'If you want to create a recursive relationship, use '\n+                    'ManyToManyField(\"self\", through=\"AmbiguousRelationship\").'\n+                ),\n+                obj=field,\n+                id='fields.E334',\n+            ),\n+        ])\n+\n+    def test_ambiguous_relationship_model_to(self):\n \n         class Person(models.Model):\n             pass\n@@ -152,7 +181,7 @@ class AmbiguousRelationship(models.Model):\n                 \"keyword argument.\",\n                 hint=(\n                     'If you want to create a recursive relationship, use '\n-                    'ForeignKey(\"self\", symmetrical=False, through=\"AmbiguousRelationship\").'\n+                    'ManyToManyField(\"self\", through=\"AmbiguousRelationship\").'\n                 ),\n                 obj=field,\n                 id='fields.E335',\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q invalid_models_tests/test_relative_fields.py",
+    "test_full": "python -m pytest -x -q invalid_models_tests/test_relative_fields.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

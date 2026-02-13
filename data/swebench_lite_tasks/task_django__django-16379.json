@@ -1,0 +1,31 @@
+{
+  "task_id": "django__django-16379",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "1d0fa848e084cad62d0bb6bde3b51e4862558e57",
+  "workdir": "/tmp/swebench_work/django__django-16379",
+  "issue_text": "FileBasedCache has_key is susceptible to race conditions\nDescription\n\t \n\t\t(last modified by Marti Raudsepp)\n\t \nI received the exception from Django's cache framework:\nFileNotFoundError: [Errno 2] No such file or directory: '/app/var/cache/d729e4cf4ba88cba5a0f48e0396ec48a.djcache'\n[...]\n File \"django/core/cache/backends/base.py\", line 229, in get_or_set\n\tself.add(key, default, timeout=timeout, version=version)\n File \"django/core/cache/backends/filebased.py\", line 26, in add\n\tif self.has_key(key, version):\n File \"django/core/cache/backends/filebased.py\", line 94, in has_key\n\twith open(fname, \"rb\") as f:\nThe code is:\n\tdef has_key(self, key, version=None):\n\t\tfname = self._key_to_file(key, version)\n\t\tif os.path.exists(fname):\n\t\t\twith open(fname, \"rb\") as f:\n\t\t\t\treturn not self._is_expired(f)\n\t\treturn False\nBetween the exists() check and open(), it's possible for the file to be deleted. In fact, the _is_expired() method itself deletes the file if it finds it to be expired. So if many threads race to read an expired cache at once, it's not that unlikely to hit this window.\n",
+  "hints": {
+    "failing_tests": [
+      "test_has_key_race_handling (cache.tests.FileBasedCachePathLibTests)",
+      "test_has_key_race_handling (cache.tests.FileBasedCacheTests)"
+    ],
+    "focus_files": [
+      "django/core/cache/backends/filebased.py"
+    ],
+    "test_patch": "diff --git a/tests/cache/tests.py b/tests/cache/tests.py\n--- a/tests/cache/tests.py\n+++ b/tests/cache/tests.py\n@@ -1762,6 +1762,12 @@ def test_empty_cache_file_considered_expired(self):\n         with open(cache_file, \"rb\") as fh:\n             self.assertIs(cache._is_expired(fh), True)\n \n+    def test_has_key_race_handling(self):\n+        self.assertIs(cache.add(\"key\", \"value\"), True)\n+        with mock.patch(\"builtins.open\", side_effect=FileNotFoundError) as mocked_open:\n+            self.assertIs(cache.has_key(\"key\"), False)\n+            mocked_open.assert_called_once()\n+\n \n @unittest.skipUnless(RedisCache_params, \"Redis backend not configured\")\n @override_settings(\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q cache/tests.py",
+    "test_full": "python -m pytest -x -q cache/tests.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

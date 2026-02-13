@@ -1,0 +1,31 @@
+{
+  "task_id": "scikit-learn__scikit-learn-10508",
+  "repo_url": "https://github.com/scikit-learn/scikit-learn.git",
+  "repo_ref": "c753b77ac49e72ebc0fe5e3c2369fe628f975017",
+  "workdir": "/tmp/swebench_work/scikit-learn__scikit-learn-10508",
+  "issue_text": "LabelEncoder transform fails for empty lists (for certain inputs)\nPython 3.6.3, scikit_learn 0.19.1\r\n\r\nDepending on which datatypes were used to fit the LabelEncoder, transforming empty lists works or not. Expected behavior would be that empty arrays are returned in both cases.\r\n\r\n```python\r\n>>> from sklearn.preprocessing import LabelEncoder\r\n>>> le = LabelEncoder()\r\n>>> le.fit([1,2])\r\nLabelEncoder()\r\n>>> le.transform([])\r\narray([], dtype=int64)\r\n>>> le.fit([\"a\",\"b\"])\r\nLabelEncoder()\r\n>>> le.transform([])\r\nTraceback (most recent call last):\r\n  File \"[...]\\Python36\\lib\\site-packages\\numpy\\core\\fromnumeric.py\", line 57, in _wrapfunc\r\n    return getattr(obj, method)(*args, **kwds)\r\nTypeError: Cannot cast array data from dtype('float64') to dtype('<U32') according to the rule 'safe'\r\n\r\nDuring handling of the above exception, another exception occurred:\r\n\r\nTraceback (most recent call last):\r\n  File \"<stdin>\", line 1, in <module>\r\n  File \"[...]\\Python36\\lib\\site-packages\\sklearn\\preprocessing\\label.py\", line 134, in transform\r\n    return np.searchsorted(self.classes_, y)\r\n  File \"[...]\\Python36\\lib\\site-packages\\numpy\\core\\fromnumeric.py\", line 1075, in searchsorted\r\n    return _wrapfunc(a, 'searchsorted', v, side=side, sorter=sorter)\r\n  File \"[...]\\Python36\\lib\\site-packages\\numpy\\core\\fromnumeric.py\", line 67, in _wrapfunc\r\n    return _wrapit(obj, method, *args, **kwds)\r\n  File \"[...]\\Python36\\lib\\site-packages\\numpy\\core\\fromnumeric.py\", line 47, in _wrapit\r\n    result = getattr(asarray(obj), method)(*args, **kwds)\r\nTypeError: Cannot cast array data from dtype('float64') to dtype('<U32') according to the rule 'safe'\r\n```\n",
+  "hints": {
+    "failing_tests": [
+      "sklearn/preprocessing/tests/test_label.py::test_label_encoder_errors",
+      "sklearn/preprocessing/tests/test_label.py::test_label_encoder_empty_array"
+    ],
+    "focus_files": [
+      "sklearn/preprocessing/label.py"
+    ],
+    "test_patch": "diff --git a/sklearn/preprocessing/tests/test_label.py b/sklearn/preprocessing/tests/test_label.py\n--- a/sklearn/preprocessing/tests/test_label.py\n+++ b/sklearn/preprocessing/tests/test_label.py\n@@ -208,6 +208,21 @@ def test_label_encoder_errors():\n     assert_raise_message(ValueError, msg, le.inverse_transform, [-2])\n     assert_raise_message(ValueError, msg, le.inverse_transform, [-2, -3, -4])\n \n+    # Fail on inverse_transform(\"\")\n+    msg = \"bad input shape ()\"\n+    assert_raise_message(ValueError, msg, le.inverse_transform, \"\")\n+\n+\n+def test_label_encoder_empty_array():\n+    le = LabelEncoder()\n+    le.fit(np.array([\"1\", \"2\", \"1\", \"2\", \"2\"]))\n+    # test empty transform\n+    transformed = le.transform([])\n+    assert_array_equal(np.array([]), transformed)\n+    # test empty inverse transform\n+    inverse_transformed = le.inverse_transform([])\n+    assert_array_equal(np.array([]), inverse_transformed)\n+\n \n def test_sparse_output_multilabel_binarizer():\n     # test input as iterable of iterables\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[tests]"
+    ],
+    "test_quick": "python -m pytest -x -q sklearn/preprocessing/tests/test_label.py::test_label_encoder_errors sklearn/preprocessing/tests/test_label.py::test_label_encoder_empty_array",
+    "test_full": "python -m pytest -x -q sklearn/preprocessing/tests/test_label.py::test_label_encoder_errors sklearn/preprocessing/tests/test_label.py::test_label_encoder_empty_array"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

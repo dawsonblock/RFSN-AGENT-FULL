@@ -1,0 +1,31 @@
+{
+  "task_id": "sympy__sympy-13177",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "662cfb818e865f580e18b59efbb3540c34232beb",
+  "workdir": "/tmp/swebench_work/sympy__sympy-13177",
+  "issue_text": "Mod(x**2, x) is not (always) 0\nWhen the base is not an integer, `x**2 % x` is not 0. The base is not tested to be an integer in Mod's eval logic:\r\n\r\n```\r\nif (p == q or p == -q or\r\n        p.is_Pow and p.exp.is_Integer and p.base == q or\r\n        p.is_integer and q == 1):\r\n    return S.Zero\r\n```\r\n\r\nso\r\n\r\n```\r\n>>> Mod(x**2, x)\r\n0\r\n```\r\nbut\r\n```\r\n>>> x = S(1.5)\r\n>>> Mod(x**2, x)\r\n0.75\r\n```\n",
+  "hints": {
+    "failing_tests": [
+      "test_mod",
+      "test_mod_inverse"
+    ],
+    "focus_files": [
+      "sympy/core/mod.py"
+    ],
+    "test_patch": "diff --git a/sympy/core/tests/test_numbers.py b/sympy/core/tests/test_numbers.py\n--- a/sympy/core/tests/test_numbers.py\n+++ b/sympy/core/tests/test_numbers.py\n@@ -8,6 +8,7 @@\n from sympy.core.logic import fuzzy_not\n from sympy.core.numbers import (igcd, ilcm, igcdex, seterr, _intcache,\n     igcd2, igcd_lehmer, mpf_norm, comp, mod_inverse)\n+from sympy.core.mod import Mod\n from sympy.utilities.decorator import conserve_mpmath_dps\n from sympy.utilities.iterables import permutations\n from sympy.utilities.pytest import XFAIL, raises\n@@ -121,6 +122,20 @@ def test_mod():\n     assert Integer(10) % 4 == Integer(2)\n     assert 15 % Integer(4) == Integer(3)\n \n+    h = Symbol('h')\n+    m = h ** 2 % h\n+    k = h ** -2 % h\n+    l = Symbol('l', integer=True)\n+    p = Symbol('p', integer=True, positive=True)\n+    q = Symbol('q', integer=True, negative=True)\n+\n+    assert m == h * (h % 1)\n+    assert k == Mod(h ** -2, h, evaluate=False)\n+    assert Mod(l ** p, l) == 0\n+    assert Mod(l ** 2, l) == 0\n+    assert (l ** q % l) == Mod(l ** q, l, evaluate=False)\n+    assert (l ** -2 % l) == Mod(l ** -2, l, evaluate=False)\n+\n \n def test_divmod():\n     assert divmod(S(12), S(8)) == Tuple(1, 4)\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_mod or test_mod_inverse\"",
+    "test_full": "python -m pytest -x -q -k \"test_mod or test_mod_inverse\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

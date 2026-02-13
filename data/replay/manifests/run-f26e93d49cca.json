@@ -1,0 +1,55 @@
+{
+  "completeness": {
+    "missing": [
+      "repo_head"
+    ],
+    "ok": false,
+    "required_count": 13
+  },
+  "deterministic_run_id": false,
+  "ended_at": 1770951345.2814405,
+  "env_hash": "84c130bcaebdcbfe",
+  "env_snapshot": {
+    "env_hash": "84c130bcaebdcbfe",
+    "env_vars": {
+      "LEDGER_FIXED_TS": "1.0",
+      "RFSN_DEV_MODE": "1",
+      "RFSN_SEED": "1",
+      "RFSN_SERVICE_TOKEN": "smoke-token",
+      "RFSN_WARM_SANDBOX": "0"
+    },
+    "repo_path": "/data/repos/smoke-sampleproject",
+    "seed": 1415918387
+  },
+  "episode_seed": 1415918387,
+  "executor_image": "rfsn-blessed:0.2",
+  "learner_db_hash": "69c6a5ab0a31c8dd9dbe2fc6b2125cf273d0178228fd8218c86c9730b559afa2",
+  "learner_db_path": "/data/learner.duckdb",
+  "ledger_path": "/data/kernel_ledger.jsonl",
+  "policy_hash": "221b9402f2a71c66",
+  "policy_hashes": {
+    "gate_policy": "b8a9ea529f0bff52",
+    "llm_cassette": "318f856b6ccecc0c",
+    "tier_policy": "f254a5477a633c77",
+    "tool_allowlist": "a8683512bc54c2bd"
+  },
+  "reason": "tests-only fast-path succeeded",
+  "replay_verify": {
+    "divergence_count": 0,
+    "divergences": [],
+    "matched_steps": 4,
+    "ok": true,
+    "total_steps": 4
+  },
+  "repo_head": "unknown",
+  "repo_id": "smoke-sampleproject",
+  "results_count": 2,
+  "run_id": "run-f26e93d49cca",
+  "sandbox_image_hash": "",
+  "sandbox_mode": "cold",
+  "scenario": "golden",
+  "seed": "1",
+  "started_at": 1770951342.3270175,
+  "status": "ok",
+  "task": "run tests only and make no changes"
+}

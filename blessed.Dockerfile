@@ -19,6 +19,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc \
         g++ \
         make \
+        pkg-config \
+        libfreetype6-dev \
+        libpng-dev \
+        libopenblas-dev \
+        liblapack-dev \
+        gfortran \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python -m pip install --upgrade pip setuptools wheel

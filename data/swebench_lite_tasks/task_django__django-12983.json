@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-12983",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "3bc4240d979812bd11365ede04c028ea13fdc8c6",
+  "workdir": "/tmp/swebench_work/django__django-12983",
+  "issue_text": "Make django.utils.text.slugify() strip dashes and underscores\nDescription\n\t \n\t\t(last modified by Elinaldo do Nascimento Monteiro)\n\t \nBug generation slug\nExample:\nfrom django.utils import text\ntext.slugify(\"___This is a test ---\")\noutput: ___this-is-a-test-\nImprovement after correction\nfrom django.utils import text\ntext.slugify(\"___This is a test ---\")\noutput: this-is-a-test\n​PR\n",
+  "hints": {
+    "failing_tests": [
+      "test_slugify (utils_tests.test_text.TestUtilsText)"
+    ],
+    "focus_files": [
+      "django/utils/text.py"
+    ],
+    "test_patch": "diff --git a/tests/utils_tests/test_text.py b/tests/utils_tests/test_text.py\n--- a/tests/utils_tests/test_text.py\n+++ b/tests/utils_tests/test_text.py\n@@ -192,6 +192,13 @@ def test_slugify(self):\n             # given - expected - Unicode?\n             ('Hello, World!', 'hello-world', False),\n             ('spam & eggs', 'spam-eggs', False),\n+            (' multiple---dash and  space ', 'multiple-dash-and-space', False),\n+            ('\\t whitespace-in-value \\n', 'whitespace-in-value', False),\n+            ('underscore_in-value', 'underscore_in-value', False),\n+            ('__strip__underscore-value___', 'strip__underscore-value', False),\n+            ('--strip-dash-value---', 'strip-dash-value', False),\n+            ('__strip-mixed-value---', 'strip-mixed-value', False),\n+            ('_ -strip-mixed-value _-', 'strip-mixed-value', False),\n             ('spam & ıçüş', 'spam-ıçüş', True),\n             ('foo ıç bar', 'foo-ıç-bar', True),\n             ('    foo ıç bar', 'foo-ıç-bar', True),\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q utils_tests/test_text.py",
+    "test_full": "python -m pytest -x -q utils_tests/test_text.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

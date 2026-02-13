@@ -1,0 +1,37 @@
+{
+  "task_id": "psf__requests-1963",
+  "repo_url": "https://github.com/psf/requests.git",
+  "repo_ref": "110048f9837f8441ea536804115e80b69f400277",
+  "workdir": "/tmp/swebench_work/psf__requests-1963",
+  "issue_text": "`Session.resolve_redirects` copies the original request for all subsequent requests, can cause incorrect method selection\nConsider the following redirection chain:\n\n```\nPOST /do_something HTTP/1.1\nHost: server.example.com\n...\n\nHTTP/1.1 303 See Other\nLocation: /new_thing_1513\n\nGET /new_thing_1513\nHost: server.example.com\n...\n\nHTTP/1.1 307 Temporary Redirect\nLocation: //failover.example.com/new_thing_1513\n```\n\nThe intermediate 303 See Other has caused the POST to be converted to\na GET.  The subsequent 307 should preserve the GET.  However, because\n`Session.resolve_redirects` starts each iteration by copying the _original_\nrequest object, Requests will issue a POST!\n\n",
+  "hints": {
+    "failing_tests": [
+      "test_requests.py::RequestsTestCase::test_DIGESTAUTH_QUOTES_QOP_VALUE",
+      "test_requests.py::RequestsTestCase::test_DIGESTAUTH_WRONG_HTTP_401_GET",
+      "test_requests.py::RequestsTestCase::test_DIGEST_AUTH_RETURNS_COOKIE",
+      "test_requests.py::RequestsTestCase::test_DIGEST_HTTP_200_OK_GET",
+      "test_requests.py::RequestsTestCase::test_POSTBIN_GET_POST_FILES_WITH_DATA",
+      "test_requests.py::RequestsTestCase::test_param_cookiejar_works",
+      "test_requests.py::TestRedirects::test_requests_are_updated_each_time"
+    ],
+    "focus_files": [
+      "requests/sessions.py"
+    ],
+    "test_patch": "diff --git a/test_requests.py b/test_requests.py\n--- a/test_requests.py\n+++ b/test_requests.py\n@@ -8,6 +8,7 @@\n import os\n import pickle\n import unittest\n+import collections\n \n import requests\n import pytest\n@@ -18,6 +19,7 @@\n from requests.cookies import cookiejar_from_dict, morsel_to_cookie\n from requests.exceptions import InvalidURL, MissingSchema\n from requests.structures import CaseInsensitiveDict\n+from requests.sessions import SessionRedirectMixin\n \n try:\n     import StringIO\n@@ -1187,5 +1189,64 @@ def test_stream_timeout(self):\n             assert 'Read timed out' in e.args[0].args[0]\n \n \n+SendCall = collections.namedtuple('SendCall', ('args', 'kwargs'))\n+\n+\n+class RedirectSession(SessionRedirectMixin):\n+    def __init__(self, order_of_redirects):\n+        self.redirects = order_of_redirects\n+        self.calls = []\n+        self.max_redirects = 30\n+        self.cookies = {}\n+        self.trust_env = False\n+\n+    def send(self, *args, **kwargs):\n+        self.calls.append(SendCall(args, kwargs))\n+        return self.build_response()\n+\n+    def build_response(self):\n+        request = self.calls[-1].args[0]\n+        r = requests.Response()\n+\n+        try:\n+            r.status_code = int(self.redirects.pop(0))\n+        except IndexError:\n+            r.status_code = 200\n+\n+        r.headers = CaseInsensitiveDict({'Location': '/'})\n+        r.raw = self._build_raw()\n+        r.request = request\n+        return r\n+\n+    def _build_raw(self):\n+        string = StringIO.StringIO('')\n+        setattr(string, 'release_conn', lambda *args: args)\n+        return string\n+\n+\n+class TestRedirects:\n+    default_keyword_args = {\n+        'stream': False,\n+        'verify': True,\n+        'cert': None,\n+        'timeout': None,\n+        'allow_redirects': False,\n+        'proxies': None,\n+    }\n+\n+    def test_requests_are_updated_each_time(self):\n+        session = RedirectSession([303, 307])\n+        prep = requests.Request('POST', 'http://httpbin.org/post').prepare()\n+        r0 = session.send(prep)\n+        assert r0.request.method == 'POST'\n+        assert session.calls[-1] == SendCall((r0.request,), {})\n+        redirect_generator = session.resolve_redirects(r0, prep)\n+        for response in redirect_generator:\n+            assert response.request.method == 'GET'\n+            send_call = SendCall((response.request,),\n+                                 TestRedirects.default_keyword_args)\n+            assert session.calls[-1] == send_call\n+\n+\n if __name__ == '__main__':\n     unittest.main()\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[socks]",
+      "pip install pytest-httpbin trustme"
+    ],
+    "test_quick": "python -m pytest -x -q test_requests.py::RequestsTestCase::test_DIGESTAUTH_QUOTES_QOP_VALUE test_requests.py::RequestsTestCase::test_DIGESTAUTH_WRONG_HTTP_401_GET test_requests.py::RequestsTestCase::test_DIGEST_AUTH_RETURNS_COOKIE test_requests.py::RequestsTestCase::test_DIGEST_HTTP_200_OK_GET test_requests.py::RequestsTestCase::test_POSTBIN_GET_POST_FILES_WITH_DATA test_requests.py::RequestsTestCase::test_param_cookiejar_works test_requests.py::TestRedirects::test_requests_are_updated_each_time",
+    "test_full": "python -m pytest -x -q test_requests.py::RequestsTestCase::test_DIGESTAUTH_QUOTES_QOP_VALUE test_requests.py::RequestsTestCase::test_DIGESTAUTH_WRONG_HTTP_401_GET test_requests.py::RequestsTestCase::test_DIGEST_AUTH_RETURNS_COOKIE test_requests.py::RequestsTestCase::test_DIGEST_HTTP_200_OK_GET test_requests.py::RequestsTestCase::test_POSTBIN_GET_POST_FILES_WITH_DATA test_requests.py::RequestsTestCase::test_param_cookiejar_works test_requests.py::TestRedirects::test_requests_are_updated_each_time"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

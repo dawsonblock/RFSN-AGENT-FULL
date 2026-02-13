@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-13658",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "0773837e15bb632afffb6848a58c59a791008fa1",
+  "workdir": "/tmp/swebench_work/django__django-13658",
+  "issue_text": "ManagementUtility instantiates CommandParser without passing already-computed prog argument\nDescription\n\t\nManagementUtility ​goes to the trouble to parse the program name from the argv it's passed rather than from sys.argv: \n\tdef __init__(self, argv=None):\n\t\tself.argv = argv or sys.argv[:]\n\t\tself.prog_name = os.path.basename(self.argv[0])\n\t\tif self.prog_name == '__main__.py':\n\t\t\tself.prog_name = 'python -m django'\nBut then when it needs to parse --pythonpath and --settings, it ​uses the program name from sys.argv: \n\t\tparser = CommandParser(usage='%(prog)s subcommand [options] [args]', add_help=False, allow_abbrev=False)\nAbove \"%(prog)s\" ​refers to sys.argv[0]. Instead, it should refer to self.prog_name. This can fixed as follows:\n\t\tparser = CommandParser(\n\t\t\tprog=self.prog_name,\n\t\t\tusage='%(prog)s subcommand [options] [args]',\n\t\t\tadd_help=False,\n\t\t\tallow_abbrev=False)\nI'm aware that execute_from_command_line is a private API, but it'd be really convenient for me if it worked properly in my weird embedded environment where sys.argv[0] is ​incorrectly None. If passing my own argv to execute_from_command_line avoided all the ensuing exceptions, I wouldn't have to modify sys.argv[0] globally as I'm doing in the meantime.\n",
+  "hints": {
+    "failing_tests": [
+      "test_program_name_from_argv (admin_scripts.tests.ExecuteFromCommandLine)"
+    ],
+    "focus_files": [
+      "django/core/management/__init__.py"
+    ],
+    "test_patch": "diff --git a/tests/admin_scripts/tests.py b/tests/admin_scripts/tests.py\n--- a/tests/admin_scripts/tests.py\n+++ b/tests/admin_scripts/tests.py\n@@ -17,7 +17,7 @@\n from django import conf, get_version\n from django.conf import settings\n from django.core.management import (\n-    BaseCommand, CommandError, call_command, color,\n+    BaseCommand, CommandError, call_command, color, execute_from_command_line,\n )\n from django.core.management.commands.loaddata import Command as LoaddataCommand\n from django.core.management.commands.runserver import (\n@@ -31,6 +31,7 @@\n from django.test import (\n     LiveServerTestCase, SimpleTestCase, TestCase, override_settings,\n )\n+from django.test.utils import captured_stderr, captured_stdout\n \n custom_templates_dir = os.path.join(os.path.dirname(__file__), 'custom_templates')\n \n@@ -1867,6 +1868,20 @@ def _test(self, args, option_b=\"'2'\"):\n         )\n \n \n+class ExecuteFromCommandLine(SimpleTestCase):\n+    def test_program_name_from_argv(self):\n+        \"\"\"\n+        Program name is computed from the execute_from_command_line()'s argv\n+        argument, not sys.argv.\n+        \"\"\"\n+        args = ['help', 'shell']\n+        with captured_stdout() as out, captured_stderr() as err:\n+            with mock.patch('sys.argv', [None] + args):\n+                execute_from_command_line(['django-admin'] + args)\n+        self.assertIn('usage: django-admin shell', out.getvalue())\n+        self.assertEqual(err.getvalue(), '')\n+\n+\n @override_settings(ROOT_URLCONF='admin_scripts.urls')\n class StartProject(LiveServerTestCase, AdminScriptTestCase):\n \n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q admin_scripts/tests.py",
+    "test_full": "python -m pytest -x -q admin_scripts/tests.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "task_id": "django__django-15213",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "03cadb912c78b769d6bf4a943a2a35fc1d952960",
+  "workdir": "/tmp/swebench_work/django__django-15213",
+  "issue_text": "ExpressionWrapper for ~Q(pk__in=[]) crashes.\nDescription\n\t \n\t\t(last modified by Stefan Brand)\n\t \nProblem Description\nI'm reducing some Q objects (similar to what is described in ticket:32554. Everything is fine for the case where the result is ExpressionWrapper(Q(pk__in=[])). However, when I reduce to ExpressionWrapper(~Q(pk__in=[])) the query breaks.\nSymptoms\nWorking for ExpressionWrapper(Q(pk__in=[]))\nprint(queryset.annotate(foo=ExpressionWrapper(Q(pk__in=[]), output_field=BooleanField())).values(\"foo\").query)\nSELECT 0 AS \"foo\" FROM \"table\"\nNot working for ExpressionWrapper(~Q(pk__in=[]))\nprint(queryset.annotate(foo=ExpressionWrapper(~Q(pk__in=[]), output_field=BooleanField())).values(\"foo\").query)\nSELECT AS \"foo\" FROM \"table\"\n",
+  "hints": {
+    "failing_tests": [
+      "test_aggregate_over_full_expression_annotation (annotations.tests.NonAggregateAnnotationTestCase)",
+      "test_full_expression_annotation (annotations.tests.NonAggregateAnnotationTestCase)",
+      "test_full_expression_annotation_with_aggregation (annotations.tests.NonAggregateAnnotationTestCase)"
+    ],
+    "focus_files": [
+      "django/db/models/fields/__init__.py"
+    ],
+    "test_patch": "diff --git a/tests/annotations/tests.py b/tests/annotations/tests.py\n--- a/tests/annotations/tests.py\n+++ b/tests/annotations/tests.py\n@@ -210,6 +210,26 @@ def test_empty_expression_annotation(self):\n         self.assertEqual(len(books), Book.objects.count())\n         self.assertTrue(all(not book.selected for book in books))\n \n+    def test_full_expression_annotation(self):\n+        books = Book.objects.annotate(\n+            selected=ExpressionWrapper(~Q(pk__in=[]), output_field=BooleanField()),\n+        )\n+        self.assertEqual(len(books), Book.objects.count())\n+        self.assertTrue(all(book.selected for book in books))\n+\n+    def test_full_expression_annotation_with_aggregation(self):\n+        qs = Book.objects.filter(isbn='159059725').annotate(\n+            selected=ExpressionWrapper(~Q(pk__in=[]), output_field=BooleanField()),\n+            rating_count=Count('rating'),\n+        )\n+        self.assertEqual([book.rating_count for book in qs], [1])\n+\n+    def test_aggregate_over_full_expression_annotation(self):\n+        qs = Book.objects.annotate(\n+            selected=ExpressionWrapper(~Q(pk__in=[]), output_field=BooleanField()),\n+        ).aggregate(Sum('selected'))\n+        self.assertEqual(qs['selected__sum'], Book.objects.count())\n+\n     def test_empty_queryset_annotation(self):\n         qs = Author.objects.annotate(\n             empty=Subquery(Author.objects.values('id').none())\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q annotations/tests.py",
+    "test_full": "python -m pytest -x -q annotations/tests.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

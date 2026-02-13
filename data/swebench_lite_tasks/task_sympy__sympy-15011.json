@@ -1,0 +1,30 @@
+{
+  "task_id": "sympy__sympy-15011",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "b7c5ba2bf3ffd5cf453b25af7c8ddd9a639800cb",
+  "workdir": "/tmp/swebench_work/sympy__sympy-15011",
+  "issue_text": "lambdify does not work with certain MatrixSymbol names even with dummify=True\n`lambdify` is happy with curly braces in a symbol name and with `MatrixSymbol`s, but not with both at the same time, even if `dummify` is `True`.\r\n\r\nHere is some basic code that gives the error.\r\n```\r\nimport sympy as sy\r\ncurlyx = sy.symbols(\"{x}\")\r\nv = sy.MatrixSymbol(\"v\", 2, 1)\r\ncurlyv = sy.MatrixSymbol(\"{v}\", 2, 1)\r\n```\r\n\r\nThe following two lines of code work:\r\n```\r\ncurlyScalarId = sy.lambdify(curlyx, curlyx)\r\nvectorId = sy.lambdify(v,v)\r\n```\r\n\r\nThe following two lines of code give a `SyntaxError`:\r\n```\r\ncurlyVectorId = sy.lambdify(curlyv, curlyv)\r\ncurlyVectorIdDummified = sy.lambdify(curlyv, curlyv, dummify=True)\r\n```\r\n\r\n\n",
+  "hints": {
+    "failing_tests": [
+      "test_curly_matrix_symbol"
+    ],
+    "focus_files": [
+      "sympy/utilities/lambdify.py"
+    ],
+    "test_patch": "diff --git a/sympy/utilities/tests/test_lambdify.py b/sympy/utilities/tests/test_lambdify.py\n--- a/sympy/utilities/tests/test_lambdify.py\n+++ b/sympy/utilities/tests/test_lambdify.py\n@@ -728,6 +728,14 @@ def test_dummification():\n     raises(SyntaxError, lambda: lambdify(2 * F(t), 2 * F(t) + 5))\n     raises(SyntaxError, lambda: lambdify(2 * F(t), 4 * F(t) + 5))\n \n+def test_curly_matrix_symbol():\n+    # Issue #15009\n+    curlyv = sympy.MatrixSymbol(\"{v}\", 2, 1)\n+    lam = lambdify(curlyv, curlyv)\n+    assert lam(1)==1\n+    lam = lambdify(curlyv, curlyv, dummify=True)\n+    assert lam(1)==1\n+\n def test_python_keywords():\n     # Test for issue 7452. The automatic dummification should ensure use of\n     # Python reserved keywords as symbol names will create valid lambda\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_curly_matrix_symbol\"",
+    "test_full": "python -m pytest -x -q -k \"test_curly_matrix_symbol\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "task_id": "django__django-14017",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "466920f6d726eee90d5566e0a9948e92b33a122e",
+  "workdir": "/tmp/swebench_work/django__django-14017",
+  "issue_text": "Q(...) & Exists(...) raises a TypeError\nDescription\n\t\nExists(...) & Q(...) works, but Q(...) & Exists(...) raise a TypeError\nHere's a minimal example:\nIn [3]: Exists(Product.objects.all()) & Q()\nOut[3]: <Q: (AND: <django.db.models.expressions.Exists object at 0x7fc18dd0ed90>, (AND: ))>\nIn [4]: Q() & Exists(Product.objects.all())\n---------------------------------------------------------------------------\nTypeError\t\t\t\t\t\t\t\t Traceback (most recent call last)\n<ipython-input-4-21d3dea0fcb9> in <module>\n----> 1 Q() & Exists(Product.objects.all())\n~/Code/venv/ecom/lib/python3.8/site-packages/django/db/models/query_utils.py in __and__(self, other)\n\t 90 \n\t 91\t def __and__(self, other):\n---> 92\t\t return self._combine(other, self.AND)\n\t 93 \n\t 94\t def __invert__(self):\n~/Code/venv/ecom/lib/python3.8/site-packages/django/db/models/query_utils.py in _combine(self, other, conn)\n\t 71\t def _combine(self, other, conn):\n\t 72\t\t if not isinstance(other, Q):\n---> 73\t\t\t raise TypeError(other)\n\t 74 \n\t 75\t\t # If the other Q() is empty, ignore it and just use `self`.\nTypeError: <django.db.models.expressions.Exists object at 0x7fc18dd21400>\nThe & (and |) operators should be commutative on Q-Exists pairs, but it's not\nI think there's a missing definition of __rand__ somewhere.\n",
+  "hints": {
+    "failing_tests": [
+      "test_boolean_expression_combined (expressions.tests.BasicExpressionsTests)",
+      "test_boolean_expression_combined_with_empty_Q (expressions.tests.BasicExpressionsTests)"
+    ],
+    "focus_files": [
+      "django/db/models/query_utils.py"
+    ],
+    "test_patch": "diff --git a/tests/expressions/tests.py b/tests/expressions/tests.py\n--- a/tests/expressions/tests.py\n+++ b/tests/expressions/tests.py\n@@ -815,6 +815,28 @@ def test_boolean_expression_combined(self):\n             Employee.objects.filter(Exists(is_poc) | Q(salary__lt=15)),\n             [self.example_inc.ceo, self.max],\n         )\n+        self.assertCountEqual(\n+            Employee.objects.filter(Q(salary__gte=30) & Exists(is_ceo)),\n+            [self.max],\n+        )\n+        self.assertCountEqual(\n+            Employee.objects.filter(Q(salary__lt=15) | Exists(is_poc)),\n+            [self.example_inc.ceo, self.max],\n+        )\n+\n+    def test_boolean_expression_combined_with_empty_Q(self):\n+        is_poc = Company.objects.filter(point_of_contact=OuterRef('pk'))\n+        self.gmbh.point_of_contact = self.max\n+        self.gmbh.save()\n+        tests = [\n+            Exists(is_poc) & Q(),\n+            Q() & Exists(is_poc),\n+            Exists(is_poc) | Q(),\n+            Q() | Exists(is_poc),\n+        ]\n+        for conditions in tests:\n+            with self.subTest(conditions):\n+                self.assertCountEqual(Employee.objects.filter(conditions), [self.max])\n \n \n class IterableLookupInnerExpressionsTests(TestCase):\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q expressions/tests.py",
+    "test_full": "python -m pytest -x -q expressions/tests.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "task_id": "psf__requests-2674",
+  "repo_url": "https://github.com/psf/requests.git",
+  "repo_ref": "0be38a0c37c59c4b66ce908731da15b401655113",
+  "workdir": "/tmp/swebench_work/psf__requests-2674",
+  "issue_text": "urllib3 exceptions passing through requests API\nI don't know if it's a design goal of requests to hide urllib3's exceptions and wrap them around requests.exceptions types.\n\n(If it's not IMHO it should be, but that's another discussion)\n\nIf it is, I have at least two of them passing through that I have to catch in addition to requests' exceptions. They are requests.packages.urllib3.exceptions.DecodeError and requests.packages.urllib3.exceptions.TimeoutError (this one I get when a proxy timeouts)\n\nThanks!\n\n",
+  "hints": {
+    "failing_tests": [
+      "test_requests.py::RequestsTestCase::test_BASICAUTH_TUPLE_HTTP_200_OK_GET",
+      "test_requests.py::RequestsTestCase::test_HTTP_200_OK_GET_ALTERNATIVE",
+      "test_requests.py::RequestsTestCase::test_HTTP_200_OK_GET_WITH_PARAMS",
+      "test_requests.py::RequestsTestCase::test_HTTP_200_OK_HEAD",
+      "test_requests.py::RequestsTestCase::test_auth_is_retained_for_redirect_on_host",
+      "test_requests.py::RequestsTestCase::test_different_encodings_dont_break_post",
+      "test_requests.py::RequestsTestCase::test_manual_redirect_with_partial_body_read",
+      "test_requests.py::RequestsTestCase::test_mixed_case_scheme_acceptable",
+      "test_requests.py::RequestsTestCase::test_prepared_from_session",
+      "test_requests.py::RequestsTestCase::test_unicode_multipart_post",
+      "test_requests.py::TestTimeout::test_none_timeout",
+      "test_requests.py::TestTimeout::test_encoded_methods"
+    ],
+    "focus_files": [
+      "requests/adapters.py"
+    ],
+    "test_patch": "diff --git a/test_requests.py b/test_requests.py\n--- a/test_requests.py\n+++ b/test_requests.py\n@@ -1655,6 +1655,16 @@ def test_urllib3_retries():\n     with pytest.raises(RetryError):\n         s.get(httpbin('status/500'))\n \n+\n+def test_urllib3_pool_connection_closed():\n+    s = requests.Session()\n+    s.mount('http://', HTTPAdapter(pool_connections=0, pool_maxsize=0))\n+\n+    try:\n+        s.get(httpbin('status/200'))\n+    except ConnectionError as e:\n+        assert u\"HTTPConnectionPool(host='httpbin.org', port=80): Pool is closed.\" in str(e.message)\n+\n def test_vendor_aliases():\n     from requests.packages import urllib3\n     from requests.packages import chardet\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[socks]",
+      "pip install pytest-httpbin trustme"
+    ],
+    "test_quick": "python -m pytest -x -q test_requests.py::RequestsTestCase::test_BASICAUTH_TUPLE_HTTP_200_OK_GET test_requests.py::RequestsTestCase::test_HTTP_200_OK_GET_ALTERNATIVE test_requests.py::RequestsTestCase::test_HTTP_200_OK_GET_WITH_PARAMS test_requests.py::RequestsTestCase::test_HTTP_200_OK_HEAD test_requests.py::RequestsTestCase::test_auth_is_retained_for_redirect_on_host test_requests.py::RequestsTestCase::test_different_encodings_dont_break_post test_requests.py::RequestsTestCase::test_manual_redirect_with_partial_body_read test_requests.py::RequestsTestCase::test_mixed_case_scheme_acceptable test_requests.py::RequestsTestCase::test_prepared_from_session test_requests.py::RequestsTestCase::test_unicode_multipart_post test_requests.py::TestTimeout::test_none_timeout test_requests.py::TestTimeout::test_encoded_methods",
+    "test_full": "python -m pytest -x -q test_requests.py::RequestsTestCase::test_BASICAUTH_TUPLE_HTTP_200_OK_GET test_requests.py::RequestsTestCase::test_HTTP_200_OK_GET_ALTERNATIVE test_requests.py::RequestsTestCase::test_HTTP_200_OK_GET_WITH_PARAMS test_requests.py::RequestsTestCase::test_HTTP_200_OK_HEAD test_requests.py::RequestsTestCase::test_auth_is_retained_for_redirect_on_host test_requests.py::RequestsTestCase::test_different_encodings_dont_break_post test_requests.py::RequestsTestCase::test_manual_redirect_with_partial_body_read test_requests.py::RequestsTestCase::test_mixed_case_scheme_acceptable test_requests.py::RequestsTestCase::test_prepared_from_session test_requests.py::RequestsTestCase::test_unicode_multipart_post test_requests.py::TestTimeout::test_none_timeout test_requests.py::TestTimeout::test_encoded_methods"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

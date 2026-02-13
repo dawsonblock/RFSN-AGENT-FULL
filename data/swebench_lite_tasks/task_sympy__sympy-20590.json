@@ -1,0 +1,30 @@
+{
+  "task_id": "sympy__sympy-20590",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "cffd4e0f86fefd4802349a9f9b19ed70934ea354",
+  "workdir": "/tmp/swebench_work/sympy__sympy-20590",
+  "issue_text": "Symbol instances have __dict__ since 1.7?\nIn version 1.6.2 Symbol instances had no `__dict__` attribute\r\n```python\r\n>>> sympy.Symbol('s').__dict__\r\n---------------------------------------------------------------------------\r\nAttributeError                            Traceback (most recent call last)\r\n<ipython-input-3-e2060d5eec73> in <module>\r\n----> 1 sympy.Symbol('s').__dict__\r\n\r\nAttributeError: 'Symbol' object has no attribute '__dict__'\r\n>>> sympy.Symbol('s').__slots__\r\n('name',)\r\n```\r\n\r\nThis changes in 1.7 where `sympy.Symbol('s').__dict__` now exists (and returns an empty dict)\r\nI may misinterpret this, but given the purpose of `__slots__`, I assume this is a bug, introduced because some parent class accidentally stopped defining `__slots__`.\n",
+  "hints": {
+    "failing_tests": [
+      "test_immutable"
+    ],
+    "focus_files": [
+      "sympy/core/_print_helpers.py"
+    ],
+    "test_patch": "diff --git a/sympy/core/tests/test_basic.py b/sympy/core/tests/test_basic.py\n--- a/sympy/core/tests/test_basic.py\n+++ b/sympy/core/tests/test_basic.py\n@@ -34,6 +34,12 @@ def test_structure():\n     assert bool(b1)\n \n \n+def test_immutable():\n+    assert not hasattr(b1, '__dict__')\n+    with raises(AttributeError):\n+        b1.x = 1\n+\n+\n def test_equality():\n     instances = [b1, b2, b3, b21, Basic(b1, b1, b1), Basic]\n     for i, b_i in enumerate(instances):\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_immutable\"",
+    "test_full": "python -m pytest -x -q -k \"test_immutable\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

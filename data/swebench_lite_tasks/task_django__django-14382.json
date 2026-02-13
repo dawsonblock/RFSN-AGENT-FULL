@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-14382",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "29345aecf6e8d53ccb3577a3762bb0c263f7558d",
+  "workdir": "/tmp/swebench_work/django__django-14382",
+  "issue_text": "django-admin startapp with trailing slash in directory name results in error\nDescription\n\t\nBash tab-completion appends trailing slashes to directory names. django-admin startapp name directory/ results in the error:\nCommandError: '' is not a valid app directory. Please make sure the directory is a valid identifier.\nThe error is caused by ​line 77 of django/core/management/templates.py by calling basename() on the path with no consideration for a trailing slash:\nself.validate_name(os.path.basename(target), 'directory')\nRemoving potential trailing slashes would solve the problem:\nself.validate_name(os.path.basename(target.rstrip(os.sep)), 'directory')\n",
+  "hints": {
+    "failing_tests": [
+      "test_trailing_slash_in_target_app_directory_name (admin_scripts.tests.StartApp)"
+    ],
+    "focus_files": [
+      "django/core/management/templates.py"
+    ],
+    "test_patch": "diff --git a/tests/admin_scripts/tests.py b/tests/admin_scripts/tests.py\n--- a/tests/admin_scripts/tests.py\n+++ b/tests/admin_scripts/tests.py\n@@ -2206,6 +2206,13 @@ def test_importable_target_name(self):\n             \"another directory.\"\n         )\n \n+    def test_trailing_slash_in_target_app_directory_name(self):\n+        app_dir = os.path.join(self.test_dir, 'apps', 'app1')\n+        os.makedirs(app_dir)\n+        _, err = self.run_django_admin(['startapp', 'app', os.path.join('apps', 'app1', '')])\n+        self.assertNoOutput(err)\n+        self.assertIs(os.path.exists(os.path.join(app_dir, 'apps.py')), True)\n+\n     def test_overlaying_app(self):\n         # Use a subdirectory so it is outside the PYTHONPATH.\n         os.makedirs(os.path.join(self.test_dir, 'apps/app1'))\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q admin_scripts/tests.py",
+    "test_full": "python -m pytest -x -q admin_scripts/tests.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

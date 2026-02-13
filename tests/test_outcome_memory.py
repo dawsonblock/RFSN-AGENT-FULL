@@ -125,3 +125,39 @@ class TestOutcomeMemory:
         mem2 = OutcomeMemory(os.path.join(str(tmp_path), "mem.jsonl"))
         assert mem2.total_outcomes == 1  # triggers lazy load
         assert len(mem2._outcomes[0].patch_snippet) <= 500
+
+    def test_get_similar_tasks(self, tmp_path):
+        """Similarity search should find tasks with matching keywords."""
+        mem = self._make_mem(str(tmp_path))
+        mem.record(
+            "django-1",
+            "FAIL",
+            "django__django",
+            error_summary="assertion error in queryset filter",
+        )
+        mem.record(
+            "flask-1",
+            "FAIL",
+            "flask__flask",
+            error_summary="routing error in blueprint",
+        )
+
+        results = mem.get_similar_tasks("assertion queryset error")
+        assert len(results) >= 1
+        assert results[0].task_id == "django-1"
+
+    def test_dense_reward(self, tmp_path):
+        """dense_reward should be stored and clamped to [0, 1]."""
+        mem = self._make_mem(str(tmp_path))
+        mem.record("t1", "FAIL", "r1", dense_reward=0.6)
+        mem.record("t2", "FAIL", "r2", dense_reward=1.5)  # should clamp
+
+        assert mem._outcomes[0].dense_reward == 0.6
+        assert mem._outcomes[1].dense_reward == 1.0  # clamped
+
+    def test_similar_tasks_empty_query(self, tmp_path):
+        """Empty query should return empty list."""
+        mem = self._make_mem(str(tmp_path))
+        mem.record("t1", "FAIL", "r1", error_summary="some error")
+        assert mem.get_similar_tasks("") == []
+        assert mem.get_similar_tasks("   ") == []

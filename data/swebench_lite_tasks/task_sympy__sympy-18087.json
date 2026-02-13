@@ -1,0 +1,31 @@
+{
+  "task_id": "sympy__sympy-18087",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "9da013ad0ddc3cd96fe505f2e47c63e372040916",
+  "workdir": "/tmp/swebench_work/sympy__sympy-18087",
+  "issue_text": "Simplify of simple trig expression fails\ntrigsimp in various versions, including 1.5, incorrectly simplifies cos(x)+sqrt(sin(x)**2) as though it were cos(x)+sin(x) for general complex x. (Oddly it gets this right if x is real.)\r\n\r\nEmbarrassingly I found this by accident while writing sympy-based teaching material...\r\n\n",
+  "hints": {
+    "failing_tests": [
+      "test_Factors",
+      "test_fu"
+    ],
+    "focus_files": [
+      "sympy/core/exprtools.py"
+    ],
+    "test_patch": "diff --git a/sympy/core/tests/test_exprtools.py b/sympy/core/tests/test_exprtools.py\n--- a/sympy/core/tests/test_exprtools.py\n+++ b/sympy/core/tests/test_exprtools.py\n@@ -27,6 +27,8 @@ def test_Factors():\n     assert Factors({x: 2, y: 3, sin(x): 4}).as_expr() == x**2*y**3*sin(x)**4\n     assert Factors(S.Infinity) == Factors({oo: 1})\n     assert Factors(S.NegativeInfinity) == Factors({oo: 1, -1: 1})\n+    # issue #18059:\n+    assert Factors((x**2)**S.Half).as_expr() == (x**2)**S.Half\n \n     a = Factors({x: 5, y: 3, z: 7})\n     b = Factors({      y: 4, z: 3, t: 10})\ndiff --git a/sympy/simplify/tests/test_fu.py b/sympy/simplify/tests/test_fu.py\n--- a/sympy/simplify/tests/test_fu.py\n+++ b/sympy/simplify/tests/test_fu.py\n@@ -276,6 +276,9 @@ def test_fu():\n     expr = Mul(*[cos(2**i) for i in range(10)])\n     assert fu(expr) == sin(1024)/(1024*sin(1))\n \n+    # issue #18059:\n+    assert fu(cos(x) + sqrt(sin(x)**2)) == cos(x) + sqrt(sin(x)**2)\n+\n \n def test_objective():\n     assert fu(sin(x)/cos(x), measure=lambda x: x.count_ops()) == \\\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_Factors or test_fu\"",
+    "test_full": "python -m pytest -x -q -k \"test_Factors or test_fu\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

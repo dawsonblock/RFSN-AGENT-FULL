@@ -1,0 +1,30 @@
+{
+  "task_id": "scikit-learn__scikit-learn-13241",
+  "repo_url": "https://github.com/scikit-learn/scikit-learn.git",
+  "repo_ref": "f8b108d0c6f2f82b2dc4e32a6793f9d9ac9cf2f4",
+  "workdir": "/tmp/swebench_work/scikit-learn__scikit-learn-13241",
+  "issue_text": "Differences among the results of KernelPCA with rbf kernel\nHi there,\r\nI met with a problem:\r\n\r\n#### Description\r\nWhen I run KernelPCA for dimension reduction for the same datasets, the results are different in signs.\r\n\r\n#### Steps/Code to Reproduce\r\nJust to reduce the dimension to 7 with rbf kernel:\r\npca = KernelPCA(n_components=7, kernel='rbf', copy_X=False, n_jobs=-1)\r\npca.fit_transform(X)\r\n\r\n#### Expected Results\r\nThe same result.\r\n\r\n#### Actual Results\r\nThe results are the same except for their signs:(\r\n[[-0.44457617 -0.18155886 -0.10873474  0.13548386 -0.1437174  -0.057469\t0.18124364]] \r\n\r\n[[ 0.44457617  0.18155886  0.10873474 -0.13548386 -0.1437174  -0.057469 -0.18124364]] \r\n\r\n[[-0.44457617 -0.18155886  0.10873474  0.13548386  0.1437174   0.057469  0.18124364]] \r\n\r\n#### Versions\r\n0.18.1\r\n\n",
+  "hints": {
+    "failing_tests": [
+      "sklearn/decomposition/tests/test_kernel_pca.py::test_kernel_pca_deterministic_output"
+    ],
+    "focus_files": [
+      "sklearn/decomposition/kernel_pca.py"
+    ],
+    "test_patch": "diff --git a/sklearn/decomposition/tests/test_kernel_pca.py b/sklearn/decomposition/tests/test_kernel_pca.py\n--- a/sklearn/decomposition/tests/test_kernel_pca.py\n+++ b/sklearn/decomposition/tests/test_kernel_pca.py\n@@ -4,7 +4,7 @@\n \n from sklearn.utils.testing import (assert_array_almost_equal, assert_less,\n                                    assert_equal, assert_not_equal,\n-                                   assert_raises)\n+                                   assert_raises, assert_allclose)\n \n from sklearn.decomposition import PCA, KernelPCA\n from sklearn.datasets import make_circles\n@@ -71,6 +71,21 @@ def test_kernel_pca_consistent_transform():\n     assert_array_almost_equal(transformed1, transformed2)\n \n \n+def test_kernel_pca_deterministic_output():\n+    rng = np.random.RandomState(0)\n+    X = rng.rand(10, 10)\n+    eigen_solver = ('arpack', 'dense')\n+\n+    for solver in eigen_solver:\n+        transformed_X = np.zeros((20, 2))\n+        for i in range(20):\n+            kpca = KernelPCA(n_components=2, eigen_solver=solver,\n+                             random_state=rng)\n+            transformed_X[i, :] = kpca.fit_transform(X)[0]\n+        assert_allclose(\n+            transformed_X, np.tile(transformed_X[0, :], 20).reshape(20, 2))\n+\n+\n def test_kernel_pca_sparse():\n     rng = np.random.RandomState(0)\n     X_fit = sp.csr_matrix(rng.random_sample((5, 4)))\ndiff --git a/sklearn/decomposition/tests/test_pca.py b/sklearn/decomposition/tests/test_pca.py\n--- a/sklearn/decomposition/tests/test_pca.py\n+++ b/sklearn/decomposition/tests/test_pca.py\n@@ -6,6 +6,7 @@\n \n from sklearn.utils.testing import assert_almost_equal\n from sklearn.utils.testing import assert_array_almost_equal\n+from sklearn.utils.testing import assert_allclose\n from sklearn.utils.testing import assert_equal\n from sklearn.utils.testing import assert_greater\n from sklearn.utils.testing import assert_raise_message\n@@ -703,6 +704,19 @@ def test_pca_dtype_preservation(svd_solver):\n     check_pca_int_dtype_upcast_to_double(svd_solver)\n \n \n+def test_pca_deterministic_output():\n+    rng = np.random.RandomState(0)\n+    X = rng.rand(10, 10)\n+\n+    for solver in solver_list:\n+        transformed_X = np.zeros((20, 2))\n+        for i in range(20):\n+            pca = PCA(n_components=2, svd_solver=solver, random_state=rng)\n+            transformed_X[i, :] = pca.fit_transform(X)[0]\n+        assert_allclose(\n+            transformed_X, np.tile(transformed_X[0, :], 20).reshape(20, 2))\n+\n+\n def check_pca_float_dtype_preservation(svd_solver):\n     # Ensure that PCA does not upscale the dtype when input is float32\n     X_64 = np.random.RandomState(0).rand(1000, 4).astype(np.float64)\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[tests]"
+    ],
+    "test_quick": "python -m pytest -x -q sklearn/decomposition/tests/test_kernel_pca.py::test_kernel_pca_deterministic_output",
+    "test_full": "python -m pytest -x -q sklearn/decomposition/tests/test_kernel_pca.py::test_kernel_pca_deterministic_output"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

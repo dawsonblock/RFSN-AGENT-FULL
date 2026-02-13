@@ -1,0 +1,31 @@
+{
+  "task_id": "pydata__xarray-3364",
+  "repo_url": "https://github.com/pydata/xarray.git",
+  "repo_ref": "863e49066ca4d61c9adfe62aca3bf21b90e1af8c",
+  "workdir": "/tmp/swebench_work/pydata__xarray-3364",
+  "issue_text": "Ignore missing variables when concatenating datasets?\nSeveral users (@raj-kesavan, @richardotis, now myself) have wondered about how to concatenate xray Datasets with different variables.\n\nWith the current `xray.concat`, you need to awkwardly create dummy variables filled with `NaN` in datasets that don't have them (or drop mismatched variables entirely). Neither of these are great options -- `concat` should have an option (the default?) to take care of this for the user.\n\nThis would also be more consistent with `pd.concat`, which takes a more relaxed approach to matching dataframes with different variables (it does an outer join).\n\n",
+  "hints": {
+    "failing_tests": [
+      "xarray/tests/test_combine.py::TestAutoCombineOldAPI::test_auto_combine_with_new_variables",
+      "xarray/tests/test_concat.py::TestConcatDataset::test_concat_merge_variables_present_in_some_datasets"
+    ],
+    "focus_files": [
+      "xarray/core/concat.py"
+    ],
+    "test_patch": "diff --git a/xarray/tests/test_combine.py b/xarray/tests/test_combine.py\n--- a/xarray/tests/test_combine.py\n+++ b/xarray/tests/test_combine.py\n@@ -782,12 +782,11 @@ def test_auto_combine_previously_failed(self):\n         actual = auto_combine(datasets, concat_dim=\"t\")\n         assert_identical(expected, actual)\n \n-    def test_auto_combine_still_fails(self):\n-        # concat can't handle new variables (yet):\n-        # https://github.com/pydata/xarray/issues/508\n+    def test_auto_combine_with_new_variables(self):\n         datasets = [Dataset({\"x\": 0}, {\"y\": 0}), Dataset({\"x\": 1}, {\"y\": 1, \"z\": 1})]\n-        with pytest.raises(ValueError):\n-            auto_combine(datasets, \"y\")\n+        actual = auto_combine(datasets, \"y\")\n+        expected = Dataset({\"x\": (\"y\", [0, 1])}, {\"y\": [0, 1], \"z\": 1})\n+        assert_identical(expected, actual)\n \n     def test_auto_combine_no_concat(self):\n         objs = [Dataset({\"x\": 0}), Dataset({\"y\": 1})]\ndiff --git a/xarray/tests/test_concat.py b/xarray/tests/test_concat.py\n--- a/xarray/tests/test_concat.py\n+++ b/xarray/tests/test_concat.py\n@@ -68,6 +68,22 @@ def test_concat_simple(self, data, dim, coords):\n         datasets = [g for _, g in data.groupby(dim, squeeze=False)]\n         assert_identical(data, concat(datasets, dim, coords=coords))\n \n+    def test_concat_merge_variables_present_in_some_datasets(self, data):\n+        # coordinates present in some datasets but not others\n+        ds1 = Dataset(data_vars={\"a\": (\"y\", [0.1])}, coords={\"x\": 0.1})\n+        ds2 = Dataset(data_vars={\"a\": (\"y\", [0.2])}, coords={\"z\": 0.2})\n+        actual = concat([ds1, ds2], dim=\"y\", coords=\"minimal\")\n+        expected = Dataset({\"a\": (\"y\", [0.1, 0.2])}, coords={\"x\": 0.1, \"z\": 0.2})\n+        assert_identical(expected, actual)\n+\n+        # data variables present in some datasets but not others\n+        split_data = [data.isel(dim1=slice(3)), data.isel(dim1=slice(3, None))]\n+        data0, data1 = deepcopy(split_data)\n+        data1[\"foo\"] = (\"bar\", np.random.randn(10))\n+        actual = concat([data0, data1], \"dim1\")\n+        expected = data.copy().assign(foo=data1.foo)\n+        assert_identical(expected, actual)\n+\n     def test_concat_2(self, data):\n         dim = \"dim2\"\n         datasets = [g for _, g in data.groupby(dim, squeeze=True)]\n@@ -190,11 +206,6 @@ def test_concat_errors(self):\n             concat([data0, data1], \"dim1\", compat=\"identical\")\n         assert_identical(data, concat([data0, data1], \"dim1\", compat=\"equals\"))\n \n-        with raises_regex(ValueError, \"present in some datasets\"):\n-            data0, data1 = deepcopy(split_data)\n-            data1[\"foo\"] = (\"bar\", np.random.randn(10))\n-            concat([data0, data1], \"dim1\")\n-\n         with raises_regex(ValueError, \"compat.* invalid\"):\n             concat(split_data, \"dim1\", compat=\"foobar\")\n \n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q xarray/tests/test_combine.py::TestAutoCombineOldAPI::test_auto_combine_with_new_variables xarray/tests/test_concat.py::TestConcatDataset::test_concat_merge_variables_present_in_some_datasets",
+    "test_full": "python -m pytest -x -q xarray/tests/test_combine.py::TestAutoCombineOldAPI::test_auto_combine_with_new_variables xarray/tests/test_concat.py::TestConcatDataset::test_concat_merge_variables_present_in_some_datasets"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "task_id": "sympy__sympy-12454",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "d3fcdb72bfcbb560eb45264ac1c03f359436edef",
+  "workdir": "/tmp/swebench_work/sympy__sympy-12454",
+  "issue_text": "is_upper() raises IndexError for tall matrices\nThe function Matrix.is_upper raises an IndexError for a 4x2 matrix of zeros.\r\n```\r\n>>> sympy.zeros(4,2).is_upper\r\nTraceback (most recent call last):\r\n  File \"<stdin>\", line 1, in <module>\r\n  File \"sympy/matrices/matrices.py\", line 1112, in is_upper\r\n    for i in range(1, self.rows)\r\n  File \"sympy/matrices/matrices.py\", line 1113, in <genexpr>\r\n    for j in range(i))\r\n  File \"sympy/matrices/dense.py\", line 119, in __getitem__\r\n    return self.extract(i, j)\r\n  File \"sympy/matrices/matrices.py\", line 352, in extract\r\n    colsList = [a2idx(k, self.cols) for k in colsList]\r\n  File \"sympy/matrices/matrices.py\", line 5261, in a2idx\r\n    raise IndexError(\"Index out of range: a[%s]\" % (j,))\r\nIndexError: Index out of range: a[2]\r\n```\r\nThe code for is_upper() is\r\n```\r\n        return all(self[i, j].is_zero\r\n                   for i in range(1, self.rows)\r\n                   for j in range(i))\r\n```\r\nFor a 4x2 matrix, is_upper iterates over the indices:\r\n```\r\n>>> A = sympy.zeros(4, 2)\r\n>>> print tuple([i, j] for i in range(1, A.rows) for j in range(i))\r\n([1, 0], [2, 0], [2, 1], [3, 0], [3, 1], [3, 2])\r\n```\r\nThe attempt to index the (3,2) entry appears to be the source of the error. \n",
+  "hints": {
+    "failing_tests": [
+      "test_is_upper",
+      "test_hessenberg"
+    ],
+    "focus_files": [
+      "sympy/matrices/matrices.py"
+    ],
+    "test_patch": "diff --git a/sympy/matrices/tests/test_matrices.py b/sympy/matrices/tests/test_matrices.py\n--- a/sympy/matrices/tests/test_matrices.py\n+++ b/sympy/matrices/tests/test_matrices.py\n@@ -1225,6 +1225,8 @@ def test_is_upper():\n     assert a.is_upper is True\n     a = Matrix([[1], [2], [3]])\n     assert a.is_upper is False\n+    a = zeros(4, 2)\n+    assert a.is_upper is True\n \n \n def test_is_lower():\n@@ -1880,6 +1882,9 @@ def test_hessenberg():\n     A = Matrix([[3, 4, 1], [2, 4, 5], [3, 1, 2]])\n     assert not A.is_upper_hessenberg\n \n+    A = zeros(5, 2)\n+    assert A.is_upper_hessenberg\n+\n \n def test_cholesky():\n     raises(NonSquareMatrixError, lambda: Matrix((1, 2)).cholesky())\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_is_upper or test_hessenberg\"",
+    "test_full": "python -m pytest -x -q -k \"test_is_upper or test_hessenberg\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

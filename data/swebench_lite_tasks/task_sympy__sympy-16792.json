@@ -1,0 +1,30 @@
+{
+  "task_id": "sympy__sympy-16792",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "09786a173e7a0a488f46dd6000177c23e5d24eed",
+  "workdir": "/tmp/swebench_work/sympy__sympy-16792",
+  "issue_text": "autowrap with cython backend fails when array arguments do not appear in wrapped expr\nWhen using the cython backend for autowrap, it appears that the code is not correctly generated when the function in question has array arguments that do not appear in the final expression. A minimal counterexample is:\r\n\r\n```python\r\nfrom sympy.utilities.autowrap import autowrap\r\nfrom sympy import MatrixSymbol\r\nimport numpy as np\r\n\r\nx = MatrixSymbol('x', 2, 1)\r\nexpr = 1.0\r\nf = autowrap(expr, args=(x,), backend='cython')\r\n\r\nf(np.array([[1.0, 2.0]]))\r\n```\r\n\r\nThis should of course return `1.0` but instead fails with:\r\n```python\r\nTypeError: only size-1 arrays can be converted to Python scalars\r\n```\r\n\r\nA little inspection reveals that this is because the corresponding C function is generated with an incorrect signature:\r\n\r\n```C\r\ndouble autofunc(double x) {\r\n\r\n   double autofunc_result;\r\n   autofunc_result = 1.0;\r\n   return autofunc_result;\r\n\r\n}\r\n```\r\n\r\n(`x` should be `double *`, not `double` in this case)\r\n\r\nI've found that this error won't occur so long as `expr` depends at least in part on each argument. For example this slight modification of the above counterexample works perfectly:\r\n\r\n```python\r\nfrom sympy.utilities.autowrap import autowrap\r\nfrom sympy import MatrixSymbol\r\nimport numpy as np\r\n\r\nx = MatrixSymbol('x', 2, 1)\r\n# now output depends on x\r\nexpr = x[0,0]\r\nf = autowrap(expr, args=(x,), backend='cython')\r\n\r\n# returns 1.0 as expected, without failure\r\nf(np.array([[1.0, 2.0]]))\r\n```\r\n\r\nThis may seem like a silly issue (\"why even have `x` as an argument if it doesn't appear in the expression you're trying to evaluate?\"). But of course in interfacing with external libraries (e.g. for numerical integration), one often needs functions to have a pre-defined signature regardless of whether a given argument contributes to the output.\r\n\r\nI think I've identified the problem in `codegen` and will suggest a PR shortly.\n",
+  "hints": {
+    "failing_tests": [
+      "test_ccode_unused_array_arg"
+    ],
+    "focus_files": [
+      "sympy/utilities/codegen.py"
+    ],
+    "test_patch": "diff --git a/sympy/utilities/tests/test_codegen.py b/sympy/utilities/tests/test_codegen.py\n--- a/sympy/utilities/tests/test_codegen.py\n+++ b/sympy/utilities/tests/test_codegen.py\n@@ -582,6 +582,25 @@ def test_ccode_cse():\n     )\n     assert source == expected\n \n+def test_ccode_unused_array_arg():\n+    x = MatrixSymbol('x', 2, 1)\n+    # x does not appear in output\n+    name_expr = (\"test\", 1.0)\n+    generator = CCodeGen()\n+    result = codegen(name_expr, code_gen=generator, header=False, empty=False, argument_sequence=(x,))\n+    source = result[0][1]\n+    # note: x should appear as (double *)\n+    expected = (\n+        '#include \"test.h\"\\n'\n+        '#include <math.h>\\n'\n+        'double test(double *x) {\\n'\n+        '   double test_result;\\n'\n+        '   test_result = 1.0;\\n'\n+        '   return test_result;\\n'\n+        '}\\n'\n+    )\n+    assert source == expected\n+\n def test_empty_f_code():\n     code_gen = FCodeGen()\n     source = get_string(code_gen.dump_f95, [])\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_ccode_unused_array_arg\"",
+    "test_full": "python -m pytest -x -q -k \"test_ccode_unused_array_arg\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

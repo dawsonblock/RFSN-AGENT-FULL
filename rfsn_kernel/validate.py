@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Set, Tuple
 
 from rfsn_kernel.state import Proposal, SystemState
 
@@ -39,6 +39,27 @@ _BANNED_PATCH_PATTERNS = [
     r"os\.system\(",
 ]
 
+_DEP_MANIFESTS = {
+    "pyproject.toml",
+    "poetry.lock",
+    "requirements.txt",
+    "requirements-dev.txt",
+    "requirements.in",
+    "constraints.txt",
+    "setup.py",
+    "setup.cfg",
+    "pipfile",
+    "pipfile.lock",
+    "package.json",
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "go.mod",
+    "go.sum",
+    "cargo.toml",
+    "cargo.lock",
+}
+
 
 def _blocked_read_path(
     path: str,
@@ -62,6 +83,80 @@ def _blocked_read_path(
         if s and norm.endswith(s):
             return True
     return False
+
+
+def _extract_patch_touched_paths(patch_text: str) -> Set[str]:
+    touched: Set[str] = set()
+    for raw in (patch_text or "").splitlines():
+        line = raw.strip()
+        if line.startswith("diff --git "):
+            parts = line.split()
+            if len(parts) >= 4:
+                for part in (parts[2], parts[3]):
+                    p = part
+                    if p.startswith("a/") or p.startswith("b/"):
+                        p = p[2:]
+                    p = p.lstrip("/")
+                    if p and p != "/dev/null":
+                        touched.add(p)
+            continue
+        if line.startswith("+++ ") or line.startswith("--- "):
+            parts = line.split(maxsplit=1)
+            if len(parts) != 2:
+                continue
+            p = parts[1].strip()
+            if p in {"a/dev/null", "b/dev/null", "/dev/null"}:
+                continue
+            if p.startswith("a/") or p.startswith("b/"):
+                p = p[2:]
+            p = p.lstrip("/")
+            if p:
+                touched.add(p)
+    return touched
+
+
+def _diff_line_stats(patch_text: str) -> Tuple[int, int, int]:
+    added = 0
+    deleted = 0
+    total = 0
+    for line in (patch_text or "").splitlines():
+        if line.startswith(
+            ("diff --git ", "+++ ", "--- ", "@@"),
+        ):
+            continue
+        if line.startswith("+"):
+            added += 1
+            total += 1
+        elif line.startswith("-"):
+            deleted += 1
+            total += 1
+    return added, deleted, total
+
+
+def _is_test_path(path: str) -> bool:
+    p = (path or "").replace("\\", "/").lstrip("/")
+    return (
+        p.startswith("tests/")
+        or "/tests/" in f"/{p}"
+        or p.startswith("test/")
+        or p.endswith("_test.py")
+        or p.endswith("test.py")
+    )
+
+
+def _is_ci_path(path: str) -> bool:
+    p = (path or "").replace("\\", "/").lstrip("/")
+    return (
+        p.startswith(".github/workflows/")
+        or p.startswith("ci/")
+        or p.startswith("scripts/")
+    )
+
+
+def _is_dep_manifest(path: str) -> bool:
+    p = (path or "").replace("\\", "/").lstrip("/")
+    base = p.split("/")[-1].lower()
+    return base in _DEP_MANIFESTS
 
 
 def validate(
@@ -171,6 +266,99 @@ def validate(
                 "msg": "apply_patch requires non-empty patch",
             })
         else:
+            touched = _extract_patch_touched_paths(patch)
+            max_patch_files = int(
+                policy.get("max_patch_files", 0)
+                or 0
+            )
+            max_patch_total_lines = int(
+                policy.get("max_patch_total_lines", 0)
+                or 0
+            )
+            max_added_lines = int(
+                policy.get("max_added_lines", 0)
+                or 0
+            )
+            max_deleted_lines = int(
+                policy.get("max_deleted_lines", 0)
+                or 0
+            )
+
+            if (
+                max_patch_files > 0
+                and len(touched) > max_patch_files
+            ):
+                errors.append({
+                    "code": "PATCH_TOO_MANY_FILES",
+                    "msg": (
+                        f"Patch touches {len(touched)} files"
+                        f" > {max_patch_files}"
+                    ),
+                })
+
+            added, deleted, total = _diff_line_stats(patch)
+            if (
+                max_added_lines > 0
+                and added > max_added_lines
+            ):
+                errors.append({
+                    "code": "PATCH_TOO_MANY_ADDED",
+                    "msg": (
+                        f"Patch adds {added} lines"
+                        f" > {max_added_lines}"
+                    ),
+                })
+            if (
+                max_deleted_lines > 0
+                and deleted > max_deleted_lines
+            ):
+                errors.append({
+                    "code": "PATCH_TOO_MANY_DELETED",
+                    "msg": (
+                        f"Patch deletes {deleted} lines"
+                        f" > {max_deleted_lines}"
+                    ),
+                })
+            if (
+                max_patch_total_lines > 0
+                and total > max_patch_total_lines
+            ):
+                errors.append({
+                    "code": "PATCH_TOO_LARGE",
+                    "msg": (
+                        f"Patch changes {total} lines"
+                        f" > {max_patch_total_lines}"
+                    ),
+                })
+
+            if bool(policy.get("forbid_test_edits", False)):
+                if any(_is_test_path(p) for p in touched):
+                    errors.append({
+                        "code": "FORBID_TEST_EDITS",
+                        "msg": (
+                            "Patch touches test paths while"
+                            " forbid_test_edits=true"
+                        ),
+                    })
+            if bool(policy.get("forbid_ci_edits", False)):
+                if any(_is_ci_path(p) for p in touched):
+                    errors.append({
+                        "code": "FORBID_CI_EDITS",
+                        "msg": (
+                            "Patch touches CI paths while"
+                            " forbid_ci_edits=true"
+                        ),
+                    })
+            if bool(policy.get("forbid_dep_manifest_edits", False)):
+                if any(_is_dep_manifest(p) for p in touched):
+                    errors.append({
+                        "code": "FORBID_DEP_MANIFEST_EDITS",
+                        "msg": (
+                            "Patch touches dependency manifests while"
+                            " forbid_dep_manifest_edits=true"
+                        ),
+                    })
+
             # Content bans.
             plus_lines = [
                 line[1:] for line in patch.splitlines()
@@ -186,13 +374,21 @@ def validate(
 
     elif proposal.action == "run_tests":
         tmpl = proposal.params.get("template_id")
-        if tmpl and tmpl not in (
-            "pytest_targeted", "pytest_suite",
-            "ruff_check", "mypy_check",
-        ):
+        allowed = policy.get("allowed_test_templates")
+        if isinstance(allowed, list) and allowed:
+            allowed_set = set(str(x) for x in allowed)
+            if not tmpl or tmpl not in allowed_set:
+                errors.append({
+                    "code": "UNKNOWN_TEST_TEMPLATE",
+                    "msg": (
+                        "template_id must be in allowed_test_templates;"
+                        f" got {tmpl!r}"
+                    ),
+                })
+        elif not tmpl:
             errors.append({
-                "code": "UNKNOWN_TEST_TEMPLATE",
-                "msg": f"Unknown template: {tmpl}",
+                "code": "MISSING_TEST_TEMPLATE",
+                "msg": "run_tests requires template_id",
             })
 
     elif proposal.action in {

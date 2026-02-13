@@ -1,0 +1,30 @@
+{
+  "task_id": "pylint-dev__pylint-7114",
+  "repo_url": "https://github.com/pylint-dev/pylint.git",
+  "repo_ref": "397c1703e8ae6349d33f7b99f45b2ccaf581e666",
+  "workdir": "/tmp/swebench_work/pylint-dev__pylint-7114",
+  "issue_text": "Linting fails if module contains module of the same name\n### Steps to reproduce\r\n\r\nGiven multiple files:\r\n```\r\n.\r\n`-- a/\r\n    |-- a.py\r\n    `-- b.py\r\n```\r\nWhich are all empty, running `pylint a` fails:\r\n\r\n```\r\n$ pylint a\r\n************* Module a\r\na/__init__.py:1:0: F0010: error while code parsing: Unable to load file a/__init__.py:\r\n[Errno 2] No such file or directory: 'a/__init__.py' (parse-error)\r\n$\r\n```\r\n\r\nHowever, if I rename `a.py`, `pylint a` succeeds:\r\n\r\n```\r\n$ mv a/a.py a/c.py\r\n$ pylint a\r\n$\r\n```\r\nAlternatively, I can also `touch a/__init__.py`, but that shouldn't be necessary anymore.\r\n\r\n### Current behavior\r\n\r\nRunning `pylint a` if `a/a.py` is present fails while searching for an `__init__.py` file.\r\n\r\n### Expected behavior\r\n\r\nRunning `pylint a` if `a/a.py` is present should succeed.\r\n\r\n### pylint --version output\r\n\r\nResult of `pylint --version` output:\r\n\r\n```\r\npylint 3.0.0a3\r\nastroid 2.5.6\r\nPython 3.8.5 (default, Jan 27 2021, 15:41:15) \r\n[GCC 9.3.0]\r\n```\r\n\r\n### Additional info\r\n\r\nThis also has some side-effects in module resolution. For example, if I create another file `r.py`:\r\n\r\n```\r\n.\r\n|-- a\r\n|   |-- a.py\r\n|   `-- b.py\r\n`-- r.py\r\n```\r\n\r\nWith the content:\r\n\r\n```\r\nfrom a import b\r\n```\r\n\r\nRunning `pylint -E r` will run fine, but `pylint -E r a` will fail. Not just for module a, but for module r as well.\r\n\r\n```\r\n************* Module r\r\nr.py:1:0: E0611: No name 'b' in module 'a' (no-name-in-module)\r\n************* Module a\r\na/__init__.py:1:0: F0010: error while code parsing: Unable to load file a/__init__.py:\r\n[Errno 2] No such file or directory: 'a/__init__.py' (parse-error)\r\n```\r\n\r\nAgain, if I rename `a.py` to `c.py`, `pylint -E r a` will work perfectly.\n",
+  "hints": {
+    "failing_tests": [
+      "tests/lint/unittest_lint.py::test_identically_named_nested_module"
+    ],
+    "focus_files": [
+      "pylint/lint/expand_modules.py"
+    ],
+    "test_patch": "diff --git a/tests/checkers/unittest_imports.py b/tests/checkers/unittest_imports.py\n--- a/tests/checkers/unittest_imports.py\n+++ b/tests/checkers/unittest_imports.py\n@@ -7,6 +7,7 @@\n import os\n \n import astroid\n+import pytest\n \n from pylint import epylint as lint\n from pylint.checkers import imports\n@@ -40,6 +41,9 @@ def test_relative_beyond_top_level(self) -> None:\n             self.checker.visit_importfrom(module.body[2].body[0])\n \n     @staticmethod\n+    @pytest.mark.xfail(\n+        reason=\"epylint manipulates cwd; these tests should not be using epylint\"\n+    )\n     def test_relative_beyond_top_level_two() -> None:\n         output, errors = lint.py_run(\n             f\"{os.path.join(REGR_DATA, 'beyond_top_two')} -d all -e relative-beyond-top-level\",\ndiff --git a/tests/lint/unittest_lint.py b/tests/lint/unittest_lint.py\n--- a/tests/lint/unittest_lint.py\n+++ b/tests/lint/unittest_lint.py\n@@ -942,3 +942,12 @@ def test_lint_namespace_package_under_dir(initialized_linter: PyLinter) -> None:\n         create_files([\"outer/namespace/__init__.py\", \"outer/namespace/module.py\"])\n         linter.check([\"outer.namespace\"])\n     assert not linter.stats.by_msg\n+\n+\n+def test_identically_named_nested_module(initialized_linter: PyLinter) -> None:\n+    with tempdir():\n+        create_files([\"identical/identical.py\"])\n+        with open(\"identical/identical.py\", \"w\", encoding=\"utf-8\") as f:\n+            f.write(\"import imp\")\n+        initialized_linter.check([\"identical\"])\n+    assert initialized_linter.stats.by_msg[\"deprecated-module\"] == 1\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[testutils]"
+    ],
+    "test_quick": "python -m pytest -x -q tests/lint/unittest_lint.py::test_identically_named_nested_module",
+    "test_full": "python -m pytest -x -q tests/lint/unittest_lint.py::test_identically_named_nested_module"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-12286",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "979f61abd322507aafced9627702362e541ec34e",
+  "workdir": "/tmp/swebench_work/django__django-12286",
+  "issue_text": "translation.E004 shouldn't be raised on sublanguages when a base language is available.\nDescription\n\t\nAccording to Django documentation:\nIf a base language is available but the sublanguage specified is not, Django uses the base language. For example, if a user specifies de-at (Austrian German) but Django only has de available, Django uses de.\nHowever, when using Django 3.0.2, if my settings.py has\nLANGUAGE_CODE = \"de-at\"\nI get this error message:\nSystemCheckError: System check identified some issues:\nERRORS:\n?: (translation.E004) You have provided a value for the LANGUAGE_CODE setting that is not in the LANGUAGES setting.\nIf using\nLANGUAGE_CODE = \"es-ar\"\nDjango works fine (es-ar is one of the translations provided out of the box).\n",
+  "hints": {
+    "failing_tests": [
+      "test_valid_variant_consistent_language_settings (check_framework.test_translation.TranslationCheckTests)"
+    ],
+    "focus_files": [
+      "django/core/checks/translation.py"
+    ],
+    "test_patch": "diff --git a/tests/check_framework/test_translation.py b/tests/check_framework/test_translation.py\n--- a/tests/check_framework/test_translation.py\n+++ b/tests/check_framework/test_translation.py\n@@ -3,7 +3,7 @@\n     check_language_settings_consistent, check_setting_language_code,\n     check_setting_languages, check_setting_languages_bidi,\n )\n-from django.test import SimpleTestCase\n+from django.test import SimpleTestCase, override_settings\n \n \n class TranslationCheckTests(SimpleTestCase):\n@@ -75,12 +75,36 @@ def test_invalid_languages_bidi(self):\n                     Error(msg % tag, id='translation.E003'),\n                 ])\n \n+    @override_settings(USE_I18N=True, LANGUAGES=[('en', 'English')])\n     def test_inconsistent_language_settings(self):\n         msg = (\n             'You have provided a value for the LANGUAGE_CODE setting that is '\n             'not in the LANGUAGES setting.'\n         )\n-        with self.settings(LANGUAGE_CODE='fr', LANGUAGES=[('en', 'English')]):\n-            self.assertEqual(check_language_settings_consistent(None), [\n-                Error(msg, id='translation.E004'),\n-            ])\n+        for tag in ['fr', 'fr-CA', 'fr-357']:\n+            with self.subTest(tag), self.settings(LANGUAGE_CODE=tag):\n+                self.assertEqual(check_language_settings_consistent(None), [\n+                    Error(msg, id='translation.E004'),\n+                ])\n+\n+    @override_settings(\n+        USE_I18N=True,\n+        LANGUAGES=[\n+            ('de', 'German'),\n+            ('es', 'Spanish'),\n+            ('fr', 'French'),\n+            ('ca', 'Catalan'),\n+        ],\n+    )\n+    def test_valid_variant_consistent_language_settings(self):\n+        tests = [\n+            # language + region.\n+            'fr-CA',\n+            'es-419',\n+            'de-at',\n+            # language + region + variant.\n+            'ca-ES-valencia',\n+        ]\n+        for tag in tests:\n+            with self.subTest(tag), self.settings(LANGUAGE_CODE=tag):\n+                self.assertEqual(check_language_settings_consistent(None), [])\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q check_framework/test_translation.py",
+    "test_full": "python -m pytest -x -q check_framework/test_translation.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "task_id": "sympy__sympy-14774",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "8fc63c2d71752389a44367b8ef4aba8a91af6a45",
+  "workdir": "/tmp/swebench_work/sympy__sympy-14774",
+  "issue_text": "Latex printer does not support full inverse trig function names for acsc and asec\nFor example\r\n`latex(asin(x), inv_trig_style=\"full\")` works as expected returning `'\\\\arcsin{\\\\left (x \\\\right )}'`\r\nBut `latex(acsc(x), inv_trig_style=\"full\")` gives `'\\\\operatorname{acsc}{\\\\left (x \\\\right )}'` instead of `'\\\\operatorname{arccsc}{\\\\left (x \\\\right )}'`\r\n\r\nA fix seems to be to change line 743 of sympy/printing/latex.py from\r\n`inv_trig_table = [\"asin\", \"acos\", \"atan\", \"acot\"]` to\r\n`inv_trig_table = [\"asin\", \"acos\", \"atan\", \"acsc\", \"asec\", \"acot\"]`\n",
+  "hints": {
+    "failing_tests": [
+      "test_latex_functions"
+    ],
+    "focus_files": [
+      "sympy/printing/latex.py"
+    ],
+    "test_patch": "diff --git a/sympy/printing/tests/test_latex.py b/sympy/printing/tests/test_latex.py\n--- a/sympy/printing/tests/test_latex.py\n+++ b/sympy/printing/tests/test_latex.py\n@@ -6,7 +6,7 @@\n     Lambda, LaplaceTransform, Limit, Matrix, Max, MellinTransform, Min, Mul,\n     Order, Piecewise, Poly, ring, field, ZZ, Pow, Product, Range, Rational,\n     RisingFactorial, rootof, RootSum, S, Shi, Si, SineTransform, Subs,\n-    Sum, Symbol, ImageSet, Tuple, Union, Ynm, Znm, arg, asin, Mod,\n+    Sum, Symbol, ImageSet, Tuple, Union, Ynm, Znm, arg, asin, acsc, Mod,\n     assoc_laguerre, assoc_legendre, beta, binomial, catalan, ceiling, Complement,\n     chebyshevt, chebyshevu, conjugate, cot, coth, diff, dirichlet_eta, euler,\n     exp, expint, factorial, factorial2, floor, gamma, gegenbauer, hermite,\n@@ -305,6 +305,8 @@ def test_latex_functions():\n     assert latex(asin(x**2), inv_trig_style=\"power\",\n                  fold_func_brackets=True) == \\\n         r\"\\sin^{-1} {x^{2}}\"\n+    assert latex(acsc(x), inv_trig_style=\"full\") == \\\n+        r\"\\operatorname{arccsc}{\\left (x \\right )}\"\n \n     assert latex(factorial(k)) == r\"k!\"\n     assert latex(factorial(-k)) == r\"\\left(- k\\right)!\"\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_latex_functions\"",
+    "test_full": "python -m pytest -x -q -k \"test_latex_functions\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "task_id": "sympy__sympy-13895",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "4da0b64558e9551a11a99bccc63557ba34f50c58",
+  "workdir": "/tmp/swebench_work/sympy__sympy-13895",
+  "issue_text": "(-x/4 - S(1)/12)**x - 1 simplifies to an inequivalent expression\n    >>> from sympy import *\r\n    >>> x = Symbol('x')\r\n    >>> e = (-x/4 - S(1)/12)**x - 1\r\n    >>> e\r\n    (-x/4 - 1/12)**x - 1\r\n    >>> f = simplify(e)\r\n    >>> f\r\n    12**(-x)*(-12**x + (-3*x - 1)**x)\r\n    >>> a = S(9)/5\r\n    >>> simplify(e.subs(x,a))\r\n    -1 - 32*15**(1/5)*2**(2/5)/225\r\n    >>> simplify(f.subs(x,a))\r\n    -1 - 32*(-1)**(4/5)*60**(1/5)/225\r\n    >>> N(e.subs(x,a))\r\n    -1.32255049319339\r\n    >>> N(f.subs(x,a))\r\n    -0.739051169462523 - 0.189590423018741*I\r\n\r\n\n",
+  "hints": {
+    "failing_tests": [
+      "test_powers_Integer",
+      "test_issue_13890"
+    ],
+    "focus_files": [
+      "sympy/core/numbers.py"
+    ],
+    "test_patch": "diff --git a/sympy/core/tests/test_numbers.py b/sympy/core/tests/test_numbers.py\n--- a/sympy/core/tests/test_numbers.py\n+++ b/sympy/core/tests/test_numbers.py\n@@ -1021,6 +1021,12 @@ def test_powers_Integer():\n     assert (-3) ** Rational(-2, 3) == \\\n         -(-1)**Rational(1, 3)*3**Rational(1, 3)/3\n \n+    # negative base and rational power with some simplification\n+    assert (-8) ** Rational(2, 5) == \\\n+        2*(-1)**Rational(2, 5)*2**Rational(1, 5)\n+    assert (-4) ** Rational(9, 5) == \\\n+        -8*(-1)**Rational(4, 5)*2**Rational(3, 5)\n+\n     assert S(1234).factors() == {617: 1, 2: 1}\n     assert Rational(2*3, 3*5*7).factors() == {2: 1, 5: -1, 7: -1}\n \n@@ -1194,6 +1200,14 @@ def test_issue_3449():\n     assert sqrt(x - 1).subs(x, 5) == 2\n \n \n+def test_issue_13890():\n+    x = Symbol(\"x\")\n+    e = (-x/4 - S(1)/12)**x - 1\n+    f = simplify(e)\n+    a = S(9)/5\n+    assert abs(e.subs(x,a).evalf() - f.subs(x,a).evalf()) < 1e-15\n+\n+\n def test_Integer_factors():\n     def F(i):\n         return Integer(i).factors()\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_powers_Integer or test_issue_13890\"",
+    "test_full": "python -m pytest -x -q -k \"test_powers_Integer or test_issue_13890\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

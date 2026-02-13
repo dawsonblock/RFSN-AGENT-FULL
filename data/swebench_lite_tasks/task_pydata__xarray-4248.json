@@ -1,0 +1,30 @@
+{
+  "task_id": "pydata__xarray-4248",
+  "repo_url": "https://github.com/pydata/xarray.git",
+  "repo_ref": "98dc1f4ea18738492e074e9e51ddfed5cd30ab94",
+  "workdir": "/tmp/swebench_work/pydata__xarray-4248",
+  "issue_text": "Feature request: show units in dataset overview\nHere's a hypothetical dataset:\r\n\r\n```\r\n<xarray.Dataset>\r\nDimensions:  (time: 3, x: 988, y: 822)\r\nCoordinates:\r\n  * x         (x) float64 ...\r\n  * y         (y) float64 ...\r\n  * time      (time) datetime64[ns] ...\r\nData variables:\r\n    rainfall  (time, y, x) float32 ...\r\n    max_temp  (time, y, x) float32 ...\r\n```\r\n\r\nIt would be really nice if the units of the coordinates and of the data variables were shown in the `Dataset` repr, for example as:\r\n\r\n```\r\n<xarray.Dataset>\r\nDimensions:  (time: 3, x: 988, y: 822)\r\nCoordinates:\r\n  * x, in metres         (x)            float64 ...\r\n  * y, in metres         (y)            float64 ...\r\n  * time                 (time)         datetime64[ns] ...\r\nData variables:\r\n    rainfall, in mm      (time, y, x)   float32 ...\r\n    max_temp, in deg C   (time, y, x)   float32 ...\r\n```\n",
+  "hints": {
+    "failing_tests": [
+      "xarray/tests/test_formatting.py::test_inline_variable_array_repr_custom_repr"
+    ],
+    "focus_files": [
+      "xarray/core/formatting.py"
+    ],
+    "test_patch": "diff --git a/xarray/tests/test_formatting.py b/xarray/tests/test_formatting.py\n--- a/xarray/tests/test_formatting.py\n+++ b/xarray/tests/test_formatting.py\n@@ -7,6 +7,7 @@\n \n import xarray as xr\n from xarray.core import formatting\n+from xarray.core.npcompat import IS_NEP18_ACTIVE\n \n from . import raises_regex\n \n@@ -391,6 +392,44 @@ def test_array_repr(self):\n         assert actual == expected\n \n \n+@pytest.mark.skipif(not IS_NEP18_ACTIVE, reason=\"requires __array_function__\")\n+def test_inline_variable_array_repr_custom_repr():\n+    class CustomArray:\n+        def __init__(self, value, attr):\n+            self.value = value\n+            self.attr = attr\n+\n+        def _repr_inline_(self, width):\n+            formatted = f\"({self.attr}) {self.value}\"\n+            if len(formatted) > width:\n+                formatted = f\"({self.attr}) ...\"\n+\n+            return formatted\n+\n+        def __array_function__(self, *args, **kwargs):\n+            return NotImplemented\n+\n+        @property\n+        def shape(self):\n+            return self.value.shape\n+\n+        @property\n+        def dtype(self):\n+            return self.value.dtype\n+\n+        @property\n+        def ndim(self):\n+            return self.value.ndim\n+\n+    value = CustomArray(np.array([20, 40]), \"m\")\n+    variable = xr.Variable(\"x\", value)\n+\n+    max_width = 10\n+    actual = formatting.inline_variable_array_repr(variable, max_width=10)\n+\n+    assert actual == value._repr_inline_(max_width)\n+\n+\n def test_set_numpy_options():\n     original_options = np.get_printoptions()\n     with formatting.set_numpy_options(threshold=10):\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q xarray/tests/test_formatting.py::test_inline_variable_array_repr_custom_repr",
+    "test_full": "python -m pytest -x -q xarray/tests/test_formatting.py::test_inline_variable_array_repr_custom_repr"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

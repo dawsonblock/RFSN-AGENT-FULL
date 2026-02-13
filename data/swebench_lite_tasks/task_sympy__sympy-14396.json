@@ -1,0 +1,30 @@
+{
+  "task_id": "sympy__sympy-14396",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "f35ad6411f86a15dd78db39c29d1e5291f66f9b5",
+  "workdir": "/tmp/swebench_work/sympy__sympy-14396",
+  "issue_text": "Poly(domain='RR[y,z]') doesn't work\n``` py\nIn [14]: Poly(1.2*x*y*z, x)\nOut[14]: Poly(1.2*y*z*x, x, domain='RR[y,z]')\n\nIn [15]: Poly(1.2*x*y*z, x, domain='RR[y,z]')\n---------------------------------------------------------------------------\nOptionError                               Traceback (most recent call last)\n<ipython-input-15-d83389519ae1> in <module>()\n----> 1 Poly(1.2*x*y*z, x, domain='RR[y,z]')\n\n/Users/aaronmeurer/Documents/Python/sympy/sympy-scratch/sympy/polys/polytools.py in __new__(cls, rep, *gens, **args)\n     69     def __new__(cls, rep, *gens, **args):\n     70         \"\"\"Create a new polynomial instance out of something useful. \"\"\"\n---> 71         opt = options.build_options(gens, args)\n     72\n     73         if 'order' in opt:\n\n/Users/aaronmeurer/Documents/Python/sympy/sympy-scratch/sympy/polys/polyoptions.py in build_options(gens, args)\n    718\n    719     if len(args) != 1 or 'opt' not in args or gens:\n--> 720         return Options(gens, args)\n    721     else:\n    722         return args['opt']\n\n/Users/aaronmeurer/Documents/Python/sympy/sympy-scratch/sympy/polys/polyoptions.py in __init__(self, gens, args, flags, strict)\n    151                     self[option] = cls.preprocess(value)\n    152\n--> 153         preprocess_options(args)\n    154\n    155         for key, value in dict(defaults).items():\n\n/Users/aaronmeurer/Documents/Python/sympy/sympy-scratch/sympy/polys/polyoptions.py in preprocess_options(args)\n    149\n    150                 if value is not None:\n--> 151                     self[option] = cls.preprocess(value)\n    152\n    153         preprocess_options(args)\n\n/Users/aaronmeurer/Documents/Python/sympy/sympy-scratch/sympy/polys/polyoptions.py in preprocess(cls, domain)\n    480                 return sympy.polys.domains.QQ.algebraic_field(*gens)\n    481\n--> 482         raise OptionError('expected a valid domain specification, got %s' % domain)\n    483\n    484     @classmethod\n\nOptionError: expected a valid domain specification, got RR[y,z]\n```\n\nAlso, the wording of error message could be improved\n\n",
+  "hints": {
+    "failing_tests": [
+      "test_Domain_preprocess"
+    ],
+    "focus_files": [
+      "sympy/polys/polyoptions.py"
+    ],
+    "test_patch": "diff --git a/sympy/polys/tests/test_polyoptions.py b/sympy/polys/tests/test_polyoptions.py\n--- a/sympy/polys/tests/test_polyoptions.py\n+++ b/sympy/polys/tests/test_polyoptions.py\n@@ -6,7 +6,7 @@\n     Frac, Formal, Polys, Include, All, Gen, Symbols, Method)\n \n from sympy.polys.orderings import lex\n-from sympy.polys.domains import FF, GF, ZZ, QQ, EX\n+from sympy.polys.domains import FF, GF, ZZ, QQ, RR, CC, EX\n \n from sympy.polys.polyerrors import OptionError, GeneratorsError\n \n@@ -176,15 +176,23 @@ def test_Domain_preprocess():\n \n     assert Domain.preprocess('Z[x]') == ZZ[x]\n     assert Domain.preprocess('Q[x]') == QQ[x]\n+    assert Domain.preprocess('R[x]') == RR[x]\n+    assert Domain.preprocess('C[x]') == CC[x]\n \n     assert Domain.preprocess('ZZ[x]') == ZZ[x]\n     assert Domain.preprocess('QQ[x]') == QQ[x]\n+    assert Domain.preprocess('RR[x]') == RR[x]\n+    assert Domain.preprocess('CC[x]') == CC[x]\n \n     assert Domain.preprocess('Z[x,y]') == ZZ[x, y]\n     assert Domain.preprocess('Q[x,y]') == QQ[x, y]\n+    assert Domain.preprocess('R[x,y]') == RR[x, y]\n+    assert Domain.preprocess('C[x,y]') == CC[x, y]\n \n     assert Domain.preprocess('ZZ[x,y]') == ZZ[x, y]\n     assert Domain.preprocess('QQ[x,y]') == QQ[x, y]\n+    assert Domain.preprocess('RR[x,y]') == RR[x, y]\n+    assert Domain.preprocess('CC[x,y]') == CC[x, y]\n \n     raises(OptionError, lambda: Domain.preprocess('Z()'))\n \n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_Domain_preprocess\"",
+    "test_full": "python -m pytest -x -q -k \"test_Domain_preprocess\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

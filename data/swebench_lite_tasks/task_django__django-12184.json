@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-12184",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "5d674eac871a306405b0fbbaeb17bbeba9c68bf3",
+  "workdir": "/tmp/swebench_work/django__django-12184",
+  "issue_text": "Optional URL params crash some view functions.\nDescription\n\t\nMy use case, running fine with Django until 2.2:\nURLConf:\nurlpatterns += [\n\t...\n\tre_path(r'^module/(?P<format>(html|json|xml))?/?$', views.modules, name='modules'),\n]\nView:\ndef modules(request, format='html'):\n\t...\n\treturn render(...)\nWith Django 3.0, this is now producing an error:\nTraceback (most recent call last):\n File \"/l10n/venv/lib/python3.6/site-packages/django/core/handlers/exception.py\", line 34, in inner\n\tresponse = get_response(request)\n File \"/l10n/venv/lib/python3.6/site-packages/django/core/handlers/base.py\", line 115, in _get_response\n\tresponse = self.process_exception_by_middleware(e, request)\n File \"/l10n/venv/lib/python3.6/site-packages/django/core/handlers/base.py\", line 113, in _get_response\n\tresponse = wrapped_callback(request, *callback_args, **callback_kwargs)\nException Type: TypeError at /module/\nException Value: modules() takes from 1 to 2 positional arguments but 3 were given\n",
+  "hints": {
+    "failing_tests": [
+      "test_re_path_with_missing_optional_parameter (urlpatterns.tests.SimplifiedURLTests)"
+    ],
+    "focus_files": [
+      "django/urls/resolvers.py"
+    ],
+    "test_patch": "diff --git a/tests/urlpatterns/path_urls.py b/tests/urlpatterns/path_urls.py\n--- a/tests/urlpatterns/path_urls.py\n+++ b/tests/urlpatterns/path_urls.py\n@@ -12,6 +12,11 @@\n     path('included_urls/', include('urlpatterns.included_urls')),\n     re_path(r'^regex/(?P<pk>[0-9]+)/$', views.empty_view, name='regex'),\n     re_path(r'^regex_optional/(?P<arg1>\\d+)/(?:(?P<arg2>\\d+)/)?', views.empty_view, name='regex_optional'),\n+    re_path(\n+        r'^regex_only_optional/(?:(?P<arg1>\\d+)/)?',\n+        views.empty_view,\n+        name='regex_only_optional',\n+    ),\n     path('', include('urlpatterns.more_urls')),\n     path('<lang>/<path:url>/', views.empty_view, name='lang-and-path'),\n ]\ndiff --git a/tests/urlpatterns/tests.py b/tests/urlpatterns/tests.py\n--- a/tests/urlpatterns/tests.py\n+++ b/tests/urlpatterns/tests.py\n@@ -68,6 +68,16 @@ def test_re_path_with_optional_parameter(self):\n                     r'^regex_optional/(?P<arg1>\\d+)/(?:(?P<arg2>\\d+)/)?',\n                 )\n \n+    def test_re_path_with_missing_optional_parameter(self):\n+        match = resolve('/regex_only_optional/')\n+        self.assertEqual(match.url_name, 'regex_only_optional')\n+        self.assertEqual(match.kwargs, {})\n+        self.assertEqual(match.args, ())\n+        self.assertEqual(\n+            match.route,\n+            r'^regex_only_optional/(?:(?P<arg1>\\d+)/)?',\n+        )\n+\n     def test_path_lookup_with_inclusion(self):\n         match = resolve('/included_urls/extra/something/')\n         self.assertEqual(match.url_name, 'inner-extra')\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q urlpatterns/tests.py",
+    "test_full": "python -m pytest -x -q urlpatterns/tests.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

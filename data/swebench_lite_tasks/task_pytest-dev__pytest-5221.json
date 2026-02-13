@@ -1,0 +1,29 @@
+{
+  "task_id": "pytest-dev__pytest-5221",
+  "repo_url": "https://github.com/pytest-dev/pytest.git",
+  "repo_ref": "4a2fdce62b73944030cff9b3e52862868ca9584d",
+  "workdir": "/tmp/swebench_work/pytest-dev__pytest-5221",
+  "issue_text": "Display fixture scope with `pytest --fixtures`\nIt would be useful to show fixture scopes with `pytest --fixtures`; currently the only way to learn the scope of a fixture is look at the docs (when that is documented) or at the source code.\n",
+  "hints": {
+    "failing_tests": [
+      "testing/python/fixtures.py::TestShowFixtures::test_show_fixtures",
+      "testing/python/fixtures.py::TestShowFixtures::test_show_fixtures_verbose"
+    ],
+    "focus_files": [],
+    "test_patch": "diff --git a/testing/python/fixtures.py b/testing/python/fixtures.py\n--- a/testing/python/fixtures.py\n+++ b/testing/python/fixtures.py\n@@ -3037,11 +3037,25 @@ def test_funcarg_compat(self, testdir):\n \n     def test_show_fixtures(self, testdir):\n         result = testdir.runpytest(\"--fixtures\")\n-        result.stdout.fnmatch_lines([\"*tmpdir*\", \"*temporary directory*\"])\n+        result.stdout.fnmatch_lines(\n+            [\n+                \"tmpdir_factory [[]session scope[]]\",\n+                \"*for the test session*\",\n+                \"tmpdir\",\n+                \"*temporary directory*\",\n+            ]\n+        )\n \n     def test_show_fixtures_verbose(self, testdir):\n         result = testdir.runpytest(\"--fixtures\", \"-v\")\n-        result.stdout.fnmatch_lines([\"*tmpdir*--*tmpdir.py*\", \"*temporary directory*\"])\n+        result.stdout.fnmatch_lines(\n+            [\n+                \"tmpdir_factory [[]session scope[]] -- *tmpdir.py*\",\n+                \"*for the test session*\",\n+                \"tmpdir -- *tmpdir.py*\",\n+                \"*temporary directory*\",\n+            ]\n+        )\n \n     def test_show_fixtures_testmodule(self, testdir):\n         p = testdir.makepyfile(\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[testing]"
+    ],
+    "test_quick": "python -m pytest -x -q testing/python/fixtures.py::TestShowFixtures::test_show_fixtures testing/python/fixtures.py::TestShowFixtures::test_show_fixtures_verbose",
+    "test_full": "python -m pytest -x -q testing/python/fixtures.py::TestShowFixtures::test_show_fixtures testing/python/fixtures.py::TestShowFixtures::test_show_fixtures_verbose"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "task_id": "django__django-11564",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "580e644f24f1c5ae5b94784fb73a9953a178fd26",
+  "workdir": "/tmp/swebench_work/django__django-11564",
+  "issue_text": "Add support for SCRIPT_NAME in STATIC_URL and MEDIA_URL\nDescription\n\t \n\t\t(last modified by Rostyslav Bryzgunov)\n\t \nBy default, {% static '...' %} tag just appends STATIC_URL in the path. When running on sub-path, using SCRIPT_NAME WSGI param, it results in incorrect static URL - it doesn't prepend SCRIPT_NAME prefix.\nThis problem can be solved with prepending SCRIPT_NAME to STATIC_URL in settings.py but that doesn't work when SCRIPT_NAME is a dynamic value.\nThis can be easily added into default Django static tag and django.contrib.staticfiles tag as following:\ndef render(self, context):\n\turl = self.url(context)\n\t# Updating url here with request.META['SCRIPT_NAME'] \n\tif self.varname is None:\n\t\treturn url\n\tcontext[self.varname] = url\n\t\treturn ''\nOn more research I found that FileSystemStorage and StaticFilesStorage ignores SCRIPT_NAME as well. \nWe might have to do a lot of changes but I think it's worth the efforts.\n",
+  "hints": {
+    "failing_tests": [
+      "test_add_script_name_prefix (settings_tests.tests.MediaURLStaticURLPrefixTest)",
+      "test_not_prefixed (settings_tests.tests.MediaURLStaticURLPrefixTest)"
+    ],
+    "focus_files": [
+      "django/conf/__init__.py"
+    ],
+    "test_patch": "diff --git a/tests/file_storage/tests.py b/tests/file_storage/tests.py\n--- a/tests/file_storage/tests.py\n+++ b/tests/file_storage/tests.py\n@@ -521,7 +521,7 @@ def test_setting_changed(self):\n         defaults_storage = self.storage_class()\n         settings = {\n             'MEDIA_ROOT': 'overridden_media_root',\n-            'MEDIA_URL': 'overridden_media_url/',\n+            'MEDIA_URL': '/overridden_media_url/',\n             'FILE_UPLOAD_PERMISSIONS': 0o333,\n             'FILE_UPLOAD_DIRECTORY_PERMISSIONS': 0o333,\n         }\ndiff --git a/tests/settings_tests/tests.py b/tests/settings_tests/tests.py\n--- a/tests/settings_tests/tests.py\n+++ b/tests/settings_tests/tests.py\n@@ -12,6 +12,7 @@\n     override_settings, signals,\n )\n from django.test.utils import requires_tz_support\n+from django.urls import clear_script_prefix, set_script_prefix\n \n \n @modify_settings(ITEMS={\n@@ -567,3 +568,51 @@ def decorated_function():\n         signals.setting_changed.disconnect(self.receiver)\n         # This call shouldn't raise any errors.\n         decorated_function()\n+\n+\n+class MediaURLStaticURLPrefixTest(SimpleTestCase):\n+    def set_script_name(self, val):\n+        clear_script_prefix()\n+        if val is not None:\n+            set_script_prefix(val)\n+\n+    def test_not_prefixed(self):\n+        # Don't add SCRIPT_NAME prefix to valid URLs, absolute paths or None.\n+        tests = (\n+            '/path/',\n+            'http://myhost.com/path/',\n+            None,\n+        )\n+        for setting in ('MEDIA_URL', 'STATIC_URL'):\n+            for path in tests:\n+                new_settings = {setting: path}\n+                with self.settings(**new_settings):\n+                    for script_name in ['/somesubpath', '/somesubpath/', '/', '', None]:\n+                        with self.subTest(script_name=script_name, **new_settings):\n+                            try:\n+                                self.set_script_name(script_name)\n+                                self.assertEqual(getattr(settings, setting), path)\n+                            finally:\n+                                clear_script_prefix()\n+\n+    def test_add_script_name_prefix(self):\n+        tests = (\n+            # Relative paths.\n+            ('/somesubpath', 'path/', '/somesubpath/path/'),\n+            ('/somesubpath/', 'path/', '/somesubpath/path/'),\n+            ('/', 'path/', '/path/'),\n+            # Invalid URLs.\n+            ('/somesubpath/', 'htp://myhost.com/path/', '/somesubpath/htp://myhost.com/path/'),\n+            # Blank settings.\n+            ('/somesubpath/', '', '/somesubpath/'),\n+        )\n+        for setting in ('MEDIA_URL', 'STATIC_URL'):\n+            for script_name, path, expected_path in tests:\n+                new_settings = {setting: path}\n+                with self.settings(**new_settings):\n+                    with self.subTest(script_name=script_name, **new_settings):\n+                        try:\n+                            self.set_script_name(script_name)\n+                            self.assertEqual(getattr(settings, setting), expected_path)\n+                        finally:\n+                            clear_script_prefix()\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q settings_tests/tests.py",
+    "test_full": "python -m pytest -x -q settings_tests/tests.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

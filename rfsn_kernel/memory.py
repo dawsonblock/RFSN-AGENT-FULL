@@ -35,19 +35,20 @@ class MemoryEntry:
     """One memory entry with provenance."""
 
     content: str
-    source: str               # where this came from
-    entry_type: str           # "action_outcome", "strategy_result", "context"
-    provenance_hash: str = "" # hash chain to origin
+    source: str  # where this came from
+    entry_type: str  # "action_outcome", "strategy_result", "context"
+    provenance_hash: str = ""  # hash chain to origin
     quality_score: float = 0.0
     risk_score: float = 0.0
     contradiction_score: float = 0.0
     access_count: int = 0
-    success_count: int = 0    # how often this led to success
-    failure_count: int = 0    # how often this led to failure
+    success_count: int = 0  # how often this led to success
+    failure_count: int = 0  # how often this led to failure
     created_at: float = 0.0
     last_accessed: float = 0.0
     version: int = 0
-    status: str = "active"    # active, quarantined, decayed, core
+    status: str = "active"  # active, quarantined, decayed, core
+    _word_cache: set = field(default_factory=set, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.created_at:
@@ -58,6 +59,13 @@ class MemoryEntry:
             self.provenance_hash = hashlib.sha256(
                 blob.encode("utf-8"),
             ).hexdigest()[:16]
+
+    @property
+    def word_set(self) -> set:
+        """Lazily cached word set for conflict/relevance checks."""
+        if not self._word_cache:
+            self._word_cache = set(self.content.lower().split())
+        return self._word_cache
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -113,6 +121,8 @@ class MemoryImmuneSystem:
         self._core_axioms: Dict[str, MemoryEntry] = {}
         self._quarantine: Dict[str, MemoryEntry] = {}
         self._version = 0
+        self._unsaved: list[MemoryEntry] = []  # entries not yet flushed
+        self._needs_full_save = False  # set on decay/eviction
 
     @property
     def memory_version(self) -> str:
@@ -146,7 +156,8 @@ class MemoryImmuneSystem:
             return AdmissionResult(
                 decision=MemoryDecision.REJECT,
                 reason=f"Risk too high: {r:.2f} > {self.risk_max}",
-                quality_score=q, risk_score=r,
+                quality_score=q,
+                risk_score=r,
                 contradiction_score=c,
             )
 
@@ -158,7 +169,8 @@ class MemoryImmuneSystem:
             return AdmissionResult(
                 decision=MemoryDecision.QUARANTINE,
                 reason=f"Contradiction detected: {c:.2f} > {self.contradiction_max}",
-                quality_score=q, risk_score=r,
+                quality_score=q,
+                risk_score=r,
                 contradiction_score=c,
             )
 
@@ -167,7 +179,8 @@ class MemoryImmuneSystem:
             return AdmissionResult(
                 decision=MemoryDecision.REJECT,
                 reason=f"Quality too low: {q:.2f} < {self.quality_min}",
-                quality_score=q, risk_score=r,
+                quality_score=q,
+                risk_score=r,
                 contradiction_score=c,
             )
 
@@ -179,12 +192,14 @@ class MemoryImmuneSystem:
         entry.status = "active"
         entry.version = self._version
         self._store[entry.provenance_hash] = entry
+        self._unsaved.append(entry)
         self._version += 1
 
         return AdmissionResult(
             decision=MemoryDecision.ADMIT,
             reason="admitted",
-            quality_score=q, risk_score=r,
+            quality_score=q,
+            risk_score=r,
             contradiction_score=c,
         )
 
@@ -270,18 +285,20 @@ class MemoryImmuneSystem:
 
         # Same topic, opposite outcome.
         negation_pairs = [
-            ("success", "failure"), ("passed", "failed"),
-            ("fixed", "broken"), ("works", "broken"),
+            ("success", "failure"),
+            ("passed", "failed"),
+            ("fixed", "broken"),
+            ("works", "broken"),
             ("correct", "incorrect"),
         ]
         for pos, neg in negation_pairs:
-            if (pos in a_lower and neg in b_lower) or \
-               (neg in a_lower and pos in b_lower):
-                # Check if they share a common subject.
+            if (pos in a_lower and neg in b_lower) or (
+                neg in a_lower and pos in b_lower
+            ):
+                # Use cached word sets for overlap check.
                 a_words = set(a_lower.split())
                 b_words = set(b_lower.split())
-                overlap = a_words & b_words
-                if len(overlap) >= 3:
+                if len(a_words & b_words) >= 3:
                     return True
         return False
 
@@ -322,6 +339,7 @@ class MemoryImmuneSystem:
 
         if decayed:
             self._version += 1
+            self._needs_full_save = True
         return decayed
 
     def _evict_weakest(self) -> None:
@@ -339,14 +357,24 @@ class MemoryImmuneSystem:
             if score < weakest_score:
                 weakest_score = score
                 weakest_key = key
+                if score < 0:
+                    break  # early-out: can't beat negative
 
         if weakest_key:
             del self._store[weakest_key]
+            self._needs_full_save = True
 
     def record_outcome(
-        self, provenance_hash: str, success: bool,
+        self,
+        provenance_hash: str,
+        success: bool,
     ) -> None:
-        """Update an entry's success/failure counts."""
+        """Update an entry's success/failure counts with ELO-style scoring.
+
+        Quality score adapts based on actual vs expected outcome:
+          new_q = old_q + K * (actual - expected)
+        K decays as observation count grows (less volatile over time).
+        """
         entry = self._store.get(provenance_hash)
         if entry:
             if success:
@@ -355,6 +383,16 @@ class MemoryImmuneSystem:
                 entry.failure_count += 1
             entry.last_accessed = time.time()
             entry.access_count += 1
+
+            # ELO-style adaptive quality adjustment.
+            total = entry.success_count + entry.failure_count
+            k_factor = max(0.05, 0.4 / (1 + total * 0.1))  # K decays
+            expected = entry.quality_score
+            actual = 1.0 if success else 0.0
+            entry.quality_score = max(
+                0.01,
+                min(1.0, entry.quality_score + k_factor * (actual - expected)),
+            )
 
     def promote_quarantined(self, provenance_hash: str) -> bool:
         """Promote a quarantined entry to active."""
@@ -379,9 +417,157 @@ class MemoryImmuneSystem:
     def lookup(self, entry_type: str, limit: int = 10) -> List[MemoryEntry]:
         """Retrieve active entries by type."""
         results = [
-            e for e in self._store.values()
+            e
+            for e in self._store.values()
             if e.entry_type == entry_type and e.status == "active"
         ]
         # Sort by quality descending.
         results.sort(key=lambda e: e.quality_score, reverse=True)
         return results[:limit]
+
+    # ── Relevance-Based Retrieval ──
+
+    def retrieve_relevant(
+        self,
+        query: str,
+        entry_type: str = "",
+        limit: int = 5,
+    ) -> List[MemoryEntry]:
+        """Retrieve entries ranked by relevance to a query.
+
+        Score = keyword_overlap * 0.4 + recency * 0.3 + quality * 0.3
+        """
+        candidates = [
+            e
+            for e in self._store.values()
+            if e.status in ("active", "core")
+            and (not entry_type or e.entry_type == entry_type)
+        ]
+        if not candidates:
+            return []
+
+        query_words = set(query.lower().split())
+        now = time.time()
+        scored: List[tuple] = []
+
+        for entry in candidates:
+            # Use cached word set.
+            overlap = len(query_words & entry.word_set)
+            max_possible = max(len(query_words), 1)
+            keyword_score = min(1.0, overlap / max_possible)
+
+            # Recency (decay over 24 hours).
+            age_hours = (now - entry.created_at) / 3600.0
+            recency_score = max(0.0, 1.0 - (age_hours / 24.0))
+
+            # Quality.
+            quality = entry.quality_score
+
+            relevance = keyword_score * 0.4 + recency_score * 0.3 + quality * 0.3
+            scored.append((relevance, entry))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [entry for _, entry in scored[:limit]]
+
+    # ── Persistence (JSONL) ──
+
+    def save(self, path: str) -> int:
+        """Persist memory state to a JSONL file. Returns count saved."""
+        import os
+
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        count = 0
+        with open(path, "w", encoding="utf-8") as f:
+            for entry in self._store.values():
+                f.write(
+                    json.dumps(self._entry_to_record(entry), ensure_ascii=False) + "\n"
+                )
+                count += 1
+        self._unsaved.clear()
+        self._needs_full_save = False
+        return count
+
+    def append_save(self, path: str) -> int:
+        """Append only unsaved entries. Falls back to full save if needed."""
+        import os
+
+        if self._needs_full_save:
+            return self.save(path)
+        if not self._unsaved:
+            return 0
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        count = 0
+        with open(path, "a", encoding="utf-8") as f:
+            for entry in self._unsaved:
+                f.write(
+                    json.dumps(self._entry_to_record(entry), ensure_ascii=False) + "\n"
+                )
+                count += 1
+        self._unsaved.clear()
+        return count
+
+    @staticmethod
+    def _entry_to_record(entry: MemoryEntry) -> Dict[str, Any]:
+        return {
+            "content": entry.content,
+            "source": entry.source,
+            "entry_type": entry.entry_type,
+            "provenance_hash": entry.provenance_hash,
+            "quality_score": entry.quality_score,
+            "risk_score": entry.risk_score,
+            "contradiction_score": entry.contradiction_score,
+            "access_count": entry.access_count,
+            "success_count": entry.success_count,
+            "failure_count": entry.failure_count,
+            "created_at": entry.created_at,
+            "last_accessed": entry.last_accessed,
+            "version": entry.version,
+            "status": entry.status,
+        }
+
+    def load(self, path: str) -> int:
+        """Load memory state from a JSONL file. Returns count loaded."""
+        import os
+
+        if not os.path.isfile(path):
+            return 0
+        count = 0
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                        entry = MemoryEntry(
+                            content=d["content"],
+                            source=d["source"],
+                            entry_type=d["entry_type"],
+                            provenance_hash=d.get("provenance_hash", ""),
+                            quality_score=float(d.get("quality_score", 0.3)),
+                            risk_score=float(d.get("risk_score", 0.0)),
+                            contradiction_score=float(
+                                d.get("contradiction_score", 0.0)
+                            ),
+                            access_count=int(d.get("access_count", 0)),
+                            success_count=int(d.get("success_count", 0)),
+                            failure_count=int(d.get("failure_count", 0)),
+                            created_at=float(d.get("created_at", 0.0)),
+                            last_accessed=float(d.get("last_accessed", 0.0)),
+                            version=int(d.get("version", 0)),
+                            status=d.get("status", "active"),
+                        )
+                        key = entry.provenance_hash
+                        if entry.status == "core":
+                            self._core_axioms[key] = entry
+                        elif entry.status == "quarantined":
+                            self._quarantine[key] = entry
+                        else:
+                            self._store[key] = entry
+                        count += 1
+                    except (json.JSONDecodeError, TypeError, KeyError):
+                        continue
+        except Exception:
+            pass  # file inaccessible
+        return count

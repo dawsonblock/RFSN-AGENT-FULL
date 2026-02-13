@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-15790",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "c627226d05dd52aef59447dcfb29cec2c2b11b8a",
+  "workdir": "/tmp/swebench_work/django__django-15790",
+  "issue_text": "check_for_template_tags_with_the_same_name with libraries in TEMPLATES\nDescription\n\t\nI didn't explore this thoroughly, but I think there might be an issue with the check_for_template_tags_with_the_same_name when you add a template tag library into TEMPLATES['OPTIONS']['librairies'].\nI'm getting an error like: \n(templates.E003) 'my_tags' is used for multiple template tag modules: 'someapp.templatetags.my_tags', 'someapp.templatetags.my_tags'\n",
+  "hints": {
+    "failing_tests": [
+      "test_template_tags_same_library_in_installed_apps_libraries (check_framework.test_templates.CheckTemplateTagLibrariesWithSameName)"
+    ],
+    "focus_files": [
+      "django/core/checks/templates.py"
+    ],
+    "test_patch": "diff --git a/tests/check_framework/test_templates.py b/tests/check_framework/test_templates.py\n--- a/tests/check_framework/test_templates.py\n+++ b/tests/check_framework/test_templates.py\n@@ -158,6 +158,19 @@ def test_template_tags_with_same_library_name(self):\n                 [self.error_same_tags],\n             )\n \n+    @override_settings(\n+        INSTALLED_APPS=[\"check_framework.template_test_apps.same_tags_app_1\"]\n+    )\n+    def test_template_tags_same_library_in_installed_apps_libraries(self):\n+        with self.settings(\n+            TEMPLATES=[\n+                self.get_settings(\n+                    \"same_tags\", \"same_tags_app_1.templatetags.same_tags\"\n+                ),\n+            ]\n+        ):\n+            self.assertEqual(check_for_template_tags_with_the_same_name(None), [])\n+\n     @override_settings(\n         INSTALLED_APPS=[\"check_framework.template_test_apps.same_tags_app_1\"]\n     )\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q check_framework/test_templates.py",
+    "test_full": "python -m pytest -x -q check_framework/test_templates.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "task_id": "scikit-learn__scikit-learn-13439",
+  "repo_url": "https://github.com/scikit-learn/scikit-learn.git",
+  "repo_ref": "a62775e99f2a5ea3d51db7160fad783f6cd8a4c5",
+  "workdir": "/tmp/swebench_work/scikit-learn__scikit-learn-13439",
+  "issue_text": "Pipeline should implement __len__\n#### Description\r\n\r\nWith the new indexing support `pipe[:len(pipe)]` raises an error.\r\n\r\n#### Steps/Code to Reproduce\r\n\r\n```python\r\nfrom sklearn import svm\r\nfrom sklearn.datasets import samples_generator\r\nfrom sklearn.feature_selection import SelectKBest\r\nfrom sklearn.feature_selection import f_regression\r\nfrom sklearn.pipeline import Pipeline\r\n\r\n# generate some data to play with\r\nX, y = samples_generator.make_classification(\r\n    n_informative=5, n_redundant=0, random_state=42)\r\n\r\nanova_filter = SelectKBest(f_regression, k=5)\r\nclf = svm.SVC(kernel='linear')\r\npipe = Pipeline([('anova', anova_filter), ('svc', clf)])\r\n\r\nlen(pipe)\r\n```\r\n\r\n#### Versions\r\n\r\n```\r\nSystem:\r\n    python: 3.6.7 | packaged by conda-forge | (default, Feb 19 2019, 18:37:23)  [GCC 4.2.1 Compatible Clang 4.0.1 (tags/RELEASE_401/final)]\r\nexecutable: /Users/krisz/.conda/envs/arrow36/bin/python\r\n   machine: Darwin-18.2.0-x86_64-i386-64bit\r\n\r\nBLAS:\r\n    macros: HAVE_CBLAS=None\r\n  lib_dirs: /Users/krisz/.conda/envs/arrow36/lib\r\ncblas_libs: openblas, openblas\r\n\r\nPython deps:\r\n       pip: 19.0.3\r\nsetuptools: 40.8.0\r\n   sklearn: 0.21.dev0\r\n     numpy: 1.16.2\r\n     scipy: 1.2.1\r\n    Cython: 0.29.6\r\n    pandas: 0.24.1\r\n```\n",
+  "hints": {
+    "failing_tests": [
+      "sklearn/tests/test_pipeline.py::test_make_pipeline_memory"
+    ],
+    "focus_files": [
+      "sklearn/pipeline.py"
+    ],
+    "test_patch": "diff --git a/sklearn/tests/test_pipeline.py b/sklearn/tests/test_pipeline.py\n--- a/sklearn/tests/test_pipeline.py\n+++ b/sklearn/tests/test_pipeline.py\n@@ -1069,5 +1069,6 @@ def test_make_pipeline_memory():\n     assert pipeline.memory is memory\n     pipeline = make_pipeline(DummyTransf(), SVC())\n     assert pipeline.memory is None\n+    assert len(pipeline) == 2\n \n     shutil.rmtree(cachedir)\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[tests]"
+    ],
+    "test_quick": "python -m pytest -x -q sklearn/tests/test_pipeline.py::test_make_pipeline_memory",
+    "test_full": "python -m pytest -x -q sklearn/tests/test_pipeline.py::test_make_pipeline_memory"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

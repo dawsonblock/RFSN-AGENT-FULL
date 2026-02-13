@@ -15,34 +15,55 @@ from pydantic import BaseModel  # type: ignore[import-not-found]
 
 # --- Auth middleware: only tool_gateway (with valid token) can reach us ---
 import sys
+
 sys.path.insert(0, "/shared")
 try:
     from auth import ServiceAuthMiddleware  # type: ignore[import-not-found]
+
     _HAS_AUTH = True
 except ImportError:
     _HAS_AUTH = False
 
+# Defense-in-depth: import patch risk gate for apply_patch.
+try:
+    from rfsn_swebench.gate import patch_risk_gate as _patch_risk_gate
+
+    _HAS_PATCH_GATE = True
+except ImportError:
+    _HAS_PATCH_GATE = False
+    _patch_risk_gate = None  # type: ignore[assignment]
+
 app = FastAPI()
 if _HAS_AUTH:
-    app.add_middleware(
-        ServiceAuthMiddleware  # type: ignore[possibly-unbound]
-    )
+    app.add_middleware(ServiceAuthMiddleware)  # type: ignore[possibly-unbound]
 
 BLESSED_IMAGE = os.getenv(
     "BLESSED_IMAGE",
     "rfsn-blessed@sha256:208a2c2dac42ed9b3ca023b30cd815518070930274592844511aa34de21b6360",
 )
 HOST_DATA_DIR = os.getenv("HOST_DATA_DIR", "/data")
-USE_DOCKER_SANDBOX = os.getenv(
-    "RFSN_EXEC_USE_DOCKER", "1",
-) == "1"
+USE_DOCKER_SANDBOX = (
+    os.getenv(
+        "RFSN_EXEC_USE_DOCKER",
+        "1",
+    )
+    == "1"
+)
 DEV_MODE = os.getenv("RFSN_DEV_MODE", "0") == "1"
-STRICT_IMAGE_DIGEST = os.getenv(
-    "RFSN_STRICT_IMAGE_DIGEST", "1",
-) == "1"
-ALLOW_LOCAL_EXEC = os.getenv(
-    "RFSN_ALLOW_LOCAL_EXEC", "0",
-) == "1"
+STRICT_IMAGE_DIGEST = (
+    os.getenv(
+        "RFSN_STRICT_IMAGE_DIGEST",
+        "1",
+    )
+    == "1"
+)
+ALLOW_LOCAL_EXEC = (
+    os.getenv(
+        "RFSN_ALLOW_LOCAL_EXEC",
+        "0",
+    )
+    == "1"
+)
 
 
 def _local_exec_allowed() -> bool:
@@ -69,10 +90,7 @@ def _docker_runtime_available() -> bool:
     return p.returncode == 0 and bool((p.stdout or "").strip())
 
 
-DOCKER_RUNTIME_AVAILABLE = (
-    _docker_runtime_available()
-    if USE_DOCKER_SANDBOX else False
-)
+DOCKER_RUNTIME_AVAILABLE = _docker_runtime_available() if USE_DOCKER_SANDBOX else False
 if STRICT_IMAGE_DIGEST and not DEV_MODE and not _is_digest_image_ref(BLESSED_IMAGE):
     raise SystemExit(
         "BLESSED_IMAGE must be digest-pinned (@sha256:...)"
@@ -102,6 +120,7 @@ if not USE_DOCKER_SANDBOX and not _local_exec_allowed():
 # ── Warm sandbox pool ─────────────────────────
 try:
     from sandbox_pool import SandboxPool  # type: ignore[import-not-found]
+
     _sandbox_pool: SandboxPool | None = SandboxPool()
 except Exception as _pool_err:
     print(
@@ -117,8 +136,7 @@ def _load_yaml(path: str) -> dict:
             return yaml.safe_load(f) or {}
     except (FileNotFoundError, PermissionError) as exc:
         print(
-            f"FATAL: Cannot load policy file {path}:"
-            f" {exc}",
+            f"FATAL: Cannot load policy file {path}:" f" {exc}",
             flush=True,
         )
         raise SystemExit(1) from exc
@@ -126,15 +144,9 @@ def _load_yaml(path: str) -> dict:
 
 DEPS = _load_yaml("/policies/deps_policy.yaml")
 GATE_POLICY = _load_yaml("/policies/gate_policy.yaml")
-CMD_TEMPLATES = (
-    _load_yaml("/policies/command_templates.yaml")
-    .get("templates", {})
-)
+CMD_TEMPLATES = _load_yaml("/policies/command_templates.yaml").get("templates", {})
 TOOL_ALLOWLIST = _load_yaml("/policies/tool_allowlist.yaml")
-SAFE_CMD_TEMPLATES = (
-    TOOL_ALLOWLIST.get("command_templates", {})
-    or {}
-)
+SAFE_CMD_TEMPLATES = TOOL_ALLOWLIST.get("command_templates", {}) or {}
 MAX_READ_FILE_BYTES = int(
     TOOL_ALLOWLIST.get("max_read_file_bytes", 65536),
 )
@@ -188,14 +200,7 @@ def _classify_failure(logs: str, status: int) -> str | None:
     low = (logs or "").lower()
     if int(status) == 0:
         return None
-    if (
-        "failed" in low
-        and (
-            "pytest" in low
-            or "unittest" in low
-            or "tests" in low
-        )
-    ):
+    if "failed" in low and ("pytest" in low or "unittest" in low or "tests" in low):
         return "tests_failed"
     if "modulenotfounderror" in low or "no module named" in low:
         return "import_error_missing_module"
@@ -287,8 +292,7 @@ def _require_network_tier(step: dict) -> None:
     if not allow_network or tier < NETWORK_MIN_TIER:
         raise HTTPException(
             403,
-            "networked ensure_deps requires tier"
-            f" >= {NETWORK_MIN_TIER}",
+            "networked ensure_deps requires tier" f" >= {NETWORK_MIN_TIER}",
         )
 
 
@@ -339,9 +343,7 @@ def _result(
         "status": status,
         "seconds": float(out.get("seconds", 0.0) or 0.0),
         "logs": logs,
-        "logs_truncated": bool(
-            out.get("logs_truncated", False) or trunc
-        ),
+        "logs_truncated": bool(out.get("logs_truncated", False) or trunc),
         "payload": payload,
         "failure_kind": failure_kind,
         "command": command,
@@ -358,10 +360,7 @@ def _result(
 
 @app.get("/health")
 def health():
-    pool_stats = (
-        _sandbox_pool.stats()
-        if _sandbox_pool else {"active": 0}
-    )
+    pool_stats = _sandbox_pool.stats() if _sandbox_pool else {"active": 0}
     return {
         "ok": True,
         "image": BLESSED_IMAGE,
@@ -522,28 +521,32 @@ def list_repos():
         if not _SAFE_REPO_ID.match(repo_id):
             continue
 
-        has_git = (
-            os.path.isdir(os.path.join(path, ".git"))
-            or os.path.isfile(os.path.join(path, ".git"))
+        has_git = os.path.isdir(os.path.join(path, ".git")) or os.path.isfile(
+            os.path.join(path, ".git")
         )
-        repos.append({
-            "repo_id": repo_id,
-            "path": path,
-            "has_git": has_git,
-            "updated_at": int(os.path.getmtime(path)),
-            "origin": (
-                _git_output(path, ["config", "--get", "remote.origin.url"])
-                if has_git else ""
-            ),
-            "head": (
-                _git_output(path, ["rev-parse", "--short", "HEAD"])
-                if has_git else ""
-            ),
-            "branch": (
-                _git_output(path, ["rev-parse", "--abbrev-ref", "HEAD"])
-                if has_git else ""
-            ),
-        })
+        repos.append(
+            {
+                "repo_id": repo_id,
+                "path": path,
+                "has_git": has_git,
+                "updated_at": int(os.path.getmtime(path)),
+                "origin": (
+                    _git_output(path, ["config", "--get", "remote.origin.url"])
+                    if has_git
+                    else ""
+                ),
+                "head": (
+                    _git_output(path, ["rev-parse", "--short", "HEAD"])
+                    if has_git
+                    else ""
+                ),
+                "branch": (
+                    _git_output(path, ["rev-parse", "--abbrev-ref", "HEAD"])
+                    if has_git
+                    else ""
+                ),
+            }
+        )
     return {"count": len(repos), "repos": repos}
 
 
@@ -581,11 +584,13 @@ def repo_import(req: RepoImportReq):
         str(depth),
     ]
     if ref:
-        args.extend([
-            "--branch",
-            ref,
-            "--single-branch",
-        ])
+        args.extend(
+            [
+                "--branch",
+                ref,
+                "--single-branch",
+            ]
+        )
     args.extend([repo_url, repo_local])
 
     start = time.time()
@@ -644,6 +649,7 @@ def repo_import(req: RepoImportReq):
 
 # ── Warm sandbox lifecycle endpoints ─────────
 
+
 class SandboxReq(BaseModel):
     run_id: str
     repo_id: str
@@ -655,15 +661,18 @@ def sandbox_create(req: SandboxReq):
     """Create or reuse a warm sandbox for a run."""
     if not _sandbox_pool:
         raise HTTPException(
-            501, "sandbox pool not available",
+            501,
+            "sandbox pool not available",
         )
     _validate_repo_id(req.repo_id)
-    repo_host, art_host, venv_host, wheels_host = (
-        _paths(req.repo_id)
-    )
+    repo_host, art_host, venv_host, wheels_host = _paths(req.repo_id)
     sb = _sandbox_pool.get_or_create(
-        req.run_id, repo_host, art_host,
-        venv_host, wheels_host, req.network,
+        req.run_id,
+        repo_host,
+        art_host,
+        venv_host,
+        wheels_host,
+        req.network,
     )
     return {
         "ok": True,
@@ -701,16 +710,16 @@ def run_warm(req: WarmExecReq):
     """
     if not _sandbox_pool:
         # Fall back to cold execution.
-        return run(ExecReq(
-            repo_id=req.repo_id,
-            iter=0,
-            step=req.step,
-        ))
+        return run(
+            ExecReq(
+                repo_id=req.repo_id,
+                iter=0,
+                step=req.step,
+            )
+        )
 
     _validate_repo_id(req.repo_id)
-    repo_host, art_host, venv_host, wheels_host = (
-        _paths(req.repo_id)
-    )
+    repo_host, art_host, venv_host, wheels_host = _paths(req.repo_id)
 
     step = req.step
     t: str = step.get("type") or ""
@@ -730,19 +739,27 @@ def run_warm(req: WarmExecReq):
         )
 
     sb = _sandbox_pool.get_or_create(
-        req.run_id, repo_host, art_host,
-        venv_host, wheels_host,
+        req.run_id,
+        repo_host,
+        art_host,
+        venv_host,
+        wheels_host,
     )
 
     # Build script + data files for this step
     # (reuse the same logic as cold path).
     script, data_files = _build_step_script(
-        t, step, req.repo_id,
+        t,
+        step,
+        req.repo_id,
     )
     artifact_before = _dir_size_bytes(art_host)
 
     out = _sandbox_pool.exec_in(
-        sb, script, data_files, timeout_s,
+        sb,
+        script,
+        data_files,
+        timeout_s,
     )
     artifact_after = _dir_size_bytes(art_host)
     _apply_artifact_quota(
@@ -754,7 +771,9 @@ def run_warm(req: WarmExecReq):
     # For apply_patch, add verification.
     if t == "apply_patch":
         out = _verify_patch_result(
-            out, step, sb,
+            out,
+            step,
+            sb,
         )
 
     payload = None
@@ -794,8 +813,7 @@ def _validate_repo_id(repo_id: str) -> None:
     if not _SAFE_REPO_ID.match(repo_id):
         raise HTTPException(
             400,
-            "invalid repo_id: must match"
-            f" {_SAFE_REPO_ID.pattern}",
+            "invalid repo_id: must match" f" {_SAFE_REPO_ID.pattern}",
         )
     if ".." in repo_id:
         raise HTTPException(400, "repo_id must not contain '..'")
@@ -833,7 +851,11 @@ def _paths(repo_id: str):
 def _write_data_file(data: str, suffix: str = ".txt") -> str:
     """Write data to a temp file for mounting into container (no heredoc)."""
     fd = tempfile.NamedTemporaryFile(
-        delete=False, suffix=suffix, mode="w", encoding="utf-8", dir="/tmp",
+        delete=False,
+        suffix=suffix,
+        mode="w",
+        encoding="utf-8",
+        dir="/tmp",
     )
     fd.write(data)
     fd.close()
@@ -841,9 +863,14 @@ def _write_data_file(data: str, suffix: str = ".txt") -> str:
 
 
 def _run_docker_with_data(
-    script: str, data_files: dict,
-    repo_host, art_host, venv_host, wheels_host,
-    timeout_s: int, network_disabled: bool,
+    script: str,
+    data_files: dict,
+    repo_host,
+    art_host,
+    venv_host,
+    wheels_host,
+    timeout_s: int,
+    network_disabled: bool,
 ):
     """Run script in blessed container.
 
@@ -880,27 +907,48 @@ def _run_docker_with_data(
         for cpath, hpath in data_files.items():
             extra_mounts.extend(["-v", f"{hpath}:{cpath}:ro"])
 
-        args = [
-            "docker", "run", "--rm",
-            "--network", net,
-            "--user", "1000:1000",
-            "--security-opt", "no-new-privileges:true",
-            "--read-only",
-            "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=256m",
-            "--memory", "2g",
-            "--cpus", "2",
-            "--pids-limit", "256",
-            "--cap-drop", "ALL",
-            "-e", "HOME=/tmp",
-        ] + extra_mounts + [
-            "-v", f"{repo_host}:/work/repo:rw",
-            "-v", f"{art_host}:/work/artifacts:rw",
-            "-v", f"{venv_host}:/work/venv:rw",
-            "-v", f"{wheels_host}:/work/wheels:rw",
-            "-w", "/work",
-            BLESSED_IMAGE,
-            "bash", "/tmp/rfsn_script.sh",
-        ]
+        args = (
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                net,
+                "--user",
+                "1000:1000",
+                "--security-opt",
+                "no-new-privileges:true",
+                "--read-only",
+                "--tmpfs",
+                "/tmp:rw,noexec,nosuid,nodev,size=256m",
+                "--memory",
+                "2g",
+                "--cpus",
+                "2",
+                "--pids-limit",
+                "256",
+                "--cap-drop",
+                "ALL",
+                "-e",
+                "HOME=/tmp",
+            ]
+            + extra_mounts
+            + [
+                "-v",
+                f"{repo_host}:/work/repo:rw",
+                "-v",
+                f"{art_host}:/work/artifacts:rw",
+                "-v",
+                f"{venv_host}:/work/venv:rw",
+                "-v",
+                f"{wheels_host}:/work/wheels:rw",
+                "-w",
+                "/work",
+                BLESSED_IMAGE,
+                "bash",
+                "/tmp/rfsn_script.sh",
+            ]
+        )
 
         start = time.time()
         try:
@@ -926,9 +974,7 @@ def _run_docker_with_data(
         except subprocess.TimeoutExpired as e:
             raw = e.stdout or ""
             if isinstance(raw, bytes):
-                raw = raw.decode(
-                    "utf-8", errors="replace"
-                )
+                raw = raw.decode("utf-8", errors="replace")
             out, truncated = _truncate_text_bytes(
                 str(raw) + "\n[TIMEOUT]\n",
                 MAX_STEP_LOG_BYTES,
@@ -992,7 +1038,8 @@ def _run_local_with_data(
     }
     for src, dst in replacements.items():
         translated = translated.replace(
-            src, shlex.quote(dst),
+            src,
+            shlex.quote(dst),
         )
     translated = translated.replace(
         "cd repo",
@@ -1002,20 +1049,11 @@ def _run_local_with_data(
     setup_lines: list[str] = []
     for cpath, hpath in data_files.items():
         cdir = os.path.dirname(cpath) or "/tmp"
-        setup_lines.append(
-            f"mkdir -p {shlex.quote(cdir)}"
-        )
-        setup_lines.append(
-            "cp "
-            f"{shlex.quote(hpath)} "
-            f"{shlex.quote(cpath)}"
-        )
+        setup_lines.append(f"mkdir -p {shlex.quote(cdir)}")
+        setup_lines.append("cp " f"{shlex.quote(hpath)} " f"{shlex.quote(cpath)}")
     if setup_lines:
         translated = (
-            "# local-mode data mounts\n"
-            + "\n".join(setup_lines)
-            + "\n"
-            + translated
+            "# local-mode data mounts\n" + "\n".join(setup_lines) + "\n" + translated
         )
 
     try:
@@ -1042,7 +1080,8 @@ def _run_local_with_data(
         raw = e.stdout or ""
         if isinstance(raw, bytes):
             raw = raw.decode(
-                "utf-8", errors="replace",
+                "utf-8",
+                errors="replace",
             )
         out, truncated = _truncate_text_bytes(
             str(raw) + "\n[TIMEOUT]\n",
@@ -1058,8 +1097,12 @@ def _run_local_with_data(
 
 
 def _ensure_deps(
-    repo_id, repo_host, art_host,
-    venv_host, wheels_host, timeout_s,
+    repo_id,
+    repo_host,
+    art_host,
+    venv_host,
+    wheels_host,
+    timeout_s,
 ):
     manifest = DEPS.get("manifest", "requirements.txt")
     require_hashes = bool(DEPS.get("require_hashes", True))
@@ -1092,16 +1135,24 @@ python -m pip install --require-hashes $BIN_FLAG \\
 python -c "import sys; print('deps_ok', sys.version)"
 """
     return _run_docker_with_data(
-        script, {},
-        repo_host, art_host,
-        venv_host, wheels_host,
-        timeout_s, network_disabled=False,
+        script,
+        {},
+        repo_host,
+        art_host,
+        venv_host,
+        wheels_host,
+        timeout_s,
+        network_disabled=False,
     )
 
 
 def _repo_search(
-    pattern, repo_host, art_host,
-    venv_host, wheels_host, timeout_s,
+    pattern,
+    repo_host,
+    art_host,
+    venv_host,
+    wheels_host,
+    timeout_s,
 ):
     """SAFE: pattern written to mounted file, never in bash."""
     if len(pattern) > 500:
@@ -1118,7 +1169,7 @@ def _repo_search(
         "except re.error as e:\n"
         '    print(json.dumps({"error":'
         ' f"invalid regex: {e}"}))'
-        '; sys.exit(1)\n'
+        "; sys.exit(1)\n"
         "root = pathlib.Path('.')\n"
         "EXTS = {'.py', '.js', '.ts', '.jsx', '.tsx',\n"
         "        '.java', '.rs', '.go', '.rb', '.c',\n"
@@ -1181,25 +1232,35 @@ def _repo_search(
             "/tmp/rfsn_data/pattern.txt": pattern_file,
             "/tmp/rfsn_data/search.py": search_py_file,
         },
-        repo_host, art_host,
-        venv_host, wheels_host,
-        timeout_s, network_disabled=True,
+        repo_host,
+        art_host,
+        venv_host,
+        wheels_host,
+        timeout_s,
+        network_disabled=True,
     )
 
 
 def _repo_read_range(
-    path, line_start, line_end,
-    repo_host, art_host, venv_host,
-    wheels_host, timeout_s,
+    path,
+    line_start,
+    line_end,
+    repo_host,
+    art_host,
+    venv_host,
+    wheels_host,
+    timeout_s,
 ):
     """SAFE: path & lines passed via mounted JSON, never in bash."""
     if path.startswith("/") or path.startswith("~") or ".." in path.split("/"):
         raise HTTPException(403, f"path rejected: {path}")
-    config = json.dumps({
-        "path": path,
-        "start": line_start,
-        "end": line_end,
-    })
+    config = json.dumps(
+        {
+            "path": path,
+            "start": line_start,
+            "end": line_end,
+        }
+    )
     config_file = _write_data_file(config, suffix=".json")
     read_py = (
         "import pathlib, sys, json\n"
@@ -1231,15 +1292,22 @@ def _repo_read_range(
             "/tmp/rfsn_data/config.json": config_file,
             "/tmp/rfsn_data/reader.py": read_py_file,
         },
-        repo_host, art_host,
-        venv_host, wheels_host,
-        timeout_s, network_disabled=True,
+        repo_host,
+        art_host,
+        venv_host,
+        wheels_host,
+        timeout_s,
+        network_disabled=True,
     )
 
 
 def _apply_patch(
-    patch, repo_host, art_host,
-    venv_host, wheels_host, timeout_s,
+    patch,
+    repo_host,
+    art_host,
+    venv_host,
+    wheels_host,
+    timeout_s,
 ):
     """SAFE: patch written to file, not heredoc."""
     if not patch.strip():
@@ -1248,6 +1316,20 @@ def _apply_patch(
             "seconds": 0.0,
             "logs": "REJECTED: empty patch has no effect",
         }
+
+    # ── Defense-in-depth: gate check ──────────────────
+    # Redundant safety net — upstream (tool_gateway) should
+    # have already gated. This blocks direct-call bypasses.
+    if _HAS_PATCH_GATE and _patch_risk_gate is not None:
+        gate_report = _patch_risk_gate(patch)
+        if gate_report.decision == "REJECT":
+            return {
+                "status": 1,
+                "seconds": 0.0,
+                "logs": (
+                    "DEFENSE_IN_DEPTH_REJECT: " + "; ".join(gate_report.reasons[:5])
+                ),
+            }
     patch_file = _write_data_file(patch, suffix=".patch")
     # Apply patch and then run git diff --stat to
     # verify it actually changed something.
@@ -1265,9 +1347,12 @@ def _apply_patch(
     out = _run_docker_with_data(
         script,
         {"/tmp/rfsn_data/patch.diff": patch_file},
-        repo_host, art_host,
-        venv_host, wheels_host,
-        timeout_s, network_disabled=True,
+        repo_host,
+        art_host,
+        venv_host,
+        wheels_host,
+        timeout_s,
+        network_disabled=True,
     )
 
     # Parse patch stats from output.
@@ -1280,21 +1365,24 @@ def _apply_patch(
     if (
         out["status"] == 0
         and out["patch_meta"].get(
-            "files_touched", 0,
-        ) == 0
+            "files_touched",
+            0,
+        )
+        == 0
     ):
         out["status"] = 1
-        out["logs"] += (
-            "\nREJECTED: patch had no effect"
-            " (diff is empty after apply)"
-        )
+        out["logs"] += "\nREJECTED: patch had no effect" " (diff is empty after apply)"
 
     return out
 
 
 def _run_tests(
-    template_id, target, repo_host,
-    art_host, venv_host, wheels_host,
+    template_id,
+    target,
+    repo_host,
+    art_host,
+    venv_host,
+    wheels_host,
     timeout_s,
 ):
     if template_id not in CMD_TEMPLATES:
@@ -1309,14 +1397,12 @@ def _run_tests(
         if not re.fullmatch(allowed_re, target):
             raise HTTPException(
                 403,
-                "target rejected by regex:"
-                f" {target!r} !~ {allowed_re}",
+                "target rejected by regex:" f" {target!r} !~ {allowed_re}",
             )
     elif target:
         raise HTTPException(
             403,
-            f"target not allowed for template"
-            f" {template_id}",
+            f"target not allowed for template" f" {template_id}",
         )
     safe_target = shlex.quote(target) if target else ""
     cmd_str = " ".join([shlex.quote(x) for x in cmd])
@@ -1330,23 +1416,31 @@ def _run_tests(
         "rm -rf /work/scratch_repo\n"
         "mkdir -p /work/scratch_repo\n"
         "cp -a /work/repo/. /work/scratch_repo/\n"
-        "BEFORE_TRACKED=\"$(cd /work/repo && git status --porcelain 2>/dev/null || true)\"\n"
-        'if [ ! -f /work/venv/bin/activate ]; then\n'
+        "# git-init-once: ensure mutation detection works even pre-patch\n"
+        "if [ ! -d /work/repo/.git ]; then\n"
+        '  (cd /work/repo && git init -q && git add -A && git commit -qm "baseline" --allow-empty) || true\n'
+        "fi\n"
+        'BEFORE_TRACKED="$(cd /work/repo && git status --porcelain 2>/dev/null || true)"\n'
+        "if [ ! -f /work/venv/bin/activate ]; then\n"
         '  echo "Missing venv; ensure_deps first"\n'
-        '  exit 39\n'
-        'fi\n'
+        "  exit 39\n"
+        "fi\n"
         f"{cmd_str}\n"
-        "AFTER_TRACKED=\"$(cd /work/repo && git status --porcelain 2>/dev/null || true)\"\n"
-        "if [ \"$AFTER_TRACKED\" != \"$BEFORE_TRACKED\" ]; then\n"
-        "  echo \"tracked files mutated during tests\"\n"
+        'AFTER_TRACKED="$(cd /work/repo && git status --porcelain 2>/dev/null || true)"\n'
+        'if [ "$AFTER_TRACKED" != "$BEFORE_TRACKED" ]; then\n'
+        '  echo "tracked files mutated during tests"\n'
         "  exit 42\n"
         "fi\n"
     )
     return _run_docker_with_data(
-        script, {},
-        repo_host, art_host,
-        venv_host, wheels_host,
-        timeout_s, network_disabled=True,
+        script,
+        {},
+        repo_host,
+        art_host,
+        venv_host,
+        wheels_host,
+        timeout_s,
+        network_disabled=True,
     )
 
 
@@ -1404,21 +1498,20 @@ def _verify_patch_result(
 
     # Run a quick stat check.
     stat_script = (
-        "#!/bin/bash\ncd /work/repo\n"
-        "git diff --numstat 2>/dev/null || true\n"
+        "#!/bin/bash\ncd /work/repo\n" "git diff --numstat 2>/dev/null || true\n"
     )
     stat_out = _sandbox_pool.exec_in(
-        sandbox, stat_script, {}, 10,
+        sandbox,
+        stat_script,
+        {},
+        10,
     )
     meta = _parse_patch_stat(stat_out.get("logs", ""))
     out["patch_meta"] = meta
 
     if meta["files_touched"] == 0:
         out["status"] = 1
-        out["logs"] += (
-            "\nREJECTED: patch had no effect"
-            " (diff is empty after apply)"
-        )
+        out["logs"] += "\nREJECTED: patch had no effect" " (diff is empty after apply)"
     return out
 
 
@@ -1436,7 +1529,8 @@ def _build_step_script(
 
     if step_type == "ensure_deps":
         manifest = DEPS.get(
-            "manifest", "requirements.txt",
+            "manifest",
+            "requirements.txt",
         )
         require_hashes = bool(
             DEPS.get("require_hashes", True),
@@ -1445,7 +1539,8 @@ def _build_step_script(
             DEPS.get("only_binary", True),
         )
         cache_dir = DEPS.get(
-            "pip_cache_dir", "/work/wheels",
+            "pip_cache_dir",
+            "/work/wheels",
         )
         rh = 1 if require_hashes else 0
         ob = 1 if only_binary else 0
@@ -1457,17 +1552,17 @@ def _build_step_script(
             f'  echo "Missing manifest: {manifest}"\n'
             "  exit 31\nfi\n"
             f"if [ {rh} -eq 1 ]; then\n"
-            f"  if ! grep -q -- \"--hash=\""
+            f'  if ! grep -q -- "--hash="'
             f" {shlex.quote(manifest)}; then\n"
-            "    echo \"Policy: requirements.txt"
-            " must include --hash entries\"\n"
+            '    echo "Policy: requirements.txt'
+            ' must include --hash entries"\n'
             "    exit 33\n  fi\nfi\n"
             "python -m venv /work/venv\n"
             ". /work/venv/bin/activate\n"
             "python -m pip install --upgrade pip\n"
-            "BIN_FLAG=\"\"\n"
+            'BIN_FLAG=""\n'
             f"if [ {ob} -eq 1 ]; then"
-            " BIN_FLAG=\"--only-binary=:all:\";"
+            ' BIN_FLAG="--only-binary=:all:";'
             " fi\n"
             "python -m pip install"
             " --require-hashes $BIN_FLAG"
@@ -1481,7 +1576,8 @@ def _build_step_script(
     if step_type == "repo_search":
         pattern = step.get("pattern") or ""
         pat_file = _write_data_file(
-            pattern, suffix=".pattern",
+            pattern,
+            suffix=".pattern",
         )
         search_py = (
             "import os, re, pathlib, json, sys\n"
@@ -1497,7 +1593,7 @@ def _build_step_script(
             "except re.error as e:\n"
             '    print(json.dumps({"error":'
             ' f"invalid regex: {e}"}))'
-            '; sys.exit(1)\n'
+            "; sys.exit(1)\n"
             "root = pathlib.Path('.')\n"
             "EXTS = {'.py', '.js', '.ts',"
             " '.jsx', '.tsx',\n"
@@ -1567,7 +1663,8 @@ def _build_step_script(
             "print(json.dumps(out[:200]))\n"
         )
         spy_file = _write_data_file(
-            search_py, suffix=".py",
+            search_py,
+            suffix=".py",
         )
         data_files = {
             "/tmp/rfsn_data/pattern.txt": pat_file,
@@ -1584,13 +1681,16 @@ def _build_step_script(
         path = step.get("path") or ""
         ls = int(step.get("line_start") or 1)
         le = int(step.get("line_end") or ls)
-        config = json.dumps({
-            "path": path,
-            "start": ls,
-            "end": le,
-        })
+        config = json.dumps(
+            {
+                "path": path,
+                "start": ls,
+                "end": le,
+            }
+        )
         cfg_file = _write_data_file(
-            config, suffix=".json",
+            config,
+            suffix=".json",
         )
         read_py = (
             "import pathlib, sys, json\n"
@@ -1619,7 +1719,8 @@ def _build_step_script(
             "    print(f'[L{i}] {ln}')\n"
         )
         rpy_file = _write_data_file(
-            read_py, suffix=".py",
+            read_py,
+            suffix=".py",
         )
         data_files = {
             "/tmp/rfsn_data/config.json": cfg_file,
@@ -1634,12 +1735,15 @@ def _build_step_script(
 
     if step_type == "read_file":
         path = step.get("path") or ""
-        config = json.dumps({
-            "path": path,
-            "max_bytes": MAX_READ_FILE_BYTES,
-        })
+        config = json.dumps(
+            {
+                "path": path,
+                "max_bytes": MAX_READ_FILE_BYTES,
+            }
+        )
         cfg_file = _write_data_file(
-            config, suffix=".json",
+            config,
+            suffix=".json",
         )
         read_py = (
             "import hashlib, json, pathlib, sys\n"
@@ -1694,7 +1798,8 @@ def _build_step_script(
             "print(json.dumps({'profile': profile}))\n"
         )
         dpy_file = _write_data_file(
-            detect_py, suffix=".py",
+            detect_py,
+            suffix=".py",
         )
         data_files = {
             "/tmp/rfsn_data/detect_project.py": dpy_file,
@@ -1710,10 +1815,12 @@ def _build_step_script(
         max_depth = int(step.get("max_depth") or 4)
         max_depth = min(max(max_depth, 1), 8)
         cfg_file = _write_data_file(
-            json.dumps({
-                "max_depth": max_depth,
-                "max_workdirs": MAX_WORKDIRS,
-            }),
+            json.dumps(
+                {
+                    "max_depth": max_depth,
+                    "max_workdirs": MAX_WORKDIRS,
+                }
+            ),
             suffix=".json",
         )
         detect_py = (
@@ -1754,7 +1861,8 @@ def _build_step_script(
             "print(json.dumps({'workdirs': workdirs}))\n"
         )
         dpy_file = _write_data_file(
-            detect_py, suffix=".py",
+            detect_py,
+            suffix=".py",
         )
         data_files = {
             "/tmp/rfsn_data/config.json": cfg_file,
@@ -1772,18 +1880,12 @@ def _build_step_script(
         try:
             argv = _resolve_safe_template(template)
         except HTTPException:
-            script = (
-                "#!/bin/bash\n"
-                "echo 'unknown template'\n"
-                "exit 1\n"
-            )
+            script = "#!/bin/bash\n" "echo 'unknown template'\n" "exit 1\n"
             return script, data_files
         workdir = _normalize_workdir(
             str(step.get("workdir") or "."),
         )
-        cmd = " ".join(
-            shlex.quote(x) for x in argv
-        )
+        cmd = " ".join(shlex.quote(x) for x in argv)
         script = (
             "#!/bin/bash\nset -euo pipefail\n"
             "cd /work/repo\n"
@@ -1798,7 +1900,8 @@ def _build_step_script(
     if step_type == "apply_patch":
         patch = step.get("patch") or ""
         p_file = _write_data_file(
-            patch, suffix=".patch",
+            patch,
+            suffix=".patch",
         )
         data_files = {
             "/tmp/rfsn_data/patch.diff": p_file,
@@ -1817,11 +1920,16 @@ def _build_step_script(
 
     if step_type == "run_tests":
         template_id = step.get(
-            "template_id", "",
+            "template_id",
+            "",
         )
-        params = step.get(
-            "template_params", {},
-        ) or {}
+        params = (
+            step.get(
+                "template_params",
+                {},
+            )
+            or {}
+        )
         target = params.get("target", "")
         if template_id not in CMD_TEMPLATES:
             # Return a failing script.
@@ -1834,15 +1942,13 @@ def _build_step_script(
             return script, data_files
         tmpl = CMD_TEMPLATES[template_id]
         cmd = tmpl["cmd"]
-        safe_target = (
-            shlex.quote(target)
-            if target else ""
-        )
+        safe_target = shlex.quote(target) if target else ""
         cmd_str = " ".join(
             [shlex.quote(x) for x in cmd],
         )
         cmd_str = cmd_str.replace(
-            "{target}", safe_target,
+            "{target}",
+            safe_target,
         )
         cmd_str = cmd_str.replace("cd repo", "cd scratch_repo")
         script = (
@@ -1851,27 +1957,27 @@ def _build_step_script(
             "rm -rf /work/scratch_repo\n"
             "mkdir -p /work/scratch_repo\n"
             "cp -a /work/repo/. /work/scratch_repo/\n"
-            "BEFORE_TRACKED=\"$(cd /work/repo && git status --porcelain 2>/dev/null || true)\"\n"
+            "# git-init-once: ensure mutation detection works even pre-patch\n"
+            "if [ ! -d /work/repo/.git ]; then\n"
+            '  (cd /work/repo && git init -q && git add -A && git commit -qm "baseline" --allow-empty) || true\n'
+            "fi\n"
+            'BEFORE_TRACKED="$(cd /work/repo && git status --porcelain 2>/dev/null || true)"\n'
             "if [ ! -f"
             " /work/venv/bin/activate ]; then\n"
             '  echo "Missing venv;'
             ' ensure_deps first"\n'
             "  exit 39\nfi\n"
             f"{cmd_str}\n"
-            "AFTER_TRACKED=\"$(cd /work/repo && git status --porcelain 2>/dev/null || true)\"\n"
-            "if [ \"$AFTER_TRACKED\" != \"$BEFORE_TRACKED\" ]; then\n"
-            "  echo \"tracked files mutated during tests\"\n"
+            'AFTER_TRACKED="$(cd /work/repo && git status --porcelain 2>/dev/null || true)"\n'
+            'if [ "$AFTER_TRACKED" != "$BEFORE_TRACKED" ]; then\n'
+            '  echo "tracked files mutated during tests"\n'
             "  exit 42\n"
             "fi\n"
         )
         return script, data_files
 
     # Unknown step type.
-    script = (
-        "#!/bin/bash\n"
-        f"echo 'unknown step type: {step_type}'\n"
-        "exit 1\n"
-    )
+    script = "#!/bin/bash\n" f"echo 'unknown step type: {step_type}'\n" "exit 1\n"
     return script, data_files
 
 
@@ -1887,14 +1993,15 @@ def run(req: ExecReq):
     if t == "ensure_deps":
         _require_network_tier(step)
         allow_network = True
-        timeout_s = int(
-            step.get("timeout_s")
-            or DEPS.get("max_install_seconds", 420)
-        )
+        timeout_s = int(step.get("timeout_s") or DEPS.get("max_install_seconds", 420))
         artifact_before = _dir_size_bytes(art_host)
         out = _ensure_deps(
-            req.repo_id, repo_host, art_host,
-            venv_host, wheels_host, timeout_s,
+            req.repo_id,
+            repo_host,
+            art_host,
+            venv_host,
+            wheels_host,
+            timeout_s,
         )
         artifact_after = _dir_size_bytes(art_host)
         _apply_artifact_quota(
@@ -1916,8 +2023,12 @@ def run(req: ExecReq):
         timeout_s = int(step.get("timeout_s") or 30)
         artifact_before = _dir_size_bytes(art_host)
         out = _repo_search(
-            pattern, repo_host, art_host,
-            venv_host, wheels_host, timeout_s,
+            pattern,
+            repo_host,
+            art_host,
+            venv_host,
+            wheels_host,
+            timeout_s,
         )
         artifact_after = _dir_size_bytes(art_host)
         _apply_artifact_quota(
@@ -1942,9 +2053,14 @@ def run(req: ExecReq):
         timeout_s = int(step.get("timeout_s") or 30)
         artifact_before = _dir_size_bytes(art_host)
         out = _repo_read_range(
-            path, ls, le,
-            repo_host, art_host,
-            venv_host, wheels_host, timeout_s,
+            path,
+            ls,
+            le,
+            repo_host,
+            art_host,
+            venv_host,
+            wheels_host,
+            timeout_s,
         )
         artifact_after = _dir_size_bytes(art_host)
         _apply_artifact_quota(
@@ -1969,7 +2085,9 @@ def run(req: ExecReq):
     ):
         timeout_s = int(step.get("timeout_s") or 60)
         script, data_files = _build_step_script(
-            t, step, req.repo_id,
+            t,
+            step,
+            req.repo_id,
         )
         artifact_before = _dir_size_bytes(art_host)
         out = _run_docker_with_data(
@@ -2003,8 +2121,12 @@ def run(req: ExecReq):
         timeout_s = int(step.get("timeout_s") or 60)
         artifact_before = _dir_size_bytes(art_host)
         out = _apply_patch(
-            patch, repo_host, art_host,
-            venv_host, wheels_host, timeout_s,
+            patch,
+            repo_host,
+            art_host,
+            venv_host,
+            wheels_host,
+            timeout_s,
         )
         artifact_after = _dir_size_bytes(art_host)
         _apply_artifact_quota(
@@ -2027,14 +2149,16 @@ def run(req: ExecReq):
         target = params.get("target") or ""
         timeout_s = int(
             step.get("timeout_s")
-            or CMD_TEMPLATES.get(
-                template_id, {}
-            ).get("max_seconds", 240)
+            or CMD_TEMPLATES.get(template_id, {}).get("max_seconds", 240)
         )
         artifact_before = _dir_size_bytes(art_host)
         out = _run_tests(
-            template_id, target, repo_host,
-            art_host, venv_host, wheels_host,
+            template_id,
+            target,
+            repo_host,
+            art_host,
+            venv_host,
+            wheels_host,
             timeout_s,
         )
         artifact_after = _dir_size_bytes(art_host)
@@ -2043,14 +2167,8 @@ def run(req: ExecReq):
             before_size=artifact_before,
             after_size=artifact_after,
         )
-        tmpl_cmd = (
-            CMD_TEMPLATES.get(template_id, {})
-            .get("cmd", None)
-        )
-        command = (
-            [str(x) for x in tmpl_cmd]
-            if isinstance(tmpl_cmd, list) else None
-        )
+        tmpl_cmd = CMD_TEMPLATES.get(template_id, {}).get("cmd", None)
+        command = [str(x) for x in tmpl_cmd] if isinstance(tmpl_cmd, list) else None
         return _result(
             out=out,
             payload=None,
@@ -2064,7 +2182,9 @@ def run(req: ExecReq):
     if t in ("run_cmd_template", "format_fix"):
         timeout_s = int(step.get("timeout_s") or 240)
         script, data_files = _build_step_script(
-            t, step, req.repo_id,
+            t,
+            step,
+            req.repo_id,
         )
         artifact_before = _dir_size_bytes(art_host)
         out = _run_docker_with_data(

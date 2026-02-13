@@ -1,0 +1,30 @@
+{
+  "task_id": "sympy__sympy-21614",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "b4777fdcef467b7132c055f8ac2c9a5059e6a145",
+  "workdir": "/tmp/swebench_work/sympy__sympy-21614",
+  "issue_text": "Wrong Derivative kind attribute\nI'm playing around with the `kind` attribute.\r\n\r\nThe following is correct:\r\n\r\n```\r\nfrom sympy import Integral, Derivative\r\nfrom sympy import MatrixSymbol\r\nfrom sympy.abc import x\r\nA = MatrixSymbol('A', 2, 2)\r\ni = Integral(A, x)\r\ni.kind\r\n# MatrixKind(NumberKind)\r\n```\r\n\r\nThis one is wrong:\r\n```\r\nd = Derivative(A, x)\r\nd.kind\r\n# UndefinedKind\r\n```\n",
+  "hints": {
+    "failing_tests": [
+      "test_Derivative_kind"
+    ],
+    "focus_files": [
+      "sympy/core/function.py"
+    ],
+    "test_patch": "diff --git a/sympy/core/tests/test_kind.py b/sympy/core/tests/test_kind.py\n--- a/sympy/core/tests/test_kind.py\n+++ b/sympy/core/tests/test_kind.py\n@@ -5,6 +5,7 @@\n from sympy.core.singleton import S\n from sympy.core.symbol import Symbol\n from sympy.integrals.integrals import Integral\n+from sympy.core.function import Derivative\n from sympy.matrices import (Matrix, SparseMatrix, ImmutableMatrix,\n     ImmutableSparseMatrix, MatrixSymbol, MatrixKind, MatMul)\n \n@@ -39,6 +40,11 @@ def test_Integral_kind():\n     assert Integral(comm_x, comm_x).kind is NumberKind\n     assert Integral(A, comm_x).kind is MatrixKind(NumberKind)\n \n+def test_Derivative_kind():\n+    A = MatrixSymbol('A', 2,2)\n+    assert Derivative(comm_x, comm_x).kind is NumberKind\n+    assert Derivative(A, comm_x).kind is MatrixKind(NumberKind)\n+\n def test_Matrix_kind():\n     classes = (Matrix, SparseMatrix, ImmutableMatrix, ImmutableSparseMatrix)\n     for cls in classes:\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_Derivative_kind\"",
+    "test_full": "python -m pytest -x -q -k \"test_Derivative_kind\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

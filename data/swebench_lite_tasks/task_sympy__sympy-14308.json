@@ -1,0 +1,31 @@
+{
+  "task_id": "sympy__sympy-14308",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "fb536869fb7aa28b2695ad7a3b70949926b291c4",
+  "workdir": "/tmp/swebench_work/sympy__sympy-14308",
+  "issue_text": "vectors break pretty printing\n```py\r\nIn [1]: from sympy.vector import *\r\n\r\nIn [2]: e = CoordSysCartesian('e')\r\n\r\nIn [3]: (x/y)**t*e.j\r\nOut[3]:\r\n⎛   t⎞ e_j\r\n⎜⎛x⎞ e_j ⎟\r\n⎜⎜─⎟ ⎟\r\n⎝⎝y⎠ ⎠\r\n```\r\n\r\nAlso, when it does print correctly, the baseline is wrong (it should be centered). \n",
+  "hints": {
+    "failing_tests": [
+      "test_issue_12675",
+      "test_pretty_print_unicode"
+    ],
+    "focus_files": [
+      "sympy/printing/pretty/pretty.py"
+    ],
+    "test_patch": "diff --git a/sympy/printing/pretty/tests/test_pretty.py b/sympy/printing/pretty/tests/test_pretty.py\n--- a/sympy/printing/pretty/tests/test_pretty.py\n+++ b/sympy/printing/pretty/tests/test_pretty.py\n@@ -6089,6 +6089,28 @@ def test_MatrixElement_printing():\n     assert upretty(F) == ucode_str1\n \n \n+def test_issue_12675():\n+    from sympy.vector import CoordSys3D\n+    x, y, t, j = symbols('x y t j')\n+    e = CoordSys3D('e')\n+\n+    ucode_str = \\\n+u(\"\"\"\\\n+⎛   t⎞    \\n\\\n+⎜⎛x⎞ ⎟ e_j\\n\\\n+⎜⎜─⎟ ⎟    \\n\\\n+⎝⎝y⎠ ⎠    \\\n+\"\"\")\n+    assert upretty((x/y)**t*e.j) == ucode_str\n+    ucode_str = \\\n+u(\"\"\"\\\n+⎛1⎞    \\n\\\n+⎜─⎟ e_j\\n\\\n+⎝y⎠    \\\n+\"\"\")\n+    assert upretty((1/y)*e.j) == ucode_str\n+\n+\n def test_MatrixSymbol_printing():\n     # test cases for issue #14237\n     A = MatrixSymbol(\"A\", 3, 3)\ndiff --git a/sympy/vector/tests/test_printing.py b/sympy/vector/tests/test_printing.py\n--- a/sympy/vector/tests/test_printing.py\n+++ b/sympy/vector/tests/test_printing.py\n@@ -37,8 +37,8 @@ def upretty(expr):\n v.append(N.j - (Integral(f(b)) - C.x**2)*N.k)\n upretty_v_8 = u(\n \"\"\"\\\n-N_j + ⎛   2   ⌠        ⎞ N_k\\n\\\n-      ⎜C_x  - ⎮ f(b) db⎟    \\n\\\n+      ⎛   2   ⌠        ⎞    \\n\\\n+N_j + ⎜C_x  - ⎮ f(b) db⎟ N_k\\n\\\n       ⎝       ⌡        ⎠    \\\n \"\"\")\n pretty_v_8 = u(\n@@ -55,9 +55,9 @@ def upretty(expr):\n v.append((a**2 + b)*N.i + (Integral(f(b)))*N.k)\n upretty_v_11 = u(\n \"\"\"\\\n-⎛ 2    ⎞ N_i + ⎛⌠        ⎞ N_k\\n\\\n-⎝a  + b⎠       ⎜⎮ f(b) db⎟    \\n\\\n-               ⎝⌡        ⎠    \\\n+⎛ 2    ⎞        ⎛⌠        ⎞    \\n\\\n+⎝a  + b⎠ N_i  + ⎜⎮ f(b) db⎟ N_k\\n\\\n+                ⎝⌡        ⎠    \\\n \"\"\")\n pretty_v_11 = u(\n \"\"\"\\\n@@ -85,8 +85,8 @@ def upretty(expr):\n # This is the pretty form for ((a**2 + b)*N.i + 3*(C.y - c)*N.k) | N.k\n upretty_d_7 = u(\n \"\"\"\\\n-⎛ 2    ⎞ (N_i|N_k) + (3⋅C_y - 3⋅c) (N_k|N_k)\\n\\\n-⎝a  + b⎠                                    \\\n+⎛ 2    ⎞                                     \\n\\\n+⎝a  + b⎠ (N_i|N_k)  + (3⋅C_y - 3⋅c) (N_k|N_k)\\\n \"\"\")\n pretty_d_7 = u(\n \"\"\"\\\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_issue_12675 or test_pretty_print_unicode\"",
+    "test_full": "python -m pytest -x -q -k \"test_issue_12675 or test_pretty_print_unicode\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

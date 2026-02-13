@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-14411",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "fa4e963ee7e6876581b5432363603571839ba00c",
+  "workdir": "/tmp/swebench_work/django__django-14411",
+  "issue_text": "Label for ReadOnlyPasswordHashWidget points to non-labelable element.\nDescription\n\t \n\t\t(last modified by David Sanders)\n\t \nIn the admin, the label element for the ReadOnlyPasswordHashWidget widget has a 'for' attribute which points to a non-labelable element, since the widget just renders text, not an input. There's no labelable element for the widget, so the label shouldn't have a 'for' attribute.\n",
+  "hints": {
+    "failing_tests": [
+      "ReadOnlyPasswordHashWidget doesn't contain a for attribute in the"
+    ],
+    "focus_files": [
+      "django/contrib/auth/forms.py"
+    ],
+    "test_patch": "diff --git a/tests/auth_tests/test_forms.py b/tests/auth_tests/test_forms.py\n--- a/tests/auth_tests/test_forms.py\n+++ b/tests/auth_tests/test_forms.py\n@@ -13,6 +13,7 @@\n from django.core import mail\n from django.core.exceptions import ValidationError\n from django.core.mail import EmailMultiAlternatives\n+from django.forms import forms\n from django.forms.fields import CharField, Field, IntegerField\n from django.test import SimpleTestCase, TestCase, override_settings\n from django.utils import translation\n@@ -1025,6 +1026,18 @@ def test_readonly_field_has_changed(self):\n         self.assertIs(field.disabled, True)\n         self.assertFalse(field.has_changed('aaa', 'bbb'))\n \n+    def test_label(self):\n+        \"\"\"\n+        ReadOnlyPasswordHashWidget doesn't contain a for attribute in the\n+        <label> because it doesn't have any labelable elements.\n+        \"\"\"\n+        class TestForm(forms.Form):\n+            hash_field = ReadOnlyPasswordHashField()\n+\n+        bound_field = TestForm()['hash_field']\n+        self.assertEqual(bound_field.field.widget.id_for_label('id'), None)\n+        self.assertEqual(bound_field.label_tag(), '<label>Hash field:</label>')\n+\n \n class AdminPasswordChangeFormTest(TestDataMixin, TestCase):\n \n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q -k \"ReadOnlyPasswordHashWidget\"",
+    "test_full": "python -m pytest -x -q -k \"ReadOnlyPasswordHashWidget\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

@@ -13,17 +13,21 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from rfsn_kernel.state import Proposal, SystemState
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from rfsn_kernel.memory import MemoryEntry
 
 
 @dataclass
 class SimResult:
     """Simulation output — no execution occurred."""
 
-    success_prob: float       # 0.0–1.0
+    success_prob: float  # 0.0–1.0
     failure_mode: Optional[str] = None
-    cost_est: float = 0.0    # estimated resource cost
+    cost_est: float = 0.0  # estimated resource cost
     drift_risk: float = 0.0  # 0.0–1.0
-    loop_risk: float = 0.0   # 0.0–1.0
+    loop_risk: float = 0.0  # 0.0–1.0
     predicted_state_delta: Dict[str, Any] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
@@ -42,6 +46,7 @@ class SimResult:
 
 # ── Outcome history (lightweight in-memory) ──
 
+
 class OutcomeHistory:
     """Tracks recent action outcomes for simulation.
 
@@ -56,8 +61,11 @@ class OutcomeHistory:
         self._stats: Dict[str, _ActionStats] = {}
 
     def record(
-        self, action: str, context: str,
-        success: bool, cost: float = 0.0,
+        self,
+        action: str,
+        context: str,
+        success: bool,
+        cost: float = 0.0,
     ) -> None:
         key = f"{action}|{context}"
         if key not in self._stats:
@@ -70,16 +78,20 @@ class OutcomeHistory:
         # EMA for recent failure rate.
         alpha = 0.3
         s.recent_failure_rate = (
-            alpha * (0.0 if success else 1.0)
-            + (1 - alpha) * s.recent_failure_rate
+            alpha * (0.0 if success else 1.0) + (1 - alpha) * s.recent_failure_rate
         )
         # Prune if too many keys.
         if len(self._stats) > self._max:
-            # Drop least-used entries.
-            sorted_keys = sorted(
-                self._stats, key=lambda k: self._stats[k].n,
+            # Drop least-used entries — O(n) via heapq vs O(n log n) sort.
+            import heapq
+
+            n_drop = len(self._stats) // 4
+            to_drop = heapq.nsmallest(
+                n_drop,
+                self._stats,
+                key=lambda k: self._stats[k].n,
             )
-            for k in sorted_keys[:len(sorted_keys) // 4]:
+            for k in to_drop:
                 del self._stats[k]
 
     def lookup(self, action: str, context: str) -> Optional["_ActionStats"]:
@@ -137,7 +149,8 @@ def _estimate_cost(proposal: Proposal) -> float:
 
 
 def _detect_loop(
-    proposal: Proposal, state: SystemState,
+    proposal: Proposal,
+    state: SystemState,
 ) -> float:
     """Detect if we're repeating the same action without progress.
 
@@ -160,7 +173,7 @@ def _detect_loop(
             break
 
     if consecutive >= 4:
-        return 0.95   # almost certainly a loop
+        return 0.95  # almost certainly a loop
     if consecutive >= 3:
         return 0.7
     if same_count >= 6:
@@ -185,7 +198,8 @@ def _detect_drift(state: SystemState) -> float:
 
 
 def _predict_failure_mode(
-    proposal: Proposal, state: SystemState,
+    proposal: Proposal,
+    state: SystemState,
     history: Optional[OutcomeHistory] = None,
     context: str = "",
 ) -> Optional[str]:
@@ -212,6 +226,8 @@ def simulate(
     prior_success_prob: Optional[float] = None,
     prior_trials: int = 0,
     prior_loop_risk: Optional[float] = None,
+    known_traps: Optional[list[str]] = None,
+    memory_entries: Optional[list["MemoryEntry"]] = None,
 ) -> SimResult:
     """Run a fast predictive model — no side effects.
 
@@ -243,24 +259,20 @@ def simulate(
         if stats and stats.n >= 3:
             # Blend base prior with observed rate.
             weight = min(stats.n / 10.0, 1.0)
-            success_prob = (
-                (1 - weight) * success_prob
-                + weight * stats.success_rate
-            )
+            success_prob = (1 - weight) * success_prob + weight * stats.success_rate
 
     # Blend in learner evidence as an upstream prior.
     if prior_success_prob is not None:
         prior = max(
-            0.01, min(1.0, float(prior_success_prob)),
+            0.01,
+            min(1.0, float(prior_success_prob)),
         )
         confidence = max(
-            0.0, min(1.0, float(prior_trials) / 20.0),
+            0.0,
+            min(1.0, float(prior_trials) / 20.0),
         )
         weight = 0.25 + (0.5 * confidence)
-        success_prob = (
-            (1.0 - weight) * success_prob
-            + weight * prior
-        )
+        success_prob = (1.0 - weight) * success_prob + weight * prior
 
     # Penalize for high recent failure count.
     if state.recent_failures >= 3:
@@ -272,7 +284,37 @@ def simulate(
     if state.safety_level >= 1:
         success_prob *= 0.9
 
+    # Known trap penalty.
+    if known_traps:
+        # Check if the proposal matches any trap.
+        # Traps can be specific actions or strategies.
+        # Since 'strategy' isn't on the proposal, we mostly check action based traps if supported.
+        # But if the orchestrator passes "strategy:XYZ" and we know this step belongs to it...
+        # Actually, simulate() is tactical.
+        # Let's assume traps might be "action:run_tests" or similar.
+        action_trap = f"action:{proposal.action}"
+        if action_trap in known_traps:
+            success_prob *= 0.1
+        # Also generic string matching for now (e.g. if we trapped 'run_tests')
+        if proposal.action in known_traps:
+            success_prob *= 0.1
+
     success_prob = max(0.01, min(1.0, success_prob))
+
+    # Memory-informed prediction boost.
+    if memory_entries:
+        total_s = 0
+        total_f = 0
+        for me in memory_entries:
+            if proposal.action in me.content.lower():
+                total_s += me.success_count
+                total_f += me.failure_count
+        total_obs = total_s + total_f
+        if total_obs >= 2:
+            memory_rate = total_s / total_obs
+            # Blend 15% memory signal.
+            success_prob = 0.85 * success_prob + 0.15 * memory_rate
+            success_prob = max(0.01, min(1.0, success_prob))
 
     cost_est = _estimate_cost(proposal)
     loop_risk = _detect_loop(proposal, state)
@@ -283,7 +325,10 @@ def simulate(
         )
     drift_risk = _detect_drift(state)
     failure_mode = _predict_failure_mode(
-        proposal, state, history, context,
+        proposal,
+        state,
+        history,
+        context,
     )
 
     return SimResult(

@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-15498",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "d90e34c61b27fba2527834806639eebbcfab9631",
+  "workdir": "/tmp/swebench_work/django__django-15498",
+  "issue_text": "Fix handling empty string for If-Modified-Since header\nDescription\n\t\nEmpty string used to be ignored for If-Modified-Since header, but now raises exception since d6aff369ad3.\nFix handling empty string for If-Modified-Since header\nDescription\n\t\nEmpty string used to be ignored for If-Modified-Since header, but now raises exception since d6aff369ad3.\n",
+  "hints": {
+    "failing_tests": [
+      "test_was_modified_since_empty_string (view_tests.tests.test_static.StaticUtilsTests)"
+    ],
+    "focus_files": [
+      "django/views/static.py"
+    ],
+    "test_patch": "diff --git a/tests/view_tests/tests/test_static.py b/tests/view_tests/tests/test_static.py\n--- a/tests/view_tests/tests/test_static.py\n+++ b/tests/view_tests/tests/test_static.py\n@@ -191,3 +191,6 @@ def test_was_modified_since_fp(self):\n         mtime = 1343416141.107817\n         header = http_date(mtime)\n         self.assertFalse(was_modified_since(header, mtime))\n+\n+    def test_was_modified_since_empty_string(self):\n+        self.assertTrue(was_modified_since(header=\"\", mtime=1))\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q view_tests/tests/test_static.py",
+    "test_full": "python -m pytest -x -q view_tests/tests/test_static.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

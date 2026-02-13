@@ -1,0 +1,30 @@
+{
+  "task_id": "sphinx-doc__sphinx-8282",
+  "repo_url": "https://github.com/sphinx-doc/sphinx.git",
+  "repo_ref": "2c2335bbb8af99fa132e1573bbf45dc91584d5a2",
+  "workdir": "/tmp/swebench_work/sphinx-doc__sphinx-8282",
+  "issue_text": "autodoc_typehints does not effect to overloaded callables\n**Describe the bug**\r\nautodoc_typehints does not effect to overloaded callables.\r\n\r\n**To Reproduce**\r\n\r\n```\r\n# in conf.py\r\nautodoc_typehints = 'none'\r\n```\r\n```\r\n# in index.rst\r\n.. automodule:: example\r\n   :members:\r\n   :undoc-members:\r\n```\r\n```\r\n# in example.py\r\nfrom typing import overload\r\n\r\n\r\n@overload\r\ndef foo(x: int) -> int:\r\n    ...\r\n\r\n\r\n@overload\r\ndef foo(x: float) -> float:\r\n    ...\r\n\r\n\r\ndef foo(x):\r\n    return x\r\n```\r\n\r\n**Expected behavior**\r\nAll typehints for overloaded callables are obeyed `autodoc_typehints` setting.\r\n\r\n**Your project**\r\nNo\r\n\r\n**Screenshots**\r\nNo\r\n\r\n**Environment info**\r\n- OS: Mac\r\n- Python version: 3.8.2\r\n- Sphinx version: 3.1.0dev\r\n- Sphinx extensions: sphinx.ext.autodoc\r\n- Extra tools: No\r\n\r\n**Additional context**\r\nNo\n",
+  "hints": {
+    "failing_tests": [
+      "tests/test_ext_autodoc_configs.py::test_autodoc_typehints_none_for_overload"
+    ],
+    "focus_files": [
+      "sphinx/ext/autodoc/__init__.py"
+    ],
+    "test_patch": "diff --git a/tests/test_ext_autodoc_configs.py b/tests/test_ext_autodoc_configs.py\n--- a/tests/test_ext_autodoc_configs.py\n+++ b/tests/test_ext_autodoc_configs.py\n@@ -610,6 +610,54 @@ def test_autodoc_typehints_none(app):\n     ]\n \n \n+@pytest.mark.sphinx('html', testroot='ext-autodoc',\n+                    confoverrides={'autodoc_typehints': 'none'})\n+def test_autodoc_typehints_none_for_overload(app):\n+    options = {\"members\": None}\n+    actual = do_autodoc(app, 'module', 'target.overload', options)\n+    assert list(actual) == [\n+        '',\n+        '.. py:module:: target.overload',\n+        '',\n+        '',\n+        '.. py:class:: Bar(x, y)',\n+        '   :module: target.overload',\n+        '',\n+        '   docstring',\n+        '',\n+        '',\n+        '.. py:class:: Baz(x, y)',\n+        '   :module: target.overload',\n+        '',\n+        '   docstring',\n+        '',\n+        '',\n+        '.. py:class:: Foo(x, y)',\n+        '   :module: target.overload',\n+        '',\n+        '   docstring',\n+        '',\n+        '',\n+        '.. py:class:: Math()',\n+        '   :module: target.overload',\n+        '',\n+        '   docstring',\n+        '',\n+        '',\n+        '   .. py:method:: Math.sum(x, y)',\n+        '      :module: target.overload',\n+        '',\n+        '      docstring',\n+        '',\n+        '',\n+        '.. py:function:: sum(x, y)',\n+        '   :module: target.overload',\n+        '',\n+        '   docstring',\n+        '',\n+    ]\n+\n+\n @pytest.mark.sphinx('text', testroot='ext-autodoc',\n                     confoverrides={'autodoc_typehints': \"description\"})\n def test_autodoc_typehints_description(app):\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[test]"
+    ],
+    "test_quick": "python -m pytest -x -q tests/test_ext_autodoc_configs.py::test_autodoc_typehints_none_for_overload",
+    "test_full": "python -m pytest -x -q tests/test_ext_autodoc_configs.py::test_autodoc_typehints_none_for_overload"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

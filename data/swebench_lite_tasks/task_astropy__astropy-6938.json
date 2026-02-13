@@ -1,0 +1,31 @@
+{
+  "task_id": "astropy__astropy-6938",
+  "repo_url": "https://github.com/astropy/astropy.git",
+  "repo_ref": "c76af9ed6bb89bfba45b9f5bc1e635188278e2fa",
+  "workdir": "/tmp/swebench_work/astropy__astropy-6938",
+  "issue_text": "Possible bug in io.fits related to D exponents\nI came across the following code in ``fitsrec.py``:\r\n\r\n```python\r\n        # Replace exponent separator in floating point numbers\r\n        if 'D' in format:\r\n            output_field.replace(encode_ascii('E'), encode_ascii('D'))\r\n```\r\n\r\nI think this may be incorrect because as far as I can tell ``replace`` is not an in-place operation for ``chararray`` (it returns a copy). Commenting out this code doesn't cause any tests to fail so I think this code isn't being tested anyway.\n",
+  "hints": {
+    "failing_tests": [
+      "astropy/io/fits/tests/test_checksum.py::TestChecksumFunctions::test_ascii_table_data",
+      "astropy/io/fits/tests/test_table.py::TestTableFunctions::test_ascii_table"
+    ],
+    "focus_files": [
+      "astropy/io/fits/fitsrec.py"
+    ],
+    "test_patch": "diff --git a/astropy/io/fits/tests/test_checksum.py b/astropy/io/fits/tests/test_checksum.py\n--- a/astropy/io/fits/tests/test_checksum.py\n+++ b/astropy/io/fits/tests/test_checksum.py\n@@ -205,9 +205,9 @@ def test_ascii_table_data(self):\n                 # The checksum ends up being different on Windows, possibly due\n                 # to slight floating point differences\n                 assert 'CHECKSUM' in hdul[1].header\n-                assert hdul[1].header['CHECKSUM'] == '51IDA1G981GCA1G9'\n+                assert hdul[1].header['CHECKSUM'] == '3rKFAoI94oICAoI9'\n                 assert 'DATASUM' in hdul[1].header\n-                assert hdul[1].header['DATASUM'] == '1948208413'\n+                assert hdul[1].header['DATASUM'] == '1914653725'\n \n     def test_compressed_image_data(self):\n         with fits.open(self.data('comp.fits')) as h1:\ndiff --git a/astropy/io/fits/tests/test_table.py b/astropy/io/fits/tests/test_table.py\n--- a/astropy/io/fits/tests/test_table.py\n+++ b/astropy/io/fits/tests/test_table.py\n@@ -298,6 +298,19 @@ def test_ascii_table(self):\n         hdul = fits.open(self.temp('toto.fits'))\n         assert comparerecords(hdu.data, hdul[1].data)\n         hdul.close()\n+\n+        # Test Scaling\n+\n+        r1 = np.array([11., 12.])\n+        c2 = fits.Column(name='def', format='D', array=r1, bscale=2.3,\n+                         bzero=0.6)\n+        hdu = fits.TableHDU.from_columns([c2])\n+        hdu.writeto(self.temp('toto.fits'), overwrite=True)\n+        with open(self.temp('toto.fits')) as f:\n+            assert '4.95652173913043548D+00' in f.read()\n+        with fits.open(self.temp('toto.fits')) as hdul:\n+            assert comparerecords(hdu.data, hdul[1].data)\n+\n         a.close()\n \n     def test_endianness(self):\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[test]"
+    ],
+    "test_quick": "python -m pytest -x -q astropy/io/fits/tests/test_checksum.py::TestChecksumFunctions::test_ascii_table_data astropy/io/fits/tests/test_table.py::TestTableFunctions::test_ascii_table",
+    "test_full": "python -m pytest -x -q astropy/io/fits/tests/test_checksum.py::TestChecksumFunctions::test_ascii_table_data astropy/io/fits/tests/test_table.py::TestTableFunctions::test_ascii_table"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

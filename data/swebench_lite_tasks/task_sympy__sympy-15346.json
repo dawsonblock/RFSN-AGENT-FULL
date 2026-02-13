@@ -1,0 +1,30 @@
+{
+  "task_id": "sympy__sympy-15346",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "9ef28fba5b4d6d0168237c9c005a550e6dc27d81",
+  "workdir": "/tmp/swebench_work/sympy__sympy-15346",
+  "issue_text": "can't simplify sin/cos with Rational?\nlatest cloned sympy, python 3 on windows\r\nfirstly, cos, sin with symbols can be simplified; rational number can be simplified\r\n```python\r\nfrom sympy import *\r\n\r\nx, y = symbols('x, y', real=True)\r\nr = sin(x)*sin(y) + cos(x)*cos(y)\r\nprint(r)\r\nprint(r.simplify())\r\nprint()\r\n\r\nr = Rational(1, 50) - Rational(1, 25)\r\nprint(r)\r\nprint(r.simplify())\r\nprint()\r\n```\r\nsays\r\n```cmd\r\nsin(x)*sin(y) + cos(x)*cos(y)\r\ncos(x - y)\r\n\r\n-1/50\r\n-1/50\r\n```\r\n\r\nbut\r\n```python\r\nt1 = Matrix([sin(Rational(1, 50)), cos(Rational(1, 50)), 0])\r\nt2 = Matrix([sin(Rational(1, 25)), cos(Rational(1, 25)), 0])\r\nr = t1.dot(t2)\r\nprint(r)\r\nprint(r.simplify())\r\nprint()\r\n\r\nr = sin(Rational(1, 50))*sin(Rational(1, 25)) + cos(Rational(1, 50))*cos(Rational(1, 25))\r\nprint(r)\r\nprint(r.simplify())\r\nprint()\r\n\r\nprint(acos(r))\r\nprint(acos(r).simplify())\r\nprint()\r\n```\r\nsays\r\n```cmd\r\nsin(1/50)*sin(1/25) + cos(1/50)*cos(1/25)\r\nsin(1/50)*sin(1/25) + cos(1/50)*cos(1/25)\r\n\r\nsin(1/50)*sin(1/25) + cos(1/50)*cos(1/25)\r\nsin(1/50)*sin(1/25) + cos(1/50)*cos(1/25)\r\n\r\nacos(sin(1/50)*sin(1/25) + cos(1/50)*cos(1/25))\r\nacos(sin(1/50)*sin(1/25) + cos(1/50)*cos(1/25))\r\n```\r\n\r\n\n",
+  "hints": {
+    "failing_tests": [
+      "test_issue_15129_trigsimp_methods"
+    ],
+    "focus_files": [
+      "sympy/simplify/trigsimp.py"
+    ],
+    "test_patch": "diff --git a/sympy/simplify/tests/test_trigsimp.py b/sympy/simplify/tests/test_trigsimp.py\n--- a/sympy/simplify/tests/test_trigsimp.py\n+++ b/sympy/simplify/tests/test_trigsimp.py\n@@ -1,7 +1,8 @@\n from sympy import (\n     symbols, sin, simplify, cos, trigsimp, rad, tan, exptrigsimp,sinh,\n     cosh, diff, cot, Subs, exp, tanh, exp, S, integrate, I,Matrix,\n-    Symbol, coth, pi, log, count_ops, sqrt, E, expand, Piecewise)\n+    Symbol, coth, pi, log, count_ops, sqrt, E, expand, Piecewise , Rational\n+    )\n \n from sympy.core.compatibility import long\n from sympy.utilities.pytest import XFAIL\n@@ -357,6 +358,14 @@ def test_issue_2827_trigsimp_methods():\n     eq = 1/sqrt(E) + E\n     assert exptrigsimp(eq) == eq\n \n+def test_issue_15129_trigsimp_methods():\n+    t1 = Matrix([sin(Rational(1, 50)), cos(Rational(1, 50)), 0])\n+    t2 = Matrix([sin(Rational(1, 25)), cos(Rational(1, 25)), 0])\n+    t3 = Matrix([cos(Rational(1, 25)), sin(Rational(1, 25)), 0])\n+    r1 = t1.dot(t2)\n+    r2 = t1.dot(t3)\n+    assert trigsimp(r1) == cos(S(1)/50)\n+    assert trigsimp(r2) == sin(S(3)/50)\n \n def test_exptrigsimp():\n     def valid(a, b):\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_issue_15129_trigsimp_methods\"",
+    "test_full": "python -m pytest -x -q -k \"test_issue_15129_trigsimp_methods\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

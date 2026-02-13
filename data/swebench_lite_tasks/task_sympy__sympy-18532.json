@@ -1,0 +1,31 @@
+{
+  "task_id": "sympy__sympy-18532",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "74227f900b05009d4eed62e34a166228788a32ca",
+  "workdir": "/tmp/swebench_work/sympy__sympy-18532",
+  "issue_text": "expr.atoms() should return objects with no args instead of subclasses of Atom\n`expr.atoms()` with no arguments returns subclasses of `Atom` in `expr`. But the correct definition of a leaf node should be that it has no `.args`. \n\nThis should be easy to fix, but one needs to check that this doesn't affect the performance. \n\n",
+  "hints": {
+    "failing_tests": [
+      "test_sizeof",
+      "test_atoms"
+    ],
+    "focus_files": [
+      "sympy/core/basic.py"
+    ],
+    "test_patch": "diff --git a/sympy/codegen/tests/test_cnodes.py b/sympy/codegen/tests/test_cnodes.py\n--- a/sympy/codegen/tests/test_cnodes.py\n+++ b/sympy/codegen/tests/test_cnodes.py\n@@ -1,6 +1,6 @@\n from sympy.core.symbol import symbols\n from sympy.printing.ccode import ccode\n-from sympy.codegen.ast import Declaration, Variable, float64, int64\n+from sympy.codegen.ast import Declaration, Variable, float64, int64, String\n from sympy.codegen.cnodes import (\n     alignof, CommaOperator, goto, Label, PreDecrement, PostDecrement, PreIncrement, PostIncrement,\n     sizeof, union, struct\n@@ -66,7 +66,7 @@ def test_sizeof():\n     assert ccode(sz) == 'sizeof(%s)' % typename\n     assert sz.func(*sz.args) == sz\n     assert not sz.is_Atom\n-    assert all(atom == typename for atom in sz.atoms())\n+    assert sz.atoms() == {String('unsigned int'), String('sizeof')}\n \n \n def test_struct():\ndiff --git a/sympy/core/tests/test_basic.py b/sympy/core/tests/test_basic.py\n--- a/sympy/core/tests/test_basic.py\n+++ b/sympy/core/tests/test_basic.py\n@@ -137,7 +137,7 @@ def test_subs_with_unicode_symbols():\n \n \n def test_atoms():\n-    assert b21.atoms() == set()\n+    assert b21.atoms() == set([Basic()])\n \n \n def test_free_symbols_empty():\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_sizeof or test_atoms\"",
+    "test_full": "python -m pytest -x -q -k \"test_sizeof or test_atoms\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

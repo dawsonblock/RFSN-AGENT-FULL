@@ -1,0 +1,30 @@
+{
+  "task_id": "sympy__sympy-13471",
+  "repo_url": "https://github.com/sympy/sympy.git",
+  "repo_ref": "3546ac7ed78e1780c1a76929864bb33330055740",
+  "workdir": "/tmp/swebench_work/sympy__sympy-13471",
+  "issue_text": "Python 2->3 pickle fails with float-containing expressions\nDumping a pickled sympy expression containing a float in Python 2, then loading it in Python 3 generates an error.\r\n\r\nHere is a minimum working example, verified with sympy git commit 3546ac7 (master at time of writing), Python 2.7 and Python 3.6:\r\n\r\n```python\r\npython2 -c 'import pickle; import sympy; x = sympy.symbols(\"x\"); print pickle.dumps(x + 1.0, 2)' | python3 -c 'import pickle; import sys; print(pickle.loads(sys.stdin.buffer.read()))'\r\n```\r\n\r\nand the result:\r\n\r\n```\r\nTraceback (most recent call last):\r\n  File \"<string>\", line 1, in <module>\r\n  File \"/Users/alex/git/VU/sympy/sympy/core/numbers.py\", line 1045, in __new__\r\n    num[1] = long(num[1], 16)\r\nValueError: invalid literal for int() with base 16: '1L'\r\n```\n",
+  "hints": {
+    "failing_tests": [
+      "test_Float_from_tuple"
+    ],
+    "focus_files": [
+      "sympy/core/numbers.py"
+    ],
+    "test_patch": "diff --git a/sympy/core/tests/test_numbers.py b/sympy/core/tests/test_numbers.py\n--- a/sympy/core/tests/test_numbers.py\n+++ b/sympy/core/tests/test_numbers.py\n@@ -582,6 +582,12 @@ def test_Float_issue_2107():\n     assert S.Zero + b + (-b) == 0\n \n \n+def test_Float_from_tuple():\n+    a = Float((0, '1L', 0, 1))\n+    b = Float((0, '1', 0, 1))\n+    assert a == b\n+\n+\n def test_Infinity():\n     assert oo != 1\n     assert 1*oo == oo\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e ."
+    ],
+    "test_quick": "python -m pytest -x -q -k \"test_Float_from_tuple\"",
+    "test_full": "python -m pytest -x -q -k \"test_Float_from_tuple\""
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

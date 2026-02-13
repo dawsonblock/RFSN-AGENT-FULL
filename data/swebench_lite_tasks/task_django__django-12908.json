@@ -1,0 +1,31 @@
+{
+  "task_id": "django__django-12908",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "49ae7ce50a874f8a04cd910882fb9571ff3a0d7a",
+  "workdir": "/tmp/swebench_work/django__django-12908",
+  "issue_text": "Union queryset should raise on distinct().\nDescription\n\t \n\t\t(last modified by Sielc Technologies)\n\t \nAfter using\n.annotate() on 2 different querysets\nand then .union()\n.distinct() will not affect the queryset\n\tdef setUp(self) -> None:\n\t\tuser = self.get_or_create_admin_user()\n\t\tSample.h.create(user, name=\"Sam1\")\n\t\tSample.h.create(user, name=\"Sam2 acid\")\n\t\tSample.h.create(user, name=\"Sam3\")\n\t\tSample.h.create(user, name=\"Sam4 acid\")\n\t\tSample.h.create(user, name=\"Dub\")\n\t\tSample.h.create(user, name=\"Dub\")\n\t\tSample.h.create(user, name=\"Dub\")\n\t\tself.user = user\n\tdef test_union_annotated_diff_distinct(self):\n\t\tqs = Sample.objects.filter(user=self.user)\n\t\tqs1 = qs.filter(name='Dub').annotate(rank=Value(0, IntegerField()))\n\t\tqs2 = qs.filter(name='Sam1').annotate(rank=Value(1, IntegerField()))\n\t\tqs = qs1.union(qs2)\n\t\tqs = qs.order_by('name').distinct('name') # THIS DISTINCT DOESN'T WORK\n\t\tself.assertEqual(qs.count(), 2)\nexpected to get wrapped union\n\tSELECT DISTINCT ON (siebox_sample.name) * FROM (SELECT ... UNION SELECT ...) AS siebox_sample\n",
+  "hints": {
+    "failing_tests": [
+      "test_unsupported_operations_on_combined_qs (queries.test_qs_combinators.QuerySetSetOperationTests)",
+      "test_unsupported_ordering_slicing_raises_db_error (queries.test_qs_combinators.QuerySetSetOperationTests)"
+    ],
+    "focus_files": [
+      "django/db/models/query.py"
+    ],
+    "test_patch": "diff --git a/tests/queries/test_qs_combinators.py b/tests/queries/test_qs_combinators.py\n--- a/tests/queries/test_qs_combinators.py\n+++ b/tests/queries/test_qs_combinators.py\n@@ -272,6 +272,7 @@ def test_unsupported_operations_on_combined_qs(self):\n                 'annotate',\n                 'defer',\n                 'delete',\n+                'distinct',\n                 'exclude',\n                 'extra',\n                 'filter',\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q queries/test_qs_combinators.py",
+    "test_full": "python -m pytest -x -q queries/test_qs_combinators.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}

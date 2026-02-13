@@ -4,6 +4,7 @@ Covers every module: state, normalize, validate, simulate,
 risk, decide, verify, hard_ledger, kernel, replay, memory,
 planner.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -17,9 +18,7 @@ from pathlib import Path
 import pytest
 
 # ── Make rfsn_kernel importable ───────────────────────
-ROOT = str(
-    Path(__file__).resolve().parent.parent
-)
+ROOT = str(Path(__file__).resolve().parent.parent)
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
@@ -83,6 +82,7 @@ from rfsn_kernel.planner import (
 # FIXTURES
 # ══════════════════════════════════════════════════════
 
+
 @pytest.fixture
 def default_policy():
     return {
@@ -109,8 +109,7 @@ def basic_proposal():
     """Proposal using a VALID action type."""
     return Proposal(
         action="repo_read_range",
-        params={"path": "src/main.py",
-                "line_start": 1, "line_end": 50},
+        params={"path": "src/main.py", "line_start": 1, "line_end": 50},
         context_hash="ctx_abc",
         planner_hash="plan_xyz",
         intent="read source file",
@@ -150,9 +149,11 @@ def tmp_ledger(tmp_path):
 # 1. STATE MODULE
 # ══════════════════════════════════════════════════════
 
+
 class TestState:
     def test_proposal_deterministic_hash(
-        self, basic_proposal,
+        self,
+        basic_proposal,
     ):
         h1 = basic_proposal.deterministic_hash()
         h2 = basic_proposal.deterministic_hash()
@@ -174,10 +175,7 @@ class TestState:
             context_hash="c1",
             planner_hash="p1",
         )
-        assert (
-            p1.deterministic_hash()
-            != p2.deterministic_hash()
-        )
+        assert p1.deterministic_hash() != p2.deterministic_hash()
 
     def test_system_state_defaults(self, basic_state):
         assert basic_state.step_count == 0
@@ -186,28 +184,29 @@ class TestState:
         assert basic_state.safety_level == 0
 
     def test_system_state_record_action(
-        self, basic_state,
+        self,
+        basic_state,
     ):
         basic_state.record_action("repo_read_range")
-        assert (
-            "repo_read_range"
-            in basic_state.recent_actions
-        )
+        assert "repo_read_range" in basic_state.recent_actions
 
     def test_system_state_advance_step(
-        self, basic_state,
+        self,
+        basic_state,
     ):
         basic_state.advance_step()
         assert basic_state.step_count == 1
 
     def test_system_state_record_failure(
-        self, basic_state,
+        self,
+        basic_state,
     ):
         basic_state.record_failure()
         assert basic_state.recent_failures == 1
 
     def test_system_state_record_success(
-        self, basic_state,
+        self,
+        basic_state,
     ):
         basic_state.record_failure()
         basic_state.record_success()
@@ -221,7 +220,8 @@ class TestState:
         assert "rng_seed" in snap
 
     def test_system_state_deterministic_hash(
-        self, basic_state,
+        self,
+        basic_state,
     ):
         h1 = basic_state.deterministic_hash()
         h2 = basic_state.deterministic_hash()
@@ -242,6 +242,7 @@ class TestState:
 # ══════════════════════════════════════════════════════
 # 2. NORMALIZE MODULE
 # ══════════════════════════════════════════════════════
+
 
 class TestNormalize:
     def test_normalize_basic(self):
@@ -312,25 +313,30 @@ class TestNormalize:
 # 3. VALIDATE MODULE
 # ══════════════════════════════════════════════════════
 
+
 class TestValidate:
     def test_validate_passes_normal_step(
-        self, basic_state, default_policy,
+        self,
+        basic_state,
+        default_policy,
     ):
         p = Proposal(
             action="repo_read_range",
-            params={"path": "src/main.py",
-                    "line_start": 1,
-                    "line_end": 50},
+            params={"path": "src/main.py", "line_start": 1, "line_end": 50},
             context_hash="c",
             planner_hash="p",
         )
         result = validate(
-            p, basic_state, default_policy,
+            p,
+            basic_state,
+            default_policy,
         )
         assert result.ok
 
     def test_validate_rejects_path_traversal(
-        self, basic_state, default_policy,
+        self,
+        basic_state,
+        default_policy,
     ):
         p = Proposal(
             action="repo_read_range",
@@ -343,34 +349,37 @@ class TestValidate:
             planner_hash="p",
         )
         result = validate(
-            p, basic_state, default_policy,
+            p,
+            basic_state,
+            default_policy,
         )
         assert not result.ok
-        assert any(
-            "PATH_TRAVERSAL" == e.get("code")
-            for e in result.errors
-        )
+        assert any("PATH_TRAVERSAL" == e.get("code") for e in result.errors)
 
     def test_validate_rejects_over_budget(
-        self, basic_state, default_policy,
+        self,
+        basic_state,
+        default_policy,
     ):
         default_policy["max_total_steps"] = 5
         basic_state.step_count = 5
         p = Proposal(
             action="repo_read_range",
-            params={"path": "a.py",
-                    "line_start": 1,
-                    "line_end": 10},
+            params={"path": "a.py", "line_start": 1, "line_end": 10},
             context_hash="c",
             planner_hash="p",
         )
         result = validate(
-            p, basic_state, default_policy,
+            p,
+            basic_state,
+            default_policy,
         )
         assert not result.ok
 
     def test_validate_rejects_empty_patch(
-        self, basic_state, default_policy,
+        self,
+        basic_state,
+        default_policy,
     ):
         p = Proposal(
             action="apply_patch",
@@ -381,29 +390,35 @@ class TestValidate:
             planner_hash="p",
         )
         result = validate(
-            p, basic_state, default_policy,
+            p,
+            basic_state,
+            default_policy,
         )
         assert not result.ok
 
     def test_validate_safety_lockout(
-        self, basic_state, default_policy,
+        self,
+        basic_state,
+        default_policy,
     ):
         basic_state.safety_level = 2
         p = Proposal(
             action="repo_read_range",
-            params={"path": "a.py",
-                    "line_start": 1,
-                    "line_end": 10},
+            params={"path": "a.py", "line_start": 1, "line_end": 10},
             context_hash="c",
             planner_hash="p",
         )
         result = validate(
-            p, basic_state, default_policy,
+            p,
+            basic_state,
+            default_policy,
         )
         assert not result.ok
 
     def test_validate_rejects_unknown_action(
-        self, basic_state, default_policy,
+        self,
+        basic_state,
+        default_policy,
     ):
         p = Proposal(
             action="unknown_action",
@@ -412,13 +427,17 @@ class TestValidate:
             planner_hash="p",
         )
         result = validate(
-            p, basic_state, default_policy,
+            p,
+            basic_state,
+            default_policy,
         )
         assert not result.ok
         assert result.errors[0]["code"] == "UNKNOWN_ACTION"
 
     def test_validate_repo_search_long_pattern(
-        self, basic_state, default_policy,
+        self,
+        basic_state,
+        default_policy,
     ):
         p = Proposal(
             action="repo_search",
@@ -427,18 +446,194 @@ class TestValidate:
             planner_hash="p",
         )
         result = validate(
-            p, basic_state, default_policy,
+            p,
+            basic_state,
+            default_policy,
         )
         assert not result.ok
+
+    # ── forbid flags ──────────────────────────────
+
+    def test_forbid_test_edits_rejects_patch(
+        self,
+        basic_state,
+        default_policy,
+    ):
+        policy = {**default_policy, "forbid_test_edits": True}
+        patch = (
+            "diff --git a/tests/test_foo.py b/tests/test_foo.py\n"
+            "--- a/tests/test_foo.py\n"
+            "+++ b/tests/test_foo.py\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+        p = Proposal(
+            action="apply_patch",
+            params={"patch": patch},
+            context_hash="c",
+            planner_hash="p",
+        )
+        result = validate(p, basic_state, policy)
+        assert not result.ok
+        assert any(e.get("code") == "FORBID_TEST_EDITS" for e in result.errors)
+
+    def test_forbid_ci_edits_rejects_patch(
+        self,
+        basic_state,
+        default_policy,
+    ):
+        policy = {**default_policy, "forbid_ci_edits": True}
+        patch = (
+            "diff --git a/.github/workflows/ci.yml"
+            " b/.github/workflows/ci.yml\n"
+            "--- a/.github/workflows/ci.yml\n"
+            "+++ b/.github/workflows/ci.yml\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+        p = Proposal(
+            action="apply_patch",
+            params={"patch": patch},
+            context_hash="c",
+            planner_hash="p",
+        )
+        result = validate(p, basic_state, policy)
+        assert not result.ok
+        assert any(e.get("code") == "FORBID_CI_EDITS" for e in result.errors)
+
+    def test_forbid_dep_manifest_edits_rejects_patch(
+        self,
+        basic_state,
+        default_policy,
+    ):
+        policy = {
+            **default_policy,
+            "forbid_dep_manifest_edits": True,
+        }
+        patch = (
+            "diff --git a/pyproject.toml b/pyproject.toml\n"
+            "--- a/pyproject.toml\n"
+            "+++ b/pyproject.toml\n"
+            "@@ -1 +1 @@\n"
+            "-old\n"
+            "+new\n"
+        )
+        p = Proposal(
+            action="apply_patch",
+            params={"patch": patch},
+            context_hash="c",
+            planner_hash="p",
+        )
+        result = validate(p, basic_state, policy)
+        assert not result.ok
+        assert any(e.get("code") == "FORBID_DEP_MANIFEST_EDITS" for e in result.errors)
+
+    # ── patch budget enforcement ──────────────────
+
+    def test_patch_too_many_files_rejected(
+        self,
+        basic_state,
+        default_policy,
+    ):
+        policy = {**default_policy, "max_patch_files": 1}
+        patch = (
+            "diff --git a/foo.py b/foo.py\n"
+            "--- a/foo.py\n+++ b/foo.py\n"
+            "@@ -1 +1 @@\n-a\n+b\n"
+            "diff --git a/bar.py b/bar.py\n"
+            "--- a/bar.py\n+++ b/bar.py\n"
+            "@@ -1 +1 @@\n-c\n+d\n"
+        )
+        p = Proposal(
+            action="apply_patch",
+            params={"patch": patch},
+            context_hash="c",
+            planner_hash="p",
+        )
+        result = validate(p, basic_state, policy)
+        assert not result.ok
+        assert any(e.get("code") == "PATCH_TOO_MANY_FILES" for e in result.errors)
+
+    # ── allowed test templates ────────────────────
+
+    def test_allowed_test_templates_rejects_unknown(
+        self,
+        basic_state,
+        default_policy,
+    ):
+        policy = {
+            **default_policy,
+            "allowed_test_templates": [
+                "pytest_targeted",
+                "pytest_suite",
+            ],
+        }
+        p = Proposal(
+            action="run_tests",
+            params={"template_id": "evil_template"},
+            context_hash="c",
+            planner_hash="p",
+        )
+        result = validate(p, basic_state, policy)
+        assert not result.ok
+        assert any(e.get("code") == "UNKNOWN_TEST_TEMPLATE" for e in result.errors)
+
+    def test_allowed_test_templates_accepts_known(
+        self,
+        basic_state,
+        default_policy,
+    ):
+        policy = {
+            **default_policy,
+            "allowed_test_templates": [
+                "pytest_targeted",
+                "pytest_suite",
+            ],
+        }
+        p = Proposal(
+            action="run_tests",
+            params={"template_id": "pytest_targeted"},
+            context_hash="c",
+            planner_hash="p",
+        )
+        result = validate(p, basic_state, policy)
+        assert result.ok
 
 
 # ══════════════════════════════════════════════════════
 # 4. SIMULATE MODULE
 # ══════════════════════════════════════════════════════
 
+
 class TestSimulate:
+    def test_simulate_state_decay(self):
+        s = SystemState()
+        s.recent_failures = 6
+        p = Proposal(action="run_tests", params={})
+        history = OutcomeHistory(max_entries=100)
+        res = simulate(p, s, history, "ctx")
+        # Should be penalized heavily
+        assert res.success_prob <= 0.25
+
+    def test_simulate_with_known_traps(self):
+        s = SystemState()
+        p = Proposal(action="run_tests", params={})
+        history = OutcomeHistory(max_entries=100)
+        # Baseline
+        res1 = simulate(p, s, history, "ctx")
+        base_prob = res1.success_prob
+
+        # With trap
+        res2 = simulate(p, s, history, "ctx", known_traps=["action:run_tests"])
+        assert res2.success_prob < base_prob
+        assert res2.success_prob <= (base_prob * 0.15)  # allow some float margin
+
     def test_simulate_basic(
-        self, basic_proposal, basic_state,
+        self,
+        basic_proposal,
+        basic_state,
     ):
         history = OutcomeHistory(max_entries=100)
         result = simulate(
@@ -452,14 +647,18 @@ class TestSimulate:
         assert result.cost_est >= 0
 
     def test_simulate_with_prior_failures(
-        self, basic_proposal, basic_state,
+        self,
+        basic_proposal,
+        basic_state,
     ):
         history = OutcomeHistory(max_entries=100)
         # Record many failures.
         for _ in range(10):
             history.record(
-                "repo_read_range", "ctx_abc",
-                False, 0.1,
+                "repo_read_range",
+                "ctx_abc",
+                False,
+                0.1,
             )
         result = simulate(
             basic_proposal,
@@ -482,7 +681,10 @@ class TestSimulate:
         h = OutcomeHistory(max_entries=50)
         h.record("repo_read_range", "ctx1", True, 0.5)
         h.record(
-            "repo_read_range", "ctx1", False, 0.1,
+            "repo_read_range",
+            "ctx1",
+            False,
+            0.1,
         )
         stats = h.lookup("repo_read_range", "ctx1")
         assert stats is not None
@@ -491,7 +693,9 @@ class TestSimulate:
         assert stats.fail == 1
 
     def test_sim_result_to_dict(
-        self, basic_proposal, basic_state,
+        self,
+        basic_proposal,
+        basic_state,
     ):
         history = OutcomeHistory(max_entries=100)
         result = simulate(
@@ -512,8 +716,10 @@ class TestSimulate:
         for _ in range(15):
             state.record_action("repo_read_range")
             history.record(
-                "repo_read_range", "ctx",
-                False, 0.1,
+                "repo_read_range",
+                "ctx",
+                False,
+                0.1,
             )
         p = Proposal(
             action="repo_read_range",
@@ -529,9 +735,12 @@ class TestSimulate:
 # 5. RISK MODULE
 # ══════════════════════════════════════════════════════
 
+
 class TestRisk:
     def test_risk_score_basic(
-        self, basic_proposal, default_policy,
+        self,
+        basic_proposal,
+        default_policy,
     ):
         sim = SimResult(
             success_prob=0.8,
@@ -552,7 +761,9 @@ class TestRisk:
         assert breakdown.effective_risk <= 1.0
 
     def test_risk_to_dict(
-        self, basic_proposal, default_policy,
+        self,
+        basic_proposal,
+        default_policy,
     ):
         sim = SimResult(
             success_prob=0.7,
@@ -563,7 +774,9 @@ class TestRisk:
         )
         state = SystemState(rng_seed=42)
         b = risk_score(
-            basic_proposal, sim, state,
+            basic_proposal,
+            sim,
+            state,
             default_policy,
         )
         d = b.to_dict()
@@ -573,7 +786,9 @@ class TestRisk:
         assert "ev_bonus" in d
 
     def test_high_failure_increases_risk(
-        self, basic_proposal, default_policy,
+        self,
+        basic_proposal,
+        default_policy,
     ):
         low_fail = SimResult(
             success_prob=0.9,
@@ -591,11 +806,15 @@ class TestRisk:
         )
         state = SystemState(rng_seed=42)
         r_low = risk_score(
-            basic_proposal, low_fail, state,
+            basic_proposal,
+            low_fail,
+            state,
             default_policy,
         )
         r_high = risk_score(
-            basic_proposal, high_fail, state,
+            basic_proposal,
+            high_fail,
+            state,
             default_policy,
         )
         assert r_high.total_risk > r_low.total_risk
@@ -605,9 +824,11 @@ class TestRisk:
 # 6. DECIDE MODULE
 # ══════════════════════════════════════════════════════
 
+
 class TestDecide:
     def test_decide_approves_low_risk(
-        self, default_policy,
+        self,
+        default_policy,
     ):
         sim = SimResult(
             success_prob=0.8,
@@ -637,7 +858,8 @@ class TestDecide:
         assert d.approved is True
 
     def test_decide_rejects_high_risk(
-        self, default_policy,
+        self,
+        default_policy,
     ):
         sim = SimResult(
             success_prob=0.05,
@@ -667,7 +889,8 @@ class TestDecide:
         assert d.reason  # has a reason string
 
     def test_decide_rejects_loop(
-        self, default_policy,
+        self,
+        default_policy,
     ):
         sim = SimResult(
             success_prob=0.5,
@@ -701,10 +924,14 @@ class TestDecide:
 # 7. VERIFY MODULE
 # ══════════════════════════════════════════════════════
 
+
 class TestVerify:
     def test_verify_success(
-        self, basic_proposal, basic_outcome,
-        basic_state, default_policy,
+        self,
+        basic_proposal,
+        basic_outcome,
+        basic_state,
+        default_policy,
     ):
         result = verify(
             basic_proposal,
@@ -716,8 +943,11 @@ class TestVerify:
         assert result.ok
 
     def test_verify_detects_failure_cluster(
-        self, basic_proposal, failing_outcome,
-        basic_state, default_policy,
+        self,
+        basic_proposal,
+        failing_outcome,
+        basic_state,
+        default_policy,
     ):
         # Load up many recent failures.
         for _ in range(12):
@@ -730,13 +960,12 @@ class TestVerify:
         )
         # Should flag the cluster.
         assert not result.ok
-        assert any(
-            e.get("code") == "FAILURE_CLUSTER"
-            for e in result.violations
-        )
+        assert any(e.get("code") == "FAILURE_CLUSTER" for e in result.violations)
 
     def test_verify_duration_exceeded(
-        self, basic_proposal, basic_state,
+        self,
+        basic_proposal,
+        basic_state,
         default_policy,
     ):
         long = Outcome(
@@ -753,15 +982,13 @@ class TestVerify:
             default_policy,
         )
         # Extremely long duration -> violation.
-        assert any(
-            e.get("code") == "DURATION_EXCEEDED"
-            for e in result.violations
-        )
+        assert any(e.get("code") == "DURATION_EXCEEDED" for e in result.violations)
 
 
 # ══════════════════════════════════════════════════════
 # 8. HARD LEDGER MODULE
 # ══════════════════════════════════════════════════════
+
 
 class TestHardLedger:
     def test_append_and_read(self, tmp_ledger):
@@ -800,7 +1027,8 @@ class TestHardLedger:
         assert result["entries"] == 5
 
     def test_chain_detects_tampering(
-        self, tmp_ledger,
+        self,
+        tmp_ledger,
     ):
         ledger = HardLedger(tmp_ledger)
         for i in range(3):
@@ -833,44 +1061,51 @@ class TestHardLedger:
         ledger = HardLedger(tmp_ledger)
         assert ledger.count == 0
         for i in range(3):
-            ledger.append(LedgerRecord(
-                proposal_hash=f"p{i}",
+            ledger.append(
+                LedgerRecord(
+                    proposal_hash=f"p{i}",
+                    simulation={},
+                    risk={},
+                    decision="APPROVE",
+                    decision_reason="ok",
+                    outcome_hash=f"o{i}",
+                    state_hash=f"s{i}",
+                    verification={"ok": True},
+                )
+            )
+        assert ledger.count == 3
+
+    def test_read_all_filtered_by_run_id(
+        self,
+        tmp_ledger,
+    ):
+        ledger = HardLedger(tmp_ledger)
+        ledger.append(
+            LedgerRecord(
+                proposal_hash="p-a",
                 simulation={},
                 risk={},
                 decision="APPROVE",
                 decision_reason="ok",
-                outcome_hash=f"o{i}",
-                state_hash=f"s{i}",
+                outcome_hash="o-a",
+                state_hash="s-a",
                 verification={"ok": True},
-            ))
-        assert ledger.count == 3
-
-    def test_read_all_filtered_by_run_id(
-        self, tmp_ledger,
-    ):
-        ledger = HardLedger(tmp_ledger)
-        ledger.append(LedgerRecord(
-            proposal_hash="p-a",
-            simulation={},
-            risk={},
-            decision="APPROVE",
-            decision_reason="ok",
-            outcome_hash="o-a",
-            state_hash="s-a",
-            verification={"ok": True},
-            metadata={"run_id": "run-a"},
-        ))
-        ledger.append(LedgerRecord(
-            proposal_hash="p-b",
-            simulation={},
-            risk={},
-            decision="APPROVE",
-            decision_reason="ok",
-            outcome_hash="o-b",
-            state_hash="s-b",
-            verification={"ok": True},
-            metadata={"run_id": "run-b"},
-        ))
+                metadata={"run_id": "run-a"},
+            )
+        )
+        ledger.append(
+            LedgerRecord(
+                proposal_hash="p-b",
+                simulation={},
+                risk={},
+                decision="APPROVE",
+                decision_reason="ok",
+                outcome_hash="o-b",
+                state_hash="s-b",
+                verification={"ok": True},
+                metadata={"run_id": "run-b"},
+            )
+        )
 
         all_recs = ledger.read_all()
         run_a = ledger.read_all(run_id="run-a")
@@ -889,12 +1124,16 @@ class TestHardLedger:
 # 9. KERNEL MODULE (FULL PIPELINE)
 # ══════════════════════════════════════════════════════
 
+
 class TestHardKernel:
     def test_kernel_step_approve_and_execute(
-        self, tmp_ledger, default_policy,
+        self,
+        tmp_ledger,
+        default_policy,
     ):
         hk = HardKernel(
-            tmp_ledger, policy=default_policy,
+            tmp_ledger,
+            policy=default_policy,
         )
         # Use a VALID action type.
         raw_step = {
@@ -926,10 +1165,13 @@ class TestHardKernel:
         assert kr.phase == "COMMIT"
 
     def test_kernel_step_reject_unknown_action(
-        self, tmp_ledger, default_policy,
+        self,
+        tmp_ledger,
+        default_policy,
     ):
         hk = HardKernel(
-            tmp_ledger, policy=default_policy,
+            tmp_ledger,
+            policy=default_policy,
         )
         raw_step = {
             "type": "unknown_action",
@@ -956,33 +1198,43 @@ class TestHardKernel:
         assert kr.phase == "VALIDATE"
 
     def test_kernel_get_stats(
-        self, tmp_ledger, default_policy,
+        self,
+        tmp_ledger,
+        default_policy,
     ):
         hk = HardKernel(
-            tmp_ledger, policy=default_policy,
+            tmp_ledger,
+            policy=default_policy,
         )
         stats = hk.get_stats()
         assert "step_count" in stats
         assert "safety_level" in stats
 
     def test_kernel_adaptive_tighten(
-        self, tmp_ledger, default_policy,
+        self,
+        tmp_ledger,
+        default_policy,
     ):
         hk = HardKernel(
-            tmp_ledger, policy=default_policy,
+            tmp_ledger,
+            policy=default_policy,
         )
         orig_risk = hk.policy.get(
-            "risk_max", 0.65,
+            "risk_max",
+            0.65,
         )
         hk._adaptive_tighten()
         assert hk.state.safety_level > 0
         assert hk.policy["risk_max"] < orig_risk
 
     def test_kernel_adaptive_relax(
-        self, tmp_ledger, default_policy,
+        self,
+        tmp_ledger,
+        default_policy,
     ):
         hk = HardKernel(
-            tmp_ledger, policy=default_policy,
+            tmp_ledger,
+            policy=default_policy,
         )
         hk._adaptive_tighten()
         sl_before = hk.state.safety_level
@@ -990,27 +1242,34 @@ class TestHardKernel:
         assert hk.state.safety_level <= sl_before
 
     def test_kernel_reset_for_iteration(
-        self, tmp_ledger, default_policy,
+        self,
+        tmp_ledger,
+        default_policy,
     ):
         hk = HardKernel(
-            tmp_ledger, policy=default_policy,
+            tmp_ledger,
+            policy=default_policy,
         )
         hk.state.advance_step()
         hk.reset_for_iteration()
         assert hk.state.iter_count >= 1
 
     def test_kernel_step_records_to_ledger(
-        self, tmp_ledger, default_policy,
+        self,
+        tmp_ledger,
+        default_policy,
     ):
         hk = HardKernel(
-            tmp_ledger, policy=default_policy,
+            tmp_ledger,
+            policy=default_policy,
         )
         hk.kernel_step(
-            {"type": "repo_search",
-             "pattern": "def foo"},
+            {"type": "repo_search", "pattern": "def foo"},
             execute_fn=lambda s: Outcome(
-                success=True, exit_code=0,
-                payload="found", logs="",
+                success=True,
+                exit_code=0,
+                payload="found",
+                logs="",
                 duration_sec=0.1,
             ),
             context="ctx",
@@ -1024,6 +1283,7 @@ class TestHardKernel:
 # 10. REPLAY MODULE
 # ══════════════════════════════════════════════════════
 
+
 class TestReplay:
     def test_replay_empty_ledger(self, tmp_ledger):
         # Create empty file.
@@ -1033,16 +1293,18 @@ class TestReplay:
         assert result.ok
 
     def test_replay_with_records(
-        self, tmp_ledger, default_policy,
+        self,
+        tmp_ledger,
+        default_policy,
     ):
         # Create some kernel steps first.
         hk = HardKernel(
-            tmp_ledger, policy=default_policy,
+            tmp_ledger,
+            policy=default_policy,
         )
         for i in range(3):
             hk.kernel_step(
-                {"type": "repo_search",
-                 "pattern": f"pattern_{i}"},
+                {"type": "repo_search", "pattern": f"pattern_{i}"},
                 execute_fn=lambda s: Outcome(
                     success=True,
                     exit_code=0,
@@ -1059,14 +1321,16 @@ class TestReplay:
         assert chain["ok"] is True
 
     def test_extract_decision_trace(
-        self, tmp_ledger, default_policy,
+        self,
+        tmp_ledger,
+        default_policy,
     ):
         hk = HardKernel(
-            tmp_ledger, policy=default_policy,
+            tmp_ledger,
+            policy=default_policy,
         )
         hk.kernel_step(
-            {"type": "repo_search",
-             "pattern": "def main"},
+            {"type": "repo_search", "pattern": "def main"},
             execute_fn=lambda s: Outcome(
                 success=True,
                 exit_code=0,
@@ -1084,14 +1348,16 @@ class TestReplay:
         assert len(trace) >= 1
 
     def test_replay_verify_with_run_filter(
-        self, tmp_ledger, default_policy,
+        self,
+        tmp_ledger,
+        default_policy,
     ):
         hk = HardKernel(
-            tmp_ledger, policy=default_policy,
+            tmp_ledger,
+            policy=default_policy,
         )
         hk.kernel_step(
-            {"type": "repo_search",
-             "pattern": "alpha"},
+            {"type": "repo_search", "pattern": "alpha"},
             execute_fn=lambda s: Outcome(
                 success=True,
                 exit_code=0,
@@ -1105,8 +1371,7 @@ class TestReplay:
             run_id="run-a",
         )
         hk.kernel_step(
-            {"type": "repo_search",
-             "pattern": "beta"},
+            {"type": "repo_search", "pattern": "beta"},
             execute_fn=lambda s: Outcome(
                 success=True,
                 exit_code=0,
@@ -1141,18 +1406,24 @@ class TestReplay:
         assert c_result.total_steps == 0
 
     def test_replay_verify_with_run_filter_interleaved(
-        self, tmp_ledger, default_policy,
+        self,
+        tmp_ledger,
+        default_policy,
     ):
         hk = HardKernel(
-            tmp_ledger, policy=default_policy,
+            tmp_ledger,
+            policy=default_policy,
         )
         # Interleave two runs so per-run replay cannot assume
         # contiguous prev pointers within filtered records.
         hk.kernel_step(
             {"type": "repo_search", "pattern": "a1"},
             execute_fn=lambda s: Outcome(
-                success=True, exit_code=0,
-                payload="ok", logs="", duration_sec=0.1,
+                success=True,
+                exit_code=0,
+                payload="ok",
+                logs="",
+                duration_sec=0.1,
             ),
             context="ctx-a1",
             intent="search",
@@ -1162,8 +1433,11 @@ class TestReplay:
         hk.kernel_step(
             {"type": "repo_search", "pattern": "b1"},
             execute_fn=lambda s: Outcome(
-                success=True, exit_code=0,
-                payload="ok", logs="", duration_sec=0.1,
+                success=True,
+                exit_code=0,
+                payload="ok",
+                logs="",
+                duration_sec=0.1,
             ),
             context="ctx-b1",
             intent="search",
@@ -1173,8 +1447,11 @@ class TestReplay:
         hk.kernel_step(
             {"type": "repo_search", "pattern": "a2"},
             execute_fn=lambda s: Outcome(
-                success=True, exit_code=0,
-                payload="ok", logs="", duration_sec=0.1,
+                success=True,
+                exit_code=0,
+                payload="ok",
+                logs="",
+                duration_sec=0.1,
             ),
             context="ctx-a2",
             intent="search",
@@ -1195,14 +1472,16 @@ class TestReplay:
         assert run_b.total_steps == 1
 
     def test_extract_decision_trace_with_run_filter(
-        self, tmp_ledger, default_policy,
+        self,
+        tmp_ledger,
+        default_policy,
     ):
         hk = HardKernel(
-            tmp_ledger, policy=default_policy,
+            tmp_ledger,
+            policy=default_policy,
         )
         hk.kernel_step(
-            {"type": "repo_search",
-             "pattern": "alpha"},
+            {"type": "repo_search", "pattern": "alpha"},
             execute_fn=lambda s: Outcome(
                 success=True,
                 exit_code=0,
@@ -1216,8 +1495,7 @@ class TestReplay:
             run_id="run-a",
         )
         hk.kernel_step(
-            {"type": "repo_search",
-             "pattern": "beta"},
+            {"type": "repo_search", "pattern": "beta"},
             execute_fn=lambda s: Outcome(
                 success=True,
                 exit_code=0,
@@ -1257,6 +1535,7 @@ class TestReplay:
 # ══════════════════════════════════════════════════════
 # 11. MEMORY IMMUNE SYSTEM
 # ══════════════════════════════════════════════════════
+
 
 class TestMemoryImmuneSystem:
     def test_admit_good_entry(self):
@@ -1307,11 +1586,13 @@ class TestMemoryImmuneSystem:
             max_entries=50,
         )
         for i in range(10):
-            mem.admit(MemoryEntry(
-                content=f"entry {i} with data",
-                source="kernel",
-                entry_type="action_outcome",
-            ))
+            mem.admit(
+                MemoryEntry(
+                    content=f"entry {i} with data",
+                    source="kernel",
+                    entry_type="action_outcome",
+                )
+            )
         removed = mem.decay()
         stats = mem.get_stats()
         assert stats["active"] <= 10
@@ -1329,7 +1610,8 @@ class TestMemoryImmuneSystem:
         if result.decision == MemoryDecision.ADMIT:
             # record_outcome takes provenance_hash.
             mem.record_outcome(
-                entry.provenance_hash, True,
+                entry.provenance_hash,
+                True,
             )
             assert entry.success_count >= 1
 
@@ -1338,11 +1620,13 @@ class TestMemoryImmuneSystem:
             quality_min=0.1,
         )
         for i in range(5):
-            mem.admit(MemoryEntry(
-                content=f"outcome data {i} info",
-                source="kernel",
-                entry_type="action_outcome",
-            ))
+            mem.admit(
+                MemoryEntry(
+                    content=f"outcome data {i} info",
+                    source="kernel",
+                    entry_type="action_outcome",
+                )
+            )
         results = mem.lookup("action_outcome", 3)
         assert len(results) <= 3
 
@@ -1353,10 +1637,77 @@ class TestMemoryImmuneSystem:
         assert "core_axioms" in stats
         assert "quarantined" in stats
 
+    def test_save_and_load(self, tmp_path):
+        """Test JSONL persistence: save → load into fresh instance."""
+        mem = MemoryImmuneSystem(quality_min=0.1)
+        for i in range(5):
+            mem.admit(
+                MemoryEntry(
+                    content=f"action=read_file success=True case {i}",
+                    source="kernel",
+                    entry_type="action_outcome",
+                )
+            )
+        path = str(tmp_path / "memory.jsonl")
+        saved = mem.save(path)
+        assert saved == 5
+
+        # Load into fresh instance.
+        mem2 = MemoryImmuneSystem(quality_min=0.1)
+        loaded = mem2.load(path)
+        assert loaded == 5
+        assert mem2.active_count == 5
+
+    def test_elo_quality_adapts(self):
+        """ELO scoring should raise quality on success, lower on failure."""
+        mem = MemoryImmuneSystem(quality_min=0.1)
+        entry = MemoryEntry(
+            content="action=run_tests result data",
+            source="kernel",
+            entry_type="action_outcome",
+        )
+        mem.admit(entry)
+        q_initial = entry.quality_score
+
+        # Record successes → quality should increase.
+        for _ in range(5):
+            mem.record_outcome(entry.provenance_hash, True)
+        assert entry.quality_score > q_initial
+
+        q_after_success = entry.quality_score
+        # Record failures → quality should decrease.
+        for _ in range(10):
+            mem.record_outcome(entry.provenance_hash, False)
+        assert entry.quality_score < q_after_success
+
+    def test_retrieve_relevant(self):
+        """retrieve_relevant should rank by keyword overlap + quality."""
+        mem = MemoryImmuneSystem(quality_min=0.1)
+        mem.admit(
+            MemoryEntry(
+                content="action=apply_patch success=True django models",
+                source="kernel",
+                entry_type="action_outcome",
+            )
+        )
+        mem.admit(
+            MemoryEntry(
+                content="action=run_tests success=False flask routes",
+                source="kernel",
+                entry_type="action_outcome",
+            )
+        )
+
+        # Query about django should rank django entry first.
+        results = mem.retrieve_relevant("django models patch")
+        assert len(results) >= 1
+        assert "django" in results[0].content
+
 
 # ══════════════════════════════════════════════════════
 # 12. HIERARCHICAL PLANNER
 # ══════════════════════════════════════════════════════
+
 
 class TestHierarchicalPlanner:
     def test_set_goal_creates_subgoals(self):
@@ -1367,10 +1718,7 @@ class TestHierarchicalPlanner:
         )
         assert isinstance(subgoals, list)
         assert len(subgoals) >= 1
-        assert all(
-            isinstance(s, Subgoal)
-            for s in subgoals
-        )
+        assert all(isinstance(s, Subgoal) for s in subgoals)
 
     def test_current_subgoal(self):
         p = HierarchicalPlanner()
@@ -1412,8 +1760,7 @@ class TestHierarchicalPlanner:
         sg = p.current_subgoal()
         plan = p.tactical_plan(
             sg,
-            ["repo_read_range", "apply_patch",
-             "run_tests"],
+            ["repo_read_range", "apply_patch", "run_tests"],
         )
         assert isinstance(plan, TacticalPlan)
         assert len(plan.actions) >= 1
@@ -1454,13 +1801,21 @@ class TestHierarchicalPlanner:
 
     def test_no_goal_returns_empty_guidance(self):
         p = HierarchicalPlanner()
-        g = p.get_planner_guidance()
-        assert isinstance(g, str)
+        assert "All subgoals completed" in p.get_planner_guidance()
+
+    def test_planner_guidance_with_error(self):
+        p = HierarchicalPlanner()
+        p.set_goal("Test task")
+        guidance = p.get_planner_guidance(last_error="SyntaxError: invalid syntax")
+        assert "## Self-Critique" in guidance
+        assert "SyntaxError: invalid syntax" in guidance
+        assert "Analysis: The previous action failed" in guidance
 
 
 # ══════════════════════════════════════════════════════
 # 13. INTEGRATION: FULL PIPELINE
 # ══════════════════════════════════════════════════════
+
 
 class TestIntegration:
     """End-to-end pipeline test: planner → kernel
@@ -1493,7 +1848,8 @@ class TestIntegration:
 
         # 2. Kernel executes steps.
         kernel = HardKernel(
-            ledger_path, policy=policy,
+            ledger_path,
+            policy=policy,
         )
 
         def exec_ok(s):
@@ -1506,8 +1862,7 @@ class TestIntegration:
             )
 
         kr = kernel.kernel_step(
-            {"type": "repo_search",
-             "pattern": "test_foo"},
+            {"type": "repo_search", "pattern": "test_foo"},
             execute_fn=exec_ok,
             context="test_ctx",
             intent="search for failing test",
@@ -1520,14 +1875,13 @@ class TestIntegration:
         memory = MemoryImmuneSystem(
             quality_min=0.1,
         )
-        memory.admit(MemoryEntry(
-            content=(
-                f"search test_foo success"
-                f" risk={kr.risk.total_risk:.2f}"
-            ),
-            source="kernel",
-            entry_type="action_outcome",
-        ))
+        memory.admit(
+            MemoryEntry(
+                content=(f"search test_foo success" f" risk={kr.risk.total_risk:.2f}"),
+                source="kernel",
+                entry_type="action_outcome",
+            )
+        )
         assert memory.get_stats()["active"] >= 1
 
         # 4. Planner advances.
@@ -1561,25 +1915,32 @@ class TestIntegration:
         }
 
         kernel = HardKernel(
-            ledger_path, policy=policy,
+            ledger_path,
+            policy=policy,
         )
         memory = MemoryImmuneSystem(
             quality_min=0.1,
         )
 
         steps = [
-            {"type": "repo_search",
-             "pattern": "def main"},
-            {"type": "repo_read_range",
-             "path": "b.py",
-             "line_start": 1, "line_end": 50},
-            {"type": "apply_patch",
-             "patch": "--- a/a.py\n+++ b/a.py\n"
-                      "@@ -10,1 +10,1 @@\n"
-                      "-old line\n+new line\n"},
-            {"type": "run_tests",
-             "template_id": "pytest_targeted",
-             "template_params": {"target": "test_foo"}},
+            {"type": "repo_search", "pattern": "def main"},
+            {
+                "type": "repo_read_range",
+                "path": "b.py",
+                "line_start": 1,
+                "line_end": 50,
+            },
+            {
+                "type": "apply_patch",
+                "patch": "--- a/a.py\n+++ b/a.py\n"
+                "@@ -10,1 +10,1 @@\n"
+                "-old line\n+new line\n",
+            },
+            {
+                "type": "run_tests",
+                "template_id": "pytest_targeted",
+                "template_params": {"target": "test_foo"},
+            },
         ]
 
         results = []
@@ -1599,11 +1960,13 @@ class TestIntegration:
             )
             results.append(kr)
             if kr.approved and kr.success:
-                memory.admit(MemoryEntry(
-                    content=f"step {i} ok data",
-                    source="kernel",
-                    entry_type="action_outcome",
-                ))
+                memory.admit(
+                    MemoryEntry(
+                        content=f"step {i} ok data",
+                        source="kernel",
+                        entry_type="action_outcome",
+                    )
+                )
 
         # Verify chain integrity.
         runner = ReplayRunner(ledger_path)
@@ -1611,9 +1974,7 @@ class TestIntegration:
         assert chain["ok"] is True
 
         # Count approved steps.
-        approved = sum(
-            1 for r in results if r.approved
-        )
+        approved = sum(1 for r in results if r.approved)
         assert approved >= 1
 
         stats = kernel.get_stats()

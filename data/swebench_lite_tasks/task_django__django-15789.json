@@ -1,0 +1,30 @@
+{
+  "task_id": "django__django-15789",
+  "repo_url": "https://github.com/django/django.git",
+  "repo_ref": "d4d5427571b4bf3a21c902276c2a00215c2a37cc",
+  "workdir": "/tmp/swebench_work/django__django-15789",
+  "issue_text": "Add an encoder parameter to django.utils.html.json_script().\nDescription\n\t\nI have a use case where I want to customize the JSON encoding of some values to output to the template layer. It looks like django.utils.html.json_script is a good utility for that, however the JSON encoder is hardcoded to DjangoJSONEncoder. I think it would be nice to be able to pass a custom encoder class.\nBy the way, django.utils.html.json_script is not documented (only its template filter counterpart is), would it be a good thing to add to the docs?\n",
+  "hints": {
+    "failing_tests": [
+      "test_json_script_custom_encoder (utils_tests.test_html.TestUtilsHtml)"
+    ],
+    "focus_files": [
+      "django/utils/html.py"
+    ],
+    "test_patch": "diff --git a/tests/utils_tests/test_html.py b/tests/utils_tests/test_html.py\n--- a/tests/utils_tests/test_html.py\n+++ b/tests/utils_tests/test_html.py\n@@ -1,6 +1,7 @@\n import os\n from datetime import datetime\n \n+from django.core.serializers.json import DjangoJSONEncoder\n from django.test import SimpleTestCase\n from django.utils.functional import lazystr\n from django.utils.html import (\n@@ -211,6 +212,16 @@ def test_json_script(self):\n             with self.subTest(arg=arg):\n                 self.assertEqual(json_script(arg, \"test_id\"), expected)\n \n+    def test_json_script_custom_encoder(self):\n+        class CustomDjangoJSONEncoder(DjangoJSONEncoder):\n+            def encode(self, o):\n+                return '{\"hello\": \"world\"}'\n+\n+        self.assertHTMLEqual(\n+            json_script({}, encoder=CustomDjangoJSONEncoder),\n+            '<script type=\"application/json\">{\"hello\": \"world\"}</script>',\n+        )\n+\n     def test_json_script_without_id(self):\n         self.assertHTMLEqual(\n             json_script({\"key\": \"value\"}),\n"
+  },
+  "commands": {
+    "setup": [
+      "pip install -e .[argon2,bcrypt]"
+    ],
+    "test_quick": "python -m pytest -x -q utils_tests/test_html.py",
+    "test_full": "python -m pytest -x -q utils_tests/test_html.py"
+  },
+  "limits": {
+    "max_iters": 8,
+    "max_patch_bytes": 250000,
+    "max_files_touched": 15,
+    "max_new_files": 5,
+    "max_runtime_sec": 1800
+  }
+}
