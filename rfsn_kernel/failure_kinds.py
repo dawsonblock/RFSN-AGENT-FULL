@@ -38,6 +38,8 @@ def extract_failure_kinds(executor_out: Dict[str, Any]) -> List[str]:
         or "no module named" in low
     ):
         kinds.append("import_error_missing_module")
+    if "missing venv; ensure_deps first" in low:
+        kinds.append("deps_install_failed")
     if (
         "pip" in low
         and (

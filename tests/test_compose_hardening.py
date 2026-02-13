@@ -52,3 +52,13 @@ def test_orchestrator_exposes_warm_sandbox_toggle():
         encoding="utf-8",
     )
     assert "RFSN_WARM_SANDBOX: ${RFSN_WARM_SANDBOX:-1}" in compose
+
+
+def test_executor_exposes_network_min_tier_toggle():
+    compose = (ROOT / "docker-compose.yml").read_text(
+        encoding="utf-8",
+    )
+    assert (
+        "RFSN_NETWORK_MIN_TIER: ${RFSN_NETWORK_MIN_TIER:-2}"
+        in compose
+    )

@@ -110,6 +110,7 @@ def _load_yaml(path: str) -> dict:
 
 
 DEPS = _load_yaml("/policies/deps_policy.yaml")
+GATE_POLICY = _load_yaml("/policies/gate_policy.yaml")
 CMD_TEMPLATES = (
     _load_yaml("/policies/command_templates.yaml")
     .get("templates", {})
@@ -124,6 +125,12 @@ MAX_READ_FILE_BYTES = int(
 )
 MAX_WORKDIRS = int(
     TOOL_ALLOWLIST.get("max_workdirs", 24),
+)
+NETWORK_MIN_TIER = int(
+    os.getenv(
+        "RFSN_NETWORK_MIN_TIER",
+        str(GATE_POLICY.get("network_min_tier", 2)),
+    )
 )
 
 _SAFE_REPO_ID = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
@@ -159,6 +166,8 @@ def _classify_failure(logs: str, status: int) -> str | None:
         return "tests_failed"
     if "modulenotfounderror" in low or "no module named" in low:
         return "import_error_missing_module"
+    if "missing venv; ensure_deps first" in low:
+        return "deps_install_failed"
     if "resolutionimpossible" in low or "could not find a version" in low:
         return "deps_install_failed"
     if ".github/workflows" in low or ("workflow" in low and "yaml" in low):
@@ -177,6 +186,24 @@ def _normalize_workdir(rel: str) -> str:
     if ".." in workdir.split("/"):
         raise HTTPException(403, "invalid workdir")
     return workdir
+
+
+def _coerce_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _require_network_tier(step: dict) -> None:
+    tier = _coerce_int(step.get("_rfsn_tier"), 0)
+    allow_network = bool(step.get("_rfsn_allow_network"))
+    if not allow_network or tier < NETWORK_MIN_TIER:
+        raise HTTPException(
+            403,
+            "networked ensure_deps requires tier"
+            f" >= {NETWORK_MIN_TIER}",
+        )
 
 
 def _resolve_safe_template(template: str) -> list[str]:
@@ -521,6 +548,19 @@ def run_warm(req: WarmExecReq):
     step = req.step
     t: str = step.get("type") or ""
     timeout_s = int(step.get("timeout_s") or 300)
+    if t == "ensure_deps":
+        # Network-enabled dependency install is
+        # explicitly tier-gated and always routed to
+        # cold execution so networking policy is
+        # applied in one place.
+        _require_network_tier(step)
+        return run(
+            ExecReq(
+                repo_id=req.repo_id,
+                iter=0,
+                step=req.step,
+            )
+        )
 
     # Build script + data files for this step
     # (reuse the same logic as cold path).
@@ -1610,6 +1650,7 @@ def run(req: ExecReq):
     t = step.get("type")
 
     if t == "ensure_deps":
+        _require_network_tier(step)
         timeout_s = int(
             step.get("timeout_s")
             or DEPS.get("max_install_seconds", 420)

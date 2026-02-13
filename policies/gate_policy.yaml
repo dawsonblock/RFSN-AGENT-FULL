@@ -19,6 +19,7 @@ enforce_tests: true
 
 # Risk scoring thresholds
 reject_risk_score: 60
+network_min_tier: 2
 
 # λ controls risk vs expected-value balance:
 # score = λ * risk - (1-λ) * expected_value

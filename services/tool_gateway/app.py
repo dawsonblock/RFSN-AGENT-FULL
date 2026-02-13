@@ -56,6 +56,11 @@ DIFF_GUARD = _load_yaml("/policies/diff_guard.yaml")
 GATE_POLICY = _load_yaml(
     "/policies/gate_policy.yaml",
 )
+RUN_TEST_TEMPLATES = (
+    _load_yaml("/policies/command_templates.yaml")
+    .get("templates", {})
+    or {}
+)
 
 # ── Unified patch limits from gate_policy ──────────
 # tool_gateway now enforces the SAME limits that the
@@ -86,6 +91,9 @@ _BLOCKED_READ_SUFFIXES = tuple(
         GATE_POLICY.get("blocked_read_suffixes", [])
         or []
     ) if isinstance(x, str) and x.strip()
+)
+NETWORK_MIN_TIER = int(
+    GATE_POLICY.get("network_min_tier", 2),
 )
 
 ALLOWED_TYPES = set(ALLOW.get("allowed_step_types", []))
@@ -265,7 +273,12 @@ def _executor(
     run_id: str | None = None,
     run_warm: bool = False,
 ):
-    if run_id and run_warm:
+    step_type = str(step.get("type") or "")
+    force_cold = (
+        step_type == "ensure_deps"
+        and bool(step.get("_rfsn_allow_network"))
+    )
+    if run_id and run_warm and not force_cold:
         # Route through warm sandbox.
         r = requests.post(
             f"{EXECUTOR_URL}/run_warm",
@@ -344,6 +357,15 @@ def run_step(
         max_depth = int(s.get("max_depth") or 4)
         if max_depth < 1 or max_depth > 8:
             raise HTTPException(403, "invalid max_depth")
+    if s["type"] == "run_tests":
+        template_id = str(s.get("template_id") or "").strip()
+        if not template_id:
+            raise HTTPException(403, "run_tests template_id required")
+        if template_id not in RUN_TEST_TEMPLATES:
+            raise HTTPException(
+                403,
+                f"unknown run_tests template_id: {template_id}",
+            )
     if s["type"] in ("run_cmd_template", "format_fix"):
         template = str(s.get("template") or "").strip()
         if not template:
@@ -379,6 +401,17 @@ def run_step(
                 run_id=req.run_id,
                 workdir_id=workdir_id,
             )
+    # Attach tier metadata for executor defense-in-depth.
+    s["_rfsn_tier"] = int(tier)
+    s["_rfsn_allow_network"] = False
+    if s["type"] == "ensure_deps":
+        if tier < NETWORK_MIN_TIER:
+            raise HTTPException(
+                403,
+                "ensure_deps requires network tier"
+                f" >= {NETWORK_MIN_TIER}",
+            )
+        s["_rfsn_allow_network"] = True
 
     if s["type"] == "apply_patch":
         patch_text = s.get("patch") or ""
