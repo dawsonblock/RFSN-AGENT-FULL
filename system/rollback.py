@@ -1,0 +1,2 @@
+def rollback(state):
+    pass

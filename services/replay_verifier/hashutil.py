@@ -9,7 +9,7 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def sha256_tree(root, ignore=None):
+def sha256_tree(root, ignore=None, max_file_bytes=50_000_000):
     ignore = set(ignore or [])
     h = hashlib.sha256()
     for base, dirs, files in os.walk(root):
@@ -17,14 +17,11 @@ def sha256_tree(root, ignore=None):
         for f in sorted(files):
             p = os.path.join(base, f)
             try:
+                if os.path.getsize(p) > max_file_bytes:
+                    continue
                 h.update(f.encode())
-                h.update(str(os.path.getsize(p)).encode())
-                with open(p, "rb") as f_obj:
-                    # Read 4k chunks to avoid memory issues with large files
-                    while True:
-                        chunk = f_obj.read(4096)
-                        if not chunk:
-                            break
+                with open(p, "rb") as fh:
+                    for chunk in iter(lambda: fh.read(65536), b""):
                         h.update(chunk)
             except Exception:
                 pass

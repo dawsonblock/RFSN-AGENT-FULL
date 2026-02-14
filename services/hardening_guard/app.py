@@ -24,6 +24,7 @@ def main():
     )
 
     print("HARDENING_OK" if ok else "HARDENING_REPAIRED", flush=True)
+    print("MODE: preflight_guard (no container restarts)", flush=True)
 
 
 if __name__ == "__main__":

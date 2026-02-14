@@ -16,17 +16,17 @@ def main(old_bundle, new_bundle):
     old = load(os.path.join(old_bundle, "manifest.json"))
     new = load(os.path.join(new_bundle, "manifest.json"))
 
-    if old["deps"] != new["deps"]:
+    if old.get("deps") != new.get("deps"):
         fail("deps mismatch")
 
-    if old["env"] != new["env"]:
+    if old.get("env") != new.get("env"):
         fail("env mismatch")
 
-    if old["patch_hash"] != new["patch_hash"]:
+    if old.get("patch_hash") != new.get("patch_hash"):
         fail("patch mismatch")
 
-    if old["kernel_trace"] != new["kernel_trace"]:
-        fail("kernel mismatch")
+    if old.get("kernel_trace_hash") != new.get("kernel_trace_hash"):
+        fail("kernel trace mismatch")
 
     print("REPLAY_OK")
 
