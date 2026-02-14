@@ -588,29 +588,21 @@ def make_direct_proposer(
 
         # If no target files cached or provided, run Stage 1: Locate
         if not target_files:
-            locate_prompt = (
-                f"## Bug Report\n{task.issue_text}\n\n"
-                f"## Repository File Listing\n```\n{repo_tree}\n```\n"
+            locate_prompt = _locator_usr.render(
+                file_list=repo_tree,
+                issue_title=task.issue_title or "Bug Report",
+                issue_body=task.issue_text,
+                failing_tests=(
+                    "\n".join(task.hints.failing_tests)
+                    if task.hints.failing_tests
+                    else None
+                ),
+                pre_diagnosis=pre_diagnosis if pre_diagnosis else None,
             )
-            if task.hints.failing_tests:
-                locate_prompt += (
-                    "\n## Known Failing Tests\n"
-                    + "\n".join(task.hints.failing_tests)
-                    + "\n"
-                )
-            # Inject pre-diagnosis traceback for precise localization
-            if pre_diagnosis:
-                locate_prompt += (
-                    "\n## Actual Test Failure Traceback\n"
-                    "The following is the REAL error output from running the "
-                    "failing tests. Use the file paths and line numbers to "
-                    "precisely identify which files need to be modified:\n"
-                    f"```\n{pre_diagnosis[-3000:]}\n```\n"
-                )
 
             log_event(replay_dir, {"type": "locate_start"})
             locate_response = _llm_call(
-                _LOCATE_SYSTEM,
+                _locator_sys.render(),
                 locate_prompt,
                 max_tokens=1024,
                 temperature=0.0,
@@ -669,71 +661,48 @@ def make_direct_proposer(
                     max_total_chars=16000,
                 )
 
-        # --- Build Stage 2 prompt ---
-        user_parts = [
-            f"## Bug Report\n{task.issue_text}\n",
-        ]
+        # --- Stage 2 Prompt Construction ---
 
-        if task.hints.failing_tests:
-            user_parts.append(
-                "## Known Failing Tests\n" + "\n".join(task.hints.failing_tests) + "\n"
+        # 1. Retrieve useful context (BM25)
+        retrieval_context = ""
+        try:
+            retriever = BM25Retriever(task.workdir)
+            # Query with issue text + failing test names
+            query = task.issue_text[:500]
+            if task.hints.failing_tests:
+                query += " " + " ".join(task.hints.failing_tests)
+
+            retrieval_context = retriever.get_context_block(query)
+            log_event(
+                replay_dir, {"type": "retrieval_done", "len": len(retrieval_context)}
             )
+        except Exception:
+            pass
 
-        if repo_tree:
-            user_parts.append(
-                f"## Repository Structure\n```\n{repo_tree[:3000]}\n```\n"
-            )
-
-        if file_context:
-            user_parts.append(f"## Source Code\n{file_context}\n")
-
-        if test_context:
-            user_parts.append(
-                f"## Test Code (read-only — do NOT modify)\n" f"{test_context}\n"
-            )
-
-        # Pre-diagnosis traceback (first attempt only — retries get
-        # structured feedback which is more specific)
-        if pre_diagnosis and not is_retry:
-            user_parts.append(
-                "## Actual Test Error Output\n"
-                "The following is the REAL output from running the failing "
-                "tests on the current codebase. Use this to understand the "
-                "root cause:\n"
-                f"```\n{pre_diagnosis[-3000:]}\n```\n"
-            )
-
-        # Retry: include structured feedback from ALL previous attempts
-        if is_retry:
-            if iter_feedback:
-                user_parts.append(_format_feedback(iter_feedback))
-            else:
-                # Legacy path — blob-based feedback
-                if last_test_output.strip():
-                    user_parts.append(
-                        f"## Previous Test Failure Output\n"
-                        f"```\n{last_test_output}\n```\n"
-                    )
-                if last_test_stderr.strip():
-                    user_parts.append(
-                        f"## Previous Test Stderr\n" f"```\n{last_test_stderr}\n```\n"
-                    )
-
-        # Cross-task learnings from outcome memory
-        if outcome_memory_path:
-            from .outcome_memory import OutcomeMemory
-
-            mem = OutcomeMemory(outcome_memory_path)
-            # Extract repo family from task_id (e.g. "django__django" from "django__django-11049")
-            repo = (
-                task.task_id.rsplit("-", 1)[0] if "-" in task.task_id else task.task_id
-            )
-            learnings = mem.format_learnings(repo)
-            if learnings:
-                user_parts.append(f"## Learnings from Past Tasks\n{learnings}\n")
-
-        system_prompt = _RETRY_SYSTEM if is_retry else _PATCH_SYSTEM
-        user_prompt = "\n".join(user_parts)
+        system_prompt = _patcher_sys.render()
+        user_prompt = _patcher_usr.render(
+            issue_text=task.issue_text,
+            context_files=file_context,
+            retrieval_context=retrieval_context,
+            failing_tests=(
+                "\n".join(task.hints.failing_tests)
+                if task.hints.failing_tests
+                else None
+            ),
+            repo_tree=repo_tree[:3000] if repo_tree else None,
+            test_context=test_context,
+            pre_diagnosis=pre_diagnosis if pre_diagnosis and not is_retry else None,
+            iter_feedback=(
+                _format_feedback(iter_feedback) if is_retry and iter_feedback else None
+            ),
+            last_test_output=(
+                last_test_output if is_retry and not iter_feedback else None
+            ),
+            last_test_stderr=(
+                last_test_stderr if is_retry and not iter_feedback else None
+            ),
+            learnings=None,  # TODO: Add outcome memory integration
+        )
 
         # --- Stage 2: Generate fix ---
         log_event(

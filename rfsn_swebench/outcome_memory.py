@@ -1,33 +1,10 @@
-"""Outcome memory — persistent learning from every repair attempt.
-
-Stores task outcomes in a lightweight JSONL file so that subsequent
-tasks can learn from prior successes and failures.  Two retrieval
-modes:
-
-1. **Repo-family outcomes** — outcomes from tasks in the same repo
-   (e.g. all ``django__django-*`` tasks share learnings).
-2. **Common mistakes** — the most frequent failure patterns across
-   all tasks, surfaced as "things to avoid".
-
-Usage::
-
-    mem = OutcomeMemory("data/results/outcome_memory.jsonl")
-    mem.record(task_id="flask-4045", status="FAIL",
-               repo="flask__flask", error_type="test_fail",
-               error_summary="Dot check in wrong method",
-               files_changed=["src/flask/blueprints.py"],
-               patch_snippet="...")
-    prompt_section = mem.format_learnings("flask__flask")
-"""
-
-from __future__ import annotations
-
+import sqlite3
 import json
 import os
 import time
 from collections import Counter
 from dataclasses import asdict, dataclass, field
-from typing import Optional  # noqa: F401 — used by type annotations
+from typing import Optional
 
 
 @dataclass
@@ -37,70 +14,61 @@ class Outcome:
     task_id: str
     status: str  # PASS, FAIL, ABORT, GATE_REJECT
     repo: str  # e.g. "django__django"
-    error_type: str = ""  # test_fail, gate_reject, apply_fail, empty_patch
-    error_summary: str = ""  # one-line description of what went wrong
+    error_type: str = ""
+    error_summary: str = ""
     files_changed: list[str] = field(default_factory=list)
-    patch_snippet: str = ""  # first 500 chars of the patch
+    patch_snippet: str = ""
     iters_used: int = 0
-    dense_reward: float = 0.0  # partial progress (0.0-1.0)
+    dense_reward: float = 0.0
     timestamp: float = 0.0
 
-    def __post_init__(self) -> None:
-        # Precompute cached fields.
-        self._repo_family: str = self._compute_repo_family()
-        self._search_words: set[str] | None = None
-
-    def _compute_repo_family(self) -> str:
+    @property
+    def repo_family(self) -> str:
         parts = self.repo.split("-")
         if len(parts) > 1 and parts[-1].isdigit():
             return "-".join(parts[:-1])
         return self.repo
 
-    @property
-    def repo_family(self) -> str:
-        return self._repo_family
-
-    @property
-    def search_words(self) -> set[str]:
-        """Lazily cached word set for similarity search."""
-        if self._search_words is None:
-            self._search_words = set(
-                f"{self.task_id} {self.error_summary} {self.error_type}".lower().split()
-            )
-        return self._search_words
-
 
 class OutcomeMemory:
-    """JSONL-backed outcome store with retrieval for LLM prompting."""
+    """SQLite-backed outcome store with retrieval for LLM prompting."""
 
     def __init__(self, path: str) -> None:
+        # Change .jsonl extension to .db if present
+        if path.endswith(".jsonl"):
+            path = path[:-6] + ".db"
         self._path = path
-        self._outcomes: list[Outcome] = []
-        self._loaded = False
+        self._conn: Optional[sqlite3.Connection] = None
+        self._ensure_table()
 
-    # ------------------------------------------------------------------
-    # Persistence
-    # ------------------------------------------------------------------
-
-    def _ensure_loaded(self) -> None:
-        if self._loaded:
-            return
-        self._loaded = True
-        if not os.path.isfile(self._path):
-            return
-        try:
-            with open(self._path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        d = json.loads(line)
-                        self._outcomes.append(Outcome(**d))
-                    except (json.JSONDecodeError, TypeError):
-                        continue  # skip malformed lines
-        except Exception:
-            pass  # file inaccessible — start fresh
+    def _ensure_table(self) -> None:
+        os.makedirs(os.path.dirname(self._path) or ".", exist_ok=True)
+        self._conn = sqlite3.connect(self._path, check_same_thread=False)
+        self._conn.row_factory = sqlite3.Row
+        with self._conn:
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS outcomes (
+                    task_id TEXT,
+                    status TEXT,
+                    repo TEXT,
+                    error_type TEXT,
+                    error_summary TEXT,
+                    files_changed TEXT, -- JSON
+                    patch_snippet TEXT,
+                    iters_used INTEGER,
+                    dense_reward REAL,
+                    timestamp REAL
+                )
+            """
+            )
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_repo ON outcomes(repo)")
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_status ON outcomes(status)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_ts ON outcomes(timestamp)"
+            )
 
     def record(
         self,
@@ -110,141 +78,109 @@ class OutcomeMemory:
         *,
         error_type: str = "",
         error_summary: str = "",
-        files_changed: list[str] | None = None,
+        files_changed: Optional[list[str]] = None,
         patch_snippet: str = "",
         iters_used: int = 0,
         dense_reward: float = 0.0,
     ) -> None:
         """Append an outcome to the store."""
-        self._ensure_loaded()
-        outcome = Outcome(
-            task_id=task_id,
-            status=status,
-            repo=repo,
-            error_type=error_type,
-            error_summary=error_summary,
-            files_changed=files_changed or [],
-            patch_snippet=patch_snippet[:500],
-            iters_used=iters_used,
-            dense_reward=max(0.0, min(1.0, dense_reward)),
-            timestamp=time.time(),
+        if not self._conn:
+            self._ensure_table()
+
+        with self._conn:
+            self._conn.execute(
+                """INSERT INTO outcomes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    task_id,
+                    status,
+                    repo,
+                    error_type,
+                    error_summary,
+                    json.dumps(files_changed or []),
+                    patch_snippet[:500],
+                    iters_used,
+                    max(0.0, min(1.0, dense_reward)),
+                    time.time(),
+                ),
+            )
+
+    def _row_to_outcome(self, row: sqlite3.Row) -> Outcome:
+        return Outcome(
+            task_id=row["task_id"],
+            status=row["status"],
+            repo=row["repo"],
+            error_type=row["error_type"],
+            error_summary=row["error_summary"],
+            files_changed=json.loads(row["files_changed"]),
+            patch_snippet=row["patch_snippet"],
+            iters_used=row["iters_used"],
+            dense_reward=row["dense_reward"],
+            timestamp=row["timestamp"],
         )
-        self._outcomes.append(outcome)
-
-        os.makedirs(os.path.dirname(self._path) or ".", exist_ok=True)
-        with open(self._path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(asdict(outcome), ensure_ascii=False) + "\n")
-
-    # ------------------------------------------------------------------
-    # Retrieval
-    # ------------------------------------------------------------------
-
-    def _repo_family(self, repo: str) -> str:
-        """Extract the repo family (e.g. 'django__django' from
-        'django__django-11049')."""
-        # Repo is already the family in most cases, but normalize
-        parts = repo.split("-")
-        if len(parts) > 1 and parts[-1].isdigit():
-            return "-".join(parts[:-1])
-        return repo
 
     def get_repo_outcomes(self, repo: str, *, max_results: int = 5) -> list[Outcome]:
-        """Get recent outcomes from the same repo family."""
-        self._ensure_loaded()
-        # Build family once for the query repo.
+        if not self._conn:
+            self._ensure_table()
+
+        # Approximate repo family match via LIKE
         parts = repo.split("-")
         family = (
             "-".join(parts[:-1]) if len(parts) > 1 and parts[-1].isdigit() else repo
         )
-        matches = [o for o in self._outcomes if o.repo_family == family]
-        # Most recent first
-        matches.sort(key=lambda o: o.timestamp, reverse=True)
-        return matches[:max_results]
 
-    def get_common_mistakes(self, *, max_results: int = 5) -> list[str]:
-        """Return the most common error summaries across all failures."""
-        self._ensure_loaded()
-        errors = [
-            o.error_summary
-            for o in self._outcomes
-            if o.status != "PASS" and o.error_summary.strip()
-        ]
-        if not errors:
-            return []
-        counter = Counter(errors)
-        return [msg for msg, _ in counter.most_common(max_results)]
+        cursor = self._conn.execute(
+            """SELECT * FROM outcomes WHERE repo LIKE ? OR repo = ? 
+               ORDER BY timestamp DESC LIMIT ?""",
+            (f"{family}%", repo, max_results),
+        )
+        return [self._row_to_outcome(row) for row in cursor]
 
     def get_successful_patterns(
         self, repo: str, *, max_results: int = 3
     ) -> list[Outcome]:
-        """Get successful outcomes from the same repo family."""
-        self._ensure_loaded()
+        if not self._conn:
+            self._ensure_table()
+
         parts = repo.split("-")
         family = (
             "-".join(parts[:-1]) if len(parts) > 1 and parts[-1].isdigit() else repo
         )
-        successes = [
-            o for o in self._outcomes if o.status == "PASS" and o.repo_family == family
-        ]
-        successes.sort(key=lambda o: o.timestamp, reverse=True)
-        return successes[:max_results]
 
-    def get_similar_tasks(
-        self,
-        task_description: str,
-        *,
-        max_results: int = 5,
-    ) -> list[Outcome]:
-        """Find past tasks with similar error patterns using keyword overlap."""
-        self._ensure_loaded()
-        if not task_description.strip():
-            return []
+        cursor = self._conn.execute(
+            """SELECT * FROM outcomes 
+               WHERE status = 'PASS' AND (repo LIKE ? OR repo = ?)
+               ORDER BY timestamp DESC LIMIT ?""",
+            (f"{family}%", repo, max_results),
+        )
+        return [self._row_to_outcome(row) for row in cursor]
 
-        query_words = set(task_description.lower().split())
-        scored: list[tuple[float, Outcome]] = []
+    def get_common_mistakes(self, *, max_results: int = 5) -> list[str]:
+        if not self._conn:
+            self._ensure_table()
 
-        for o in self._outcomes:
-            # Use cached search_words.
-            overlap = len(query_words & o.search_words)
-            if overlap == 0:
-                continue
-            score = overlap / max(len(query_words), 1)
-            # Boost outcomes with dense_reward data.
-            if o.dense_reward > 0:
-                score += 0.1 * o.dense_reward
-            scored.append((score, o))
+        cursor = self._conn.execute(
+            """SELECT error_summary, COUNT(*) as cnt 
+               FROM outcomes 
+               WHERE status != 'PASS' AND error_summary != ''
+               GROUP BY error_summary 
+               ORDER BY cnt DESC LIMIT ?""",
+            (max_results,),
+        )
+        return [row["error_summary"] for row in cursor]
 
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [o for _, o in scored[:max_results]]
+    def get_failure_patterns(self, repo: str) -> Counter:
+        # Re-implementing logic to use SQL for initial filtering
+        outcomes = self.get_repo_outcomes(repo, max_results=20)
+        failures = [o for o in outcomes if o.status != "PASS"]
 
-    # ------------------------------------------------------------------
-    # Prompt formatting
-    # ------------------------------------------------------------------
-
-    def get_failure_patterns(
-        self,
-        repo: str,
-        *,
-        max_results: int = 5,
-    ) -> Counter:
-        """Classify and count failure patterns for a repo family.
-
-        Returns a Counter mapping failure categories → counts.
-        """
-        self._ensure_loaded()
-        fam = self._repo_family(repo)
-        failures = [
-            o for o in self._outcomes if o.repo_family == fam and o.status != "PASS"
-        ]
         patterns: Counter = Counter()
-        for f in failures[-20:]:  # last 20 for recency
+        for f in failures:
             cat = self._classify_failure(f)
             patterns[cat] += 1
         return patterns
 
     @staticmethod
-    def _classify_failure(outcome: "Outcome") -> str:
-        """Classify a failure into an actionable bucket."""
+    def _classify_failure(outcome: Outcome) -> str:
         summary = (outcome.error_summary + " " + outcome.error_type).lower()
         if "import" in summary:
             return "import_error"
@@ -258,72 +194,36 @@ class OutcomeMemory:
             return "timeout"
         if "empty" in summary or "no patch" in summary:
             return "empty_patch"
-        if any(w in summary for w in ("attribute", "type", "name")):
-            return "type_error"
         return "other"
 
     def format_learnings(self, repo: str) -> str:
-        """Format relevant outcomes as a prompt section for the LLM.
+        """Format relevant outcomes as a prompt section."""
+        parts = []
 
-        Returns an empty string if no relevant learnings exist.
-        """
-        self._ensure_loaded()
-        parts: list[str] = []
-
-        # Successes from same repo
+        # 1. Successes
         successes = self.get_successful_patterns(repo, max_results=2)
         if successes:
             parts.append("## Successful Patterns from This Repo")
             for s in successes:
-                files_str = ", ".join(s.files_changed[:3]) or "unknown"
-                parts.append(
-                    f"- **{s.task_id}** (PASS in {s.iters_used} iters): "
-                    f"Modified {files_str}"
-                )
+                files = ", ".join(s.files_changed[:3]) or "unknown"
+                parts.append(f"- **{s.task_id}** (PASS): Modified {files}")
                 if s.patch_snippet:
                     parts.append(f"  ```\n  {s.patch_snippet[:200]}\n  ```")
 
-        # Failures from same repo
-        repo_outcomes = self.get_repo_outcomes(repo, max_results=3)
-        failures = [o for o in repo_outcomes if o.status != "PASS"]
+        # 2. Recent Failures
+        failures = [
+            o for o in self.get_repo_outcomes(repo, max_results=3) if o.status != "PASS"
+        ]
         if failures:
-            parts.append("\n## Recent Failures from This Repo (learn from these)")
+            parts.append("\n## Recent Failures from This Repo")
             for f in failures:
                 parts.append(f"- **{f.task_id}** ({f.status}): {f.error_summary}")
 
-        # Failure pattern breakdown (shows WHERE things go wrong)
-        patterns = self.get_failure_patterns(repo)
-        if patterns:
-            parts.append("\n## Failure Pattern Analysis")
-            parts.append(
-                "The following shows how past fixes failed — "
-                "avoid repeating these mistakes:"
-            )
-            for cat, count in patterns.most_common(5):
-                label = cat.replace("_", " ").title()
-                parts.append(f"- {label}: {count} occurrence(s)")
-
-        # Common mistakes across all repos
+        # 3. Common Mistakes (Global)
         mistakes = self.get_common_mistakes(max_results=3)
         if mistakes:
             parts.append("\n## Common Mistakes to Avoid")
             for m in mistakes:
                 parts.append(f"- {m}")
 
-        if not parts:
-            return ""
-
-        return "\n".join(parts) + "\n"
-
-    @property
-    def total_outcomes(self) -> int:
-        self._ensure_loaded()
-        return len(self._outcomes)
-
-    @property
-    def pass_rate(self) -> float:
-        self._ensure_loaded()
-        if not self._outcomes:
-            return 0.0
-        passes = sum(1 for o in self._outcomes if o.status == "PASS")
-        return passes / len(self._outcomes)
+        return "\n".join(parts) + "\n" if parts else ""
