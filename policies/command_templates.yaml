@@ -1,7 +1,12 @@
+# Command templates for executor.
+# SECURITY: allowed_target_regex is the injection boundary — keep it
+# strict. No spaces, no shell metacharacters, no $, backticks, pipes.
+# The executor additionally applies shlex.quote() and rejects shell
+# metacharacters as belt+suspenders defense.
 templates:
   pytest_targeted:
     cmd: ["bash", "-lc", "cd repo && source /work/venv/bin/activate && pytest -q {target} --maxfail=1 --disable-warnings --junitxml /work/artifacts/junit.xml"]
-    allowed_target_regex: "^[A-Za-z0-9_./:-]+$"
+    allowed_target_regex: "^[A-Za-z0-9_./:\\[\\]-]+$"
     max_seconds: 240
 
   pytest_suite:

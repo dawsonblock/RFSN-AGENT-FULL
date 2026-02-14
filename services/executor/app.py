@@ -24,6 +24,18 @@ try:
 except ImportError:
     _HAS_AUTH = False
 
+# ── Auth-required guard ────────────────────────────────
+# When RFSN_AUTH_REQUIRED=1 (default) and not dev mode,
+# hard-exit if auth module is missing. Silent auth downgrade
+# turns internal endpoints into open HTTP surfaces.
+_AUTH_REQUIRED = os.getenv("RFSN_AUTH_REQUIRED", "1") == "1"
+if not _HAS_AUTH and _AUTH_REQUIRED:
+    if os.getenv("RFSN_DEV_MODE", "0") != "1":
+        raise SystemExit(
+            "FATAL: auth module not available and RFSN_AUTH_REQUIRED=1. "
+            "Set RFSN_DEV_MODE=1 to bypass (dev only)."
+        )
+
 # Defense-in-depth: import patch risk gate for apply_patch.
 try:
     from rfsn_swebench.gate import patch_risk_gate as _patch_risk_gate
@@ -32,6 +44,15 @@ try:
 except ImportError:
     _HAS_PATCH_GATE = False
     _patch_risk_gate = None  # type: ignore[assignment]
+
+# ── Patch-gate-required guard ──────────────────────────
+_PATCH_GATE_REQUIRED = os.getenv("RFSN_PATCH_GATE_REQUIRED", "1") == "1"
+if not _HAS_PATCH_GATE and _PATCH_GATE_REQUIRED:
+    if os.getenv("RFSN_DEV_MODE", "0") != "1":
+        raise SystemExit(
+            "FATAL: patch_risk_gate not available and "
+            "RFSN_PATCH_GATE_REQUIRED=1. Set RFSN_DEV_MODE=1 to bypass."
+        )
 
 app = FastAPI()
 if _HAS_AUTH:
@@ -64,6 +85,9 @@ ALLOW_LOCAL_EXEC = (
     )
     == "1"
 )
+VENV_MODE = os.getenv("RFSN_VENV_MODE", "per_run")  # per_run | shared
+if VENV_MODE not in ("per_run", "shared"):
+    raise SystemExit(f"FATAL: invalid RFSN_VENV_MODE={VENV_MODE!r}")
 
 
 def _local_exec_allowed() -> bool:
@@ -118,15 +142,23 @@ if not USE_DOCKER_SANDBOX and not _local_exec_allowed():
     )
 
 # ── Warm sandbox pool ─────────────────────────
-try:
-    from sandbox_pool import SandboxPool  # type: ignore[import-not-found]
+# Disabled by default in non-dev mode to prevent cross-run
+# contamination. Enable with RFSN_SANDBOX_POOL=1.
+_SANDBOX_POOL_ENABLED = (
+    os.getenv("RFSN_SANDBOX_POOL", "0") == "1" or os.getenv("RFSN_DEV_MODE", "0") == "1"
+)
+if _SANDBOX_POOL_ENABLED:
+    try:
+        from sandbox_pool import SandboxPool  # type: ignore[import-not-found]
 
-    _sandbox_pool: SandboxPool | None = SandboxPool()
-except Exception as _pool_err:
-    print(
-        f"WARN: sandbox pool disabled: {_pool_err}",
-        flush=True,
-    )
+        _sandbox_pool: SandboxPool | None = SandboxPool()
+    except Exception as _pool_err:
+        print(
+            f"WARN: sandbox pool disabled: {_pool_err}",
+            flush=True,
+        )
+        _sandbox_pool = None  # type: ignore[assignment]
+else:
     _sandbox_pool = None  # type: ignore[assignment]
 
 
@@ -145,6 +177,18 @@ def _load_yaml(path: str) -> dict:
 DEPS = _load_yaml("/policies/deps_policy.yaml")
 GATE_POLICY = _load_yaml("/policies/gate_policy.yaml")
 CMD_TEMPLATES = _load_yaml("/policies/command_templates.yaml").get("templates", {})
+# ── Template startup validation: reject eval-style commands ──
+for _tmpl_name, _tmpl_def in CMD_TEMPLATES.items():
+    _tmpl_cmd = _tmpl_def.get("cmd", [])
+    if "eval" in _tmpl_cmd:
+        raise SystemExit(
+            f"FATAL: template {_tmpl_name!r} contains 'eval' — "
+            "eval-style templates are forbidden."
+        )
+print(
+    f"venv_mode={VENV_MODE}",
+    flush=True,
+)
 TOOL_ALLOWLIST = _load_yaml("/policies/tool_allowlist.yaml")
 SAFE_CMD_TEMPLATES = TOOL_ALLOWLIST.get("command_templates", {}) or {}
 MAX_READ_FILE_BYTES = int(
@@ -665,7 +709,7 @@ def sandbox_create(req: SandboxReq):
             "sandbox pool not available",
         )
     _validate_repo_id(req.repo_id)
-    repo_host, art_host, venv_host, wheels_host = _paths(req.repo_id)
+    repo_host, art_host, venv_host, wheels_host = _paths(req.repo_id, run_id=req.run_id)
     sb = _sandbox_pool.get_or_create(
         req.run_id,
         repo_host,
@@ -719,7 +763,9 @@ def run_warm(req: WarmExecReq):
         )
 
     _validate_repo_id(req.repo_id)
-    repo_host, art_host, venv_host, wheels_host = _paths(req.repo_id)
+    repo_host, art_host, venv_host, wheels_host = _paths(
+        req.repo_id, run_id=getattr(req, "run_id", "")
+    )
 
     step = req.step
     t: str = step.get("type") or ""
@@ -819,11 +865,16 @@ def _validate_repo_id(repo_id: str) -> None:
         raise HTTPException(400, "repo_id must not contain '..'")
 
 
-def _paths(repo_id: str):
+def _paths(repo_id: str, run_id: str = ""):
     _validate_repo_id(repo_id)
     repo_local = os.path.abspath(f"/data/repos/{repo_id}")
     art_local = os.path.abspath(f"/data/artifacts/{repo_id}")
-    venv_local = os.path.abspath(f"/data/venv/{repo_id}")
+    # Per-run venv isolation: each run_id gets its own venv.
+    if VENV_MODE == "per_run" and run_id:
+        safe_run = re.sub(r"[^A-Za-z0-9_.-]", "_", run_id)[:128]
+        venv_local = os.path.abspath(f"/data/venv/{repo_id}/{safe_run}")
+    else:
+        venv_local = os.path.abspath(f"/data/venv/{repo_id}")
     wheels_local = os.path.abspath(f"/data/wheels/{repo_id}")
     for p in (repo_local, art_local, venv_local, wheels_local):
         if not p.startswith("/data/"):
@@ -837,7 +888,10 @@ def _paths(repo_id: str):
         # Nested docker mode mounts host paths into blessed containers.
         repo_exec = os.path.join(HOST_DATA_DIR, "repos", repo_id)
         art_exec = os.path.join(HOST_DATA_DIR, "artifacts", repo_id)
-        venv_exec = os.path.join(HOST_DATA_DIR, "venv", repo_id)
+        if VENV_MODE == "per_run" and run_id:
+            venv_exec = os.path.join(HOST_DATA_DIR, "venv", repo_id, safe_run)
+        else:
+            venv_exec = os.path.join(HOST_DATA_DIR, "venv", repo_id)
         wheels_exec = os.path.join(HOST_DATA_DIR, "wheels", repo_id)
     else:
         # Local mode runs inside this container and must use container paths.
@@ -916,11 +970,9 @@ def _run_docker_with_data(
                 net,
                 "--user",
                 "1000:1000",
-                "--security-opt",
-                "no-new-privileges:true",
+                "--security-opt", "no-new-privileges:true",
                 "--read-only",
-                "--tmpfs",
-                "/tmp:rw,noexec,nosuid,nodev,size=256m",
+                "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=256m",
                 "--memory",
                 "2g",
                 "--cpus",
@@ -929,8 +981,7 @@ def _run_docker_with_data(
                 "256",
                 "--cap-drop",
                 "ALL",
-                "-e",
-                "HOME=/tmp",
+                "-e", "HOME=/tmp",
             ]
             + extra_mounts
             + [
@@ -1112,6 +1163,7 @@ def _ensure_deps(
         raise HTTPException(400, f"invalid manifest name: {manifest}")
     rh = 1 if require_hashes else 0
     ob = 1 if only_binary else 0
+    _venv_mode = VENV_MODE
     script = f"""#!/bin/bash
 set -euo pipefail
 cd /work/repo
@@ -1133,6 +1185,23 @@ python -m pip install --require-hashes $BIN_FLAG \\
   --cache-dir {shlex.quote(cache_dir)} \\
   -r {shlex.quote(manifest)}
 python -c "import sys; print('deps_ok', sys.version)"
+# Capture dep state hash for replay integrity verification.
+pip freeze | sort | sha256sum | awk '{{print $1}}' > /work/artifacts/dep_hash.sha256
+# Write deps_state.json for replay bundle.
+PYVER=$(python --version 2>&1)
+SPHASH=$(find /work/venv/lib -type f | sort | xargs -I{{}} sh -c 'echo "{{}}:$(stat -f%z {{}} 2>/dev/null || stat -c%s {{}} 2>/dev/null)"' | sha256sum | awk '{{print $1}}')
+python -c "
+import json, os
+state = {{
+    'venv_mode': '{_venv_mode}',
+    'python_version': '${{PYVER}}',
+    'site_packages_hash': '${{SPHASH}}',
+    'wheel_cache_path': '{cache_dir}',
+    'venv_path': '/work/venv',
+}}
+with open('/work/artifacts/deps_state.json', 'w') as f:
+    json.dump(state, f, indent=2, sort_keys=True)
+"
 """
     return _run_docker_with_data(
         script,
@@ -1404,6 +1473,17 @@ def _run_tests(
             403,
             f"target not allowed for template" f" {template_id}",
         )
+
+    # Belt+suspenders: reject shell metacharacters regardless of regex.
+    # This is the injection boundary — even if regex is loosened upstream,
+    # these characters must NEVER reach bash interpolation.
+    _SHELL_METACHAR = frozenset("$`|;&><\n\r\\!")
+    if target and any(c in _SHELL_METACHAR for c in target):
+        raise HTTPException(
+            403,
+            f"target contains shell metacharacter: {target!r}",
+        )
+
     safe_target = shlex.quote(target) if target else ""
     cmd_str = " ".join([shlex.quote(x) for x in cmd])
     cmd_str = cmd_str.replace("{target}", safe_target)
@@ -1983,7 +2063,9 @@ def _build_step_script(
 
 @app.post("/run")
 def run(req: ExecReq):
-    repo_host, art_host, venv_host, wheels_host = _paths(req.repo_id)
+    repo_host, art_host, venv_host, wheels_host = _paths(
+        req.repo_id, run_id=getattr(req, "run_id", "")
+    )
     step = req.step
     t = step.get("type")
     allow_network = bool(step.get("_rfsn_allow_network"))

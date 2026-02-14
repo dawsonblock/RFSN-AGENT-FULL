@@ -51,27 +51,21 @@ def test_orchestrator_exposes_warm_sandbox_toggle():
     compose = (ROOT / "docker-compose.yml").read_text(
         encoding="utf-8",
     )
-    assert "RFSN_WARM_SANDBOX: ${RFSN_WARM_SANDBOX:-1}" in compose
+    assert "RFSN_WARM_SANDBOX: ${RFSN_WARM_SANDBOX:-0}" in compose
 
 
 def test_executor_exposes_network_min_tier_toggle():
     compose = (ROOT / "docker-compose.yml").read_text(
         encoding="utf-8",
     )
-    assert (
-        "RFSN_NETWORK_MIN_TIER: ${RFSN_NETWORK_MIN_TIER:-2}"
-        in compose
-    )
+    assert "RFSN_NETWORK_MIN_TIER: ${RFSN_NETWORK_MIN_TIER:-2}" in compose
 
 
 def test_executor_exposes_strict_image_digest_toggle():
     compose = (ROOT / "docker-compose.yml").read_text(
         encoding="utf-8",
     )
-    assert (
-        "RFSN_STRICT_IMAGE_DIGEST: ${RFSN_STRICT_IMAGE_DIGEST:-1}"
-        in compose
-    )
+    assert "RFSN_STRICT_IMAGE_DIGEST: ${RFSN_STRICT_IMAGE_DIGEST:-1}" in compose
 
 
 def test_docker_up_script_pins_blessed_image_digest():
@@ -81,4 +75,4 @@ def test_docker_up_script_pins_blessed_image_digest():
     assert "BLESSED_IMAGE_REF" in script
     assert "docker image inspect" in script
     assert "RepoDigests" in script or "RepoDigests" in script.replace(" ", "")
-    assert "upsert_env_kv \"BLESSED_IMAGE\"" in script
+    assert 'upsert_env_kv "BLESSED_IMAGE"' in script

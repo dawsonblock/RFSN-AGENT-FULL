@@ -28,6 +28,22 @@ except ImportError:
         flush=True,
     )
 
+# ── Patch-gate-required guard ──────────────────────────
+_PATCH_GATE_REQUIRED = os.getenv("RFSN_PATCH_GATE_REQUIRED", "1") == "1"
+if not _HAS_PATCH_GATE and _PATCH_GATE_REQUIRED:
+    if os.getenv("RFSN_DEV_MODE", "0") != "1":
+        raise SystemExit(
+            "FATAL: patch_risk_gate not available and "
+            "RFSN_PATCH_GATE_REQUIRED=1. Set RFSN_DEV_MODE=1 to bypass."
+        )
+
+# ── Startup status logging ─────────────────────────────
+print(
+    f"patch_gate={'enabled' if _HAS_PATCH_GATE else 'disabled'} "
+    f"patch_gate_required={'true' if _PATCH_GATE_REQUIRED else 'false'}",
+    flush=True,
+)
+
 import sys
 
 sys.path.insert(0, "/shared")
@@ -44,6 +60,15 @@ except ImportError:
     def auth_headers():
         return {}
 
+
+# ── Auth-required guard ────────────────────────────────
+_AUTH_REQUIRED = os.getenv("RFSN_AUTH_REQUIRED", "1") == "1"
+if not _HAS_AUTH and _AUTH_REQUIRED:
+    if os.getenv("RFSN_DEV_MODE", "0") != "1":
+        raise SystemExit(
+            "FATAL: auth module not available and RFSN_AUTH_REQUIRED=1. "
+            "Set RFSN_DEV_MODE=1 to bypass (dev only)."
+        )
 
 app = FastAPI()
 if _HAS_AUTH:
@@ -400,6 +425,24 @@ def run_step(
                 403,
                 f"unknown run_tests template_id: {template_id}",
             )
+        # Gateway-side target sanitizer (defense-in-depth).
+        target = str(s.get("target") or "")
+        if target:
+            _GW_SHELL_REJECT = frozenset(" \t\n\r;$`|&(){}[]<>\\!")
+            if any(c in _GW_SHELL_REJECT for c in target):
+                raise HTTPException(
+                    403,
+                    f"target contains forbidden character: {target!r}",
+                )
+            # Strict pytest target pattern:
+            # path/to/file.py  or  path/to/file.py::Class::test
+            _PYTEST_TARGET_RE = re.compile(r"^[A-Za-z0-9_./:-]+(::[A-Za-z0-9_]+)*$")
+            if template_id == "pytest_targeted":
+                if not _PYTEST_TARGET_RE.fullmatch(target):
+                    raise HTTPException(
+                        403,
+                        f"invalid pytest target pattern: {target!r}",
+                    )
     if s["type"] in ("run_cmd_template", "format_fix"):
         template = str(s.get("template") or "").strip()
         if not template:
@@ -621,11 +664,18 @@ def run_step(
                 _EFFECTIVE_MAX_FILES,
                 5,  # max_new_files
             )
+            s["_patch_gate_verdict"] = gate_report.decision.lower()
+            s["_patch_gate_reason"] = (
+                "; ".join(gate_report.reasons[:5]) if gate_report.reasons else ""
+            )
             if gate_report.decision == "REJECT":
                 raise HTTPException(
                     403,
                     "RFSN gate REJECT: " + "; ".join(gate_report.reasons[:5]),
                 )
+        else:
+            s["_patch_gate_verdict"] = "na"
+            s["_patch_gate_reason"] = "gate not available"
 
     # Enforce per-step budgets from kernel
     # gate policy (unified source of truth).

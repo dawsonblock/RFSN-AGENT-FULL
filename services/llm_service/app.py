@@ -13,18 +13,27 @@ from pydantic import BaseModel  # type: ignore[import-not-found]
 from typing import Optional
 
 import sys
+
 sys.path.insert(0, "/shared")
 try:
     from auth import ServiceAuthMiddleware  # type: ignore[import-not-found]
+
     _HAS_AUTH = True
 except ImportError:
     _HAS_AUTH = False
 
+# ── Auth-required guard ────────────────────────────────
+_AUTH_REQUIRED = os.getenv("RFSN_AUTH_REQUIRED", "1") == "1"
+if not _HAS_AUTH and _AUTH_REQUIRED:
+    if os.getenv("RFSN_DEV_MODE", "0") != "1":
+        raise SystemExit(
+            "FATAL: auth module not available and RFSN_AUTH_REQUIRED=1. "
+            "Set RFSN_DEV_MODE=1 to bypass (dev only)."
+        )
+
 app = FastAPI()
 if _HAS_AUTH:
-    app.add_middleware(
-        ServiceAuthMiddleware  # type: ignore[possibly-unbound]
-    )
+    app.add_middleware(ServiceAuthMiddleware)  # type: ignore[possibly-unbound]
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv(
@@ -45,7 +54,8 @@ SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
 def _canon(obj) -> str:
     return json.dumps(
-        obj, sort_keys=True,
+        obj,
+        sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
     )
@@ -102,7 +112,7 @@ def _append_cassette(p: Path, rec: dict) -> None:
     if p.exists():
         lines = p.read_text(encoding="utf-8").splitlines()
         if len(lines) >= int(CASSETTE.get("max_records", 500)):
-            keep = lines[int(len(lines)*0.2):]
+            keep = lines[int(len(lines) * 0.2) :]
             p.write_text("\n".join(keep) + "\n", encoding="utf-8")
     with p.open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")

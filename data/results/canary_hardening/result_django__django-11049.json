@@ -1,0 +1,12 @@
+{
+  "task_id": "django__django-11049",
+  "status": "FAIL",
+  "iters": 5,
+  "final_patch_unified_diff": "",
+  "tests": {},
+  "risk": {
+    "decision": "ALLOW",
+    "reasons": []
+  },
+  "replay_dir": "/tmp/swebench_work/django__django-11049/replays/django__django-11049_1771028019964"
+}

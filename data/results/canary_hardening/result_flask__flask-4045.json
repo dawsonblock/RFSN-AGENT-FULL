@@ -1,0 +1,12 @@
+{
+  "task_id": "flask__flask-4045",
+  "status": "FAIL",
+  "iters": 10,
+  "final_patch_unified_diff": "",
+  "tests": {},
+  "risk": {
+    "decision": "ALLOW",
+    "reasons": []
+  },
+  "replay_dir": "/tmp/swebench_work/flask__flask-4045/replays/flask__flask-4045_1771028051190"
+}

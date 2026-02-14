@@ -1,0 +1,12 @@
+
+============================================================
+RFSN SWE-bench Batch Runner
+  Tasks:    10
+  Proposer: orchestrator (deepseek-reasoner)
+  Results:  data/results/canary_hardening
+  Timeout:  600s per task
+============================================================
+
+[1/10] django__django-11049 → FAIL (iters=5, risk=ALLOW, 104s)
+[2/10] flask__flask-4045 → FAIL (iters=10, risk=ALLOW, 7s)
+[3/10] matplotlib__matplotlib-23476 

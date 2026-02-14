@@ -125,6 +125,15 @@ except ImportError:
         return {}
 
 
+# ── Auth-required guard ────────────────────────────────
+_AUTH_REQUIRED = os.getenv("RFSN_AUTH_REQUIRED", "1") == "1"
+if not _HAS_AUTH and _AUTH_REQUIRED:
+    if os.getenv("RFSN_DEV_MODE", "0") != "1":
+        raise SystemExit(
+            "FATAL: auth module not available and RFSN_AUTH_REQUIRED=1. "
+            "Set RFSN_DEV_MODE=1 to bypass (dev only)."
+        )
+
 app = FastAPI()
 if _HAS_AUTH:
     app.add_middleware(ServiceAuthMiddleware)  # type: ignore[possibly-unbound]
@@ -164,7 +173,7 @@ HARD_LEDGER_PATH = os.getenv(
     "/data/kernel_ledger.jsonl",
 )
 SEED = os.getenv("RFSN_SEED", "1")
-WARM_SANDBOX = os.getenv("RFSN_WARM_SANDBOX", "1") == "1"
+WARM_SANDBOX = os.getenv("RFSN_WARM_SANDBOX", "0") == "1"
 _REPO_ROOT = os.path.dirname(
     os.path.dirname(
         os.path.dirname(
@@ -378,6 +387,7 @@ _SNAPSHOT_EXCLUDE_DIRS = {
     ".git",
     "__pycache__",
     ".venv",
+    "venv",
     "node_modules",
     ".mypy_cache",
     ".pytest_cache",
@@ -385,7 +395,23 @@ _SNAPSHOT_EXCLUDE_DIRS = {
     "dist",
     "build",
     ".tox",
+    "secrets",
+    "credentials",
+    "private",
 }
+# Secret-file patterns excluded from replay snapshots (share-safe).
+_SNAPSHOT_SECRET_SUFFIXES = (
+    ".pem",
+    ".key",
+    ".p12",
+    ".pfx",
+    ".jks",
+)
+_SNAPSHOT_SECRET_PREFIXES = (
+    ".env",
+    "id_rsa",
+    "id_ed25519",
+)
 _MAX_SNAPSHOT_FILE_BYTES = int(
     os.getenv("RFSN_MAX_SNAPSHOT_FILE_BYTES", "50000000"),
 )
@@ -402,13 +428,21 @@ def _snapshot_tar_filter(
         return None
     if ti.size and ti.size > _MAX_SNAPSHOT_FILE_BYTES:
         return None
+    # Share-safe: exclude secret files by name pattern.
+    basename = parts[-1] if parts else ""
+    lower_base = basename.lower()
+    if any(lower_base.startswith(p) for p in _SNAPSHOT_SECRET_PREFIXES):
+        return None
+    if any(lower_base.endswith(s) for s in _SNAPSHOT_SECRET_SUFFIXES):
+        return None
     return ti
 
 
-def _capture_repo_snapshot(repo_id: str, run_id: str, label: str) -> str:
+def _capture_repo_snapshot(repo_id: str, run_id: str, label: str) -> tuple:
+    """Returns (path, skipped_reason). path='' if skipped."""
     repo_path = _repo_abs_path(repo_id)
     if not os.path.isdir(repo_path):
-        return ""
+        return "", "repo_not_found"
     out_dir = _replay_bundle_dir(repo_id, run_id)
     out_path = os.path.join(out_dir, f"repo_{label}.tar.gz")
     try:
@@ -421,10 +455,10 @@ def _capture_repo_snapshot(repo_id: str, run_id: str, label: str) -> str:
         # Enforce total snapshot size cap.
         if os.path.getsize(out_path) > _MAX_SNAPSHOT_BYTES:
             os.remove(out_path)
-            return ""
-        return out_path
+            return "", "size_cap"
+        return out_path, ""
     except Exception:
-        return ""
+        return "", "capture_error"
 
 
 def _capture_requirements_lock(repo_id: str, run_id: str) -> str:
@@ -584,9 +618,12 @@ def _init_replay_manifest(
         ),
         "repo_snapshot_start": "",
         "repo_snapshot_end": "",
+        "snapshot_skipped_reason": "",
         "requirements_lock": "",
         "executor_env_manifest_path": "",
         "executor_env_manifest": {},
+        "venv_mode": os.getenv("RFSN_VENV_MODE", "per_run"),
+        "deps_state": {},
         "repo_head": _repo_head(repo_id) or "unknown",
         "learner_db_path": LEARNER_DB_PATH,
         "learner_db_hash": (_file_sha256(LEARNER_DB_PATH) or "missing"),
@@ -617,11 +654,14 @@ def _finalize_replay_manifest(
     repo_id = str(manifest.get("repo_id", "") or "")
     if repo_id:
         if not str(manifest.get("repo_snapshot_end", "")).strip():
-            manifest["repo_snapshot_end"] = _capture_repo_snapshot(
+            _end_path, _end_reason = _capture_repo_snapshot(
                 repo_id,
                 run_id,
                 "end",
             )
+            manifest["repo_snapshot_end"] = _end_path
+            if _end_reason:
+                manifest["snapshot_skipped_reason"] = _end_reason
         if not str(manifest.get("requirements_lock", "")).strip():
             manifest["requirements_lock"] = _capture_requirements_lock(
                 repo_id,
@@ -2820,13 +2860,15 @@ def run(req: RunReq):
         env_snapshot=env_snapshot,
         sandbox_info=sb_info if isinstance(sb_info, dict) else None,
     )
-    start_snapshot = _capture_repo_snapshot(
+    start_snapshot, _start_reason = _capture_repo_snapshot(
         req.repo_id,
         run_id,
         "start",
     )
     if start_snapshot:
         replay_manifest["repo_snapshot_start"] = start_snapshot
+    if _start_reason:
+        replay_manifest["snapshot_skipped_reason"] = _start_reason
     env_manifest = _capture_executor_env_manifest(
         run_id,
         req.repo_id,

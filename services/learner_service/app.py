@@ -25,6 +25,15 @@ try:
 except ImportError:
     _HAS_AUTH = False
 
+# ── Auth-required guard ────────────────────────────────
+_AUTH_REQUIRED = os.getenv("RFSN_AUTH_REQUIRED", "1") == "1"
+if not _HAS_AUTH and _AUTH_REQUIRED:
+    if os.getenv("RFSN_DEV_MODE", "0") != "1":
+        raise SystemExit(
+            "FATAL: auth module not available and RFSN_AUTH_REQUIRED=1. "
+            "Set RFSN_DEV_MODE=1 to bypass (dev only)."
+        )
+
 app = FastAPI()
 if _HAS_AUTH:
     app.add_middleware(ServiceAuthMiddleware)  # type: ignore[possibly-unbound]
@@ -57,6 +66,8 @@ def context_key(meta: dict) -> str:
     can learn different strategies for different
     failure types at different pipeline stages.
     """
+    import hashlib  # local import for AST-extraction compatibility
+
     lang = (meta.get("lang") or "py").strip().lower()
     tests = (meta.get("tests") or "pytest").strip().lower()
     fw = (meta.get("framework") or "unknown").strip().lower()
