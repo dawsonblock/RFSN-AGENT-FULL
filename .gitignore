@@ -32,4 +32,6 @@ data/cassettes/
 data/ledger.jsonl
 
 # Nohup output
-nohup.out
+
+# Replay artifacts (local verification)
+data_replay/
