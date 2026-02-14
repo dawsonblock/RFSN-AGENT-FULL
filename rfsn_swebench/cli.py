@@ -838,20 +838,78 @@ def make_direct_proposer(
         if is_retry or n_candidates <= 1:
             return _generate_one(0.2 if is_retry else 0.0)
 
-        # Best-of-N: generate multiple candidates and pick the best
+        # Best-of-N: generate multiple candidates in PARALLEL and pick the best
         log_event(replay_dir, {"type": "best_of_n_start", "n": n_candidates})
+
+        # 1. Parallel Generation (LLM calls)
+        # We only parallelize the network I/O. Filesystem ops (apply/diff) happen later.
+        import concurrent.futures
+
+        def _generate_raw(temp: float) -> str:
+            """Generate raw LLM output without touching FS."""
+            return _llm_call(
+                system_prompt,
+                user_prompt,
+                max_tokens=16384,
+                temperature=temp,
+                use_strong=_use_strong_model,
+            )
+
+        raw_candidates: list[str] = []
+        temps = [0.0] + [candidate_temperature] * (n_candidates - 1)
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=n_candidates
+        ) as executor:
+            futures = [executor.submit(_generate_raw, t) for t in temps]
+            for f in concurrent.futures.as_completed(futures):
+                try:
+                    raw_candidates.append(f.result())
+                except Exception as e:
+                    log_event(replay_dir, {"type": "gen_error", "error": str(e)})
+
+        # 2. Sequential Processing & Validation (FS ops)
+        # Must be sequential because they share task.workdir
         candidates: list[str] = []
 
-        # First candidate at temp=0 (deterministic baseline)
-        candidates.append(_generate_one(0.0))
+        from .repo import git_reset_hard
+        from .patcher import apply_unified_diff
 
-        # Remaining candidates at higher temperature for diversity
-        for _ in range(n_candidates - 1):
-            candidates.append(_generate_one(candidate_temperature))
+        for raw in raw_candidates:
+            # Process raw -> diff
+            diff = ""
+            try:
+                blocks = _extract_file_blocks(raw)
+                if blocks:
+                    # FS critical section
+                    git_reset_hard(task.workdir)
+                    if task.hints.test_patch:
+                        apply_unified_diff(
+                            task.hints.test_patch, task.workdir, strict=True
+                        )
 
-        # Validate each candidate with quick tests
-        best_candidate = candidates[0]  # fallback to first
+                    diff = _apply_and_diff(task.workdir, blocks, target_files)
+
+                if not diff.strip():
+                    diff = _extract_diff(raw)
+
+                candidates.append(diff)
+            except Exception as e:
+                log_event(replay_dir, {"type": "process_error", "error": str(e)})
+                candidates.append("")
+            finally:
+                # Cleanup
+                git_reset_hard(task.workdir)
+                if task.hints.test_patch:
+                    apply_unified_diff(task.hints.test_patch, task.workdir, strict=True)
+
+        # 3. Validation
+        best_candidate = candidates[0] if candidates else ""
+
         for ci, cand in enumerate(candidates):
+            if not cand.strip():
+                continue
+
             cand_diff, passed, test_out = _quick_validate(cand)
             log_event(
                 replay_dir,
@@ -868,6 +926,7 @@ def make_direct_proposer(
                     {"type": "best_of_n_winner", "index": ci},
                 )
                 return cand_diff
+
             # Track best non-passing candidate (prefer non-empty)
             if cand_diff.strip() and not best_candidate.strip():
                 best_candidate = cand_diff

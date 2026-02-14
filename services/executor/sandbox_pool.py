@@ -73,6 +73,18 @@ class SandboxPool:
     def __init__(self) -> None:
         self._pool: Dict[str, Sandbox] = {}
         self._pool_lock = threading.Lock()
+
+        # Metrics
+        from system.metrics import gauge, counter
+
+        self._active_gauge = gauge("sandbox_active", "Number of active warm sandboxes")
+        self._exec_counter = counter(
+            "sandbox_execs", "Total commands executed in sandboxes"
+        )
+        self._reap_counter = counter(
+            "sandbox_reaps", "Total sandboxes reaped due to idle"
+        )
+
         # Start background reaper.
         self._reaper = threading.Thread(
             target=self._reap_loop,
@@ -100,8 +112,12 @@ class SandboxPool:
         # Create new container (outside pool lock
         # so we don't block other runs).
         sb = self._create(
-            run_id, repo_host, art_host,
-            venv_host, wheels_host, network,
+            run_id,
+            repo_host,
+            art_host,
+            venv_host,
+            wheels_host,
+            network,
         )
 
         with self._pool_lock:
@@ -133,7 +149,8 @@ class SandboxPool:
 
             cid = sandbox.container_id
             script_path = self._write_tmp(
-                script, ".sh",
+                script,
+                ".sh",
             )
             copied: list[str] = [script_path]
 
@@ -141,35 +158,42 @@ class SandboxPool:
                 # Copy script into container.
                 subprocess.run(
                     [
-                        "docker", "cp",
+                        "docker",
+                        "cp",
                         script_path,
                         f"{cid}:/tmp/rfsn_script.sh",
                     ],
-                    check=True, timeout=10,
+                    check=True,
+                    timeout=10,
                     capture_output=True,
                 )
 
                 # Copy data files.
-                for cpath, hpath in (
-                    data_files.items()
-                ):
+                for cpath, hpath in data_files.items():
                     # Ensure target dir exists.
                     cdir = os.path.dirname(cpath)
                     subprocess.run(
                         [
-                            "docker", "exec", cid,
-                            "mkdir", "-p", cdir,
+                            "docker",
+                            "exec",
+                            cid,
+                            "mkdir",
+                            "-p",
+                            cdir,
                         ],
-                        check=False, timeout=5,
+                        check=False,
+                        timeout=5,
                         capture_output=True,
                     )
                     subprocess.run(
                         [
-                            "docker", "cp",
+                            "docker",
+                            "cp",
                             hpath,
                             f"{cid}:{cpath}",
                         ],
-                        check=True, timeout=10,
+                        check=True,
+                        timeout=10,
                         capture_output=True,
                     )
                     copied.append(hpath)
@@ -179,8 +203,10 @@ class SandboxPool:
                 try:
                     p = subprocess.run(
                         [
-                            "docker", "exec",
-                            "-w", workdir,
+                            "docker",
+                            "exec",
+                            "-w",
+                            workdir,
                             cid,
                             "bash",
                             "/tmp/rfsn_script.sh",
@@ -191,7 +217,8 @@ class SandboxPool:
                         text=True,
                     )
                     raw_logs = (p.stdout or "").replace(
-                        "\r\n", "\n",
+                        "\r\n",
+                        "\n",
                     )
                     out, trunc = _truncate_text_bytes(
                         raw_logs,
@@ -207,7 +234,8 @@ class SandboxPool:
                     raw_out = e.stdout or ""
                     if isinstance(raw_out, bytes):
                         raw_out = raw_out.decode(
-                            "utf-8", errors="replace",
+                            "utf-8",
+                            errors="replace",
                         )
                     out, trunc = _truncate_text_bytes(
                         str(raw_out) + "\n[TIMEOUT]\n",
@@ -286,38 +314,55 @@ class SandboxPool:
         name = f"rfsn-sandbox-{tag}"
 
         args = [
-            "docker", "run", "-d",
-            "--name", name,
-            "--network", network,
-            "--user", "1000:1000",
-            "--security-opt", "no-new-privileges:true",
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            name,
+            "--network",
+            network,
+            "--user",
+            "1000:1000",
+            "--security-opt",
+            "no-new-privileges:true",
             "--read-only",
-            "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=256m",
-            "--memory", "2g",
-            "--cpus", "2",
-            "--pids-limit", "256",
-            "--cap-drop", "ALL",
-            "-e", "HOME=/tmp",
-            "-v", f"{repo_host}:/work/repo:rw",
-            "-v", f"{art_host}:/work/artifacts:rw",
-            "-v", f"{venv_host}:/work/venv:rw",
-            "-v", f"{wheels_host}:/work/wheels:rw",
-            "-w", "/work",
+            "--tmpfs",
+            "/tmp:rw,noexec,nosuid,nodev,size=256m",
+            "--memory",
+            "2g",
+            "--cpus",
+            "2",
+            "--pids-limit",
+            "256",
+            "--cap-drop",
+            "ALL",
+            "-e",
+            "HOME=/tmp",
+            "-v",
+            f"{repo_host}:/work/repo:rw",
+            "-v",
+            f"{art_host}:/work/artifacts:rw",
+            "-v",
+            f"{venv_host}:/work/venv:rw",
+            "-v",
+            f"{wheels_host}:/work/wheels:rw",
+            "-w",
+            "/work",
             BLESSED_IMAGE,
             # Keep alive with tail -f /dev/null.
-            "tail", "-f", "/dev/null",
+            "tail",
+            "-f",
+            "/dev/null",
         ]
 
         p = subprocess.run(
             args,
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
             timeout=30,
         )
         if p.returncode != 0:
-            raise RuntimeError(
-                f"Failed to create sandbox:"
-                f" {p.stderr.strip()}"
-            )
+            raise RuntimeError(f"Failed to create sandbox:" f" {p.stderr.strip()}")
         cid = p.stdout.strip()
 
         # Get image hash.
@@ -325,12 +370,14 @@ class SandboxPool:
         try:
             ih = subprocess.run(
                 [
-                    "docker", "inspect",
+                    "docker",
+                    "inspect",
                     "--format",
                     "{{.Image}}",
                     cid,
                 ],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
                 timeout=5,
             )
             if ih.returncode == 0:
@@ -353,7 +400,9 @@ class SandboxPool:
         try:
             subprocess.run(
                 [
-                    "docker", "rm", "-f",
+                    "docker",
+                    "rm",
+                    "-f",
                     sb.container_id,
                 ],
                 capture_output=True,
@@ -367,18 +416,17 @@ class SandboxPool:
         try:
             p = subprocess.run(
                 [
-                    "docker", "inspect",
+                    "docker",
+                    "inspect",
                     "--format",
                     "{{.State.Running}}",
                     sb.container_id,
                 ],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
                 timeout=5,
             )
-            return (
-                p.returncode == 0
-                and "true" in p.stdout.lower()
-            )
+            return p.returncode == 0 and "true" in p.stdout.lower()
         except Exception:
             return False
 
@@ -397,10 +445,12 @@ class SandboxPool:
 
             for rid in to_reap:
                 self.destroy_run(rid)
+                self._reap_counter.inc()
 
     @staticmethod
     def _write_tmp(
-        content: str, suffix: str,
+        content: str,
+        suffix: str,
     ) -> str:
         fd = tempfile.NamedTemporaryFile(
             delete=False,

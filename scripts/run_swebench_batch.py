@@ -309,7 +309,7 @@ def main(argv: Optional[list[str]] = None) -> None:
     if args.outcome_memory is None:
         args.outcome_memory = os.path.join(args.results, "outcome_memory.jsonl")
 
-    # Run tasks sequentially (parallel support can be added later)
+    # Summary accumulator
     summary: dict[str, Any] = {
         "total": total,
         "pass": 0,
@@ -321,97 +321,46 @@ def main(argv: Optional[list[str]] = None) -> None:
     }
     batch_start = time.time()
 
-    for i, task_file in enumerate(task_files, 1):
-        result_file = _result_path(args.results, task_file)
-        task_id = os.path.basename(task_file).replace("task_", "").replace(".json", "")
+    import concurrent.futures
 
-        print(f"[{i}/{total}] {task_id}", end=" ", flush=True)
-        cmd = _build_cli_args(task_file, result_file, args)
+    # Helper for executing a single task (must be picklable)
+    # We pass 'args' as a dict or namespace? Namespace is picklable.
 
-        t0 = time.time()
-        try:
-            proc = subprocess.run(
-                cmd,
-                cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                capture_output=True,
-                text=True,
-                timeout=args.timeout,
-            )
-            dt = time.time() - t0
+    tasks_to_run = [(tf, args) for tf in task_files]
+    results_list = []
 
-            if proc.returncode == 0:
-                result = _load_result(result_file)
-                status = result.get("status", "UNKNOWN")
-                iters = result.get("iters", "?")
-                risk = result.get("risk", {}).get("decision", "?")
-                print(f"→ {status} (iters={iters}, risk={risk}, {dt:.0f}s)")
+    if args.parallel > 1:
+        print(f"Running with {args.parallel} parallel workers...")
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=args.parallel
+        ) as executor:
+            # map returns iterator of results in order
+            future_results = executor.map(_run_task_safe, tasks_to_run)
+            for i, res in enumerate(future_results):
+                results_list.append(res)
+                _print_progress(i + 1, total, res)
+    else:
+        # Sequential
+        for i, item in enumerate(tasks_to_run):
+            res = _run_task_safe(item)
+            results_list.append(res)
+            _print_progress(i + 1, total, res)
 
-                if status == "PASS":
-                    summary["pass"] += 1
-                elif status == "GATE_REJECT":
-                    summary["gate_reject"] += 1
-                elif status == "FAIL":
-                    summary["fail"] += 1
-                elif status == "ABORT":
-                    summary["abort"] += 1
-                else:
-                    summary["error"] += 1
-
-                # Record outcome for cross-task learning
-                _record_batch_outcome(
-                    args.outcome_memory,
-                    task_id,
-                    result,
-                )
-
-                summary["results"].append(
-                    {
-                        "task_id": task_id,
-                        "status": status,
-                        "iters": iters,
-                        "risk": risk,
-                        "duration_sec": round(dt, 1),
-                    }
-                )
-            else:
-                dt = time.time() - t0
-                print(f"→ ERROR (exit={proc.returncode}, {dt:.0f}s)")
-                stderr_tail = (proc.stderr or "")[-500:]
-                summary["error"] += 1
-                summary["results"].append(
-                    {
-                        "task_id": task_id,
-                        "status": "ERROR",
-                        "exit_code": proc.returncode,
-                        "stderr_tail": stderr_tail,
-                        "duration_sec": round(dt, 1),
-                    }
-                )
-
-        except subprocess.TimeoutExpired:
-            dt = time.time() - t0
-            print(f"→ TIMEOUT ({dt:.0f}s)")
+    # Aggregating results
+    for res in results_list:
+        status = res.get("status", "UNKNOWN")
+        if status == "PASS":
+            summary["pass"] += 1
+        elif status == "GATE_REJECT":
+            summary["gate_reject"] += 1
+        elif status == "FAIL":
+            summary["fail"] += 1
+        elif status == "ABORT":
+            summary["abort"] += 1
+        elif status in ("ERROR", "TIMEOUT", "EXCEPTION"):
             summary["error"] += 1
-            summary["results"].append(
-                {
-                    "task_id": task_id,
-                    "status": "TIMEOUT",
-                    "duration_sec": round(dt, 1),
-                }
-            )
 
-        except Exception as exc:
-            dt = time.time() - t0
-            print(f"→ EXCEPTION: {exc}")
-            summary["error"] += 1
-            summary["results"].append(
-                {
-                    "task_id": task_id,
-                    "status": "EXCEPTION",
-                    "error": str(exc),
-                    "duration_sec": round(dt, 1),
-                }
-            )
+        summary["results"].append(res)
 
     # Summary
     batch_dt = time.time() - batch_start
@@ -434,6 +383,104 @@ def main(argv: Optional[list[str]] = None) -> None:
         json.dump(summary, f, indent=2, ensure_ascii=False)
         f.write("\n")
     print(f"\nSummary written to {summary_path}")
+
+
+def _run_task_safe(packed_args) -> dict:
+    """Wrapper to catch exceptions during parallel execution."""
+    task_file, args = packed_args
+    try:
+        return _run_single_task(task_file, args)
+    except Exception as e:
+        return {
+            "task_id": os.path.basename(task_file),
+            "status": "EXCEPTION",
+            "error": str(e),
+            "duration_sec": 0,
+        }
+
+
+def _run_single_task(task_file: str, args: argparse.Namespace) -> dict:
+    """Run a single task and return its result summary."""
+    result_file = _result_path(args.results, task_file)
+    task_id = os.path.basename(task_file).replace("task_", "").replace(".json", "")
+    cmd = _build_cli_args(task_file, result_file, args)
+
+    t0 = time.time()
+    try:
+        # Use python directly to avoid path issues in subprocess
+        # script runner is in scripts/, we need to run from repo root
+        cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        proc = subprocess.run(
+            cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=args.timeout,
+        )
+        dt = time.time() - t0
+
+        if proc.returncode == 0:
+            result = _load_result(result_file)
+            status = result.get("status", "UNKNOWN")
+
+            # Record outcome (side effect safe in process?)
+            # Process pool duplicates memory, so this is fine, but outcome_memory
+            # file access needs locking if strict. For now we assume append is atomic-ish
+            # or we rely on the DB implementation handling concurrency.
+            _record_batch_outcome(
+                args.outcome_memory,
+                task_id,
+                result,
+            )
+
+            return {
+                "task_id": task_id,
+                "status": status,
+                "iters": result.get("iters", "?"),
+                "risk": result.get("risk", {}).get("decision", "?"),
+                "duration_sec": round(dt, 1),
+            }
+        else:
+            return {
+                "task_id": task_id,
+                "status": "ERROR",
+                "exit_code": proc.returncode,
+                "stderr_tail": (proc.stderr or "")[-500:],
+                "duration_sec": round(dt, 1),
+            }
+
+    except subprocess.TimeoutExpired:
+        dt = time.time() - t0
+        return {
+            "task_id": task_id,
+            "status": "TIMEOUT",
+            "duration_sec": round(dt, 1),
+        }
+    except Exception as exc:
+        dt = time.time() - t0
+        return {
+            "task_id": task_id,
+            "status": "EXCEPTION",
+            "error": str(exc),
+            "duration_sec": round(dt, 1),
+        }
+
+
+def _print_progress(done: int, total: int, res: dict):
+    """Print progress line."""
+    tid = res.get("task_id", "?")
+    status = res.get("status", "UNKNOWN")
+    dt = res.get("duration_sec", 0)
+    extra = ""
+    if status in ("PASS", "FAIL", "GATE_REJECT"):
+        risk = res.get("risk", "?")
+        iters = res.get("iters", "?")
+        extra = f"(iters={iters}, risk={risk}, {dt:.0f}s)"
+    else:
+        extra = f"({dt:.0f}s)"
+
+    print(f"[{done}/{total}] {tid} → {status} {extra}", flush=True)
 
 
 if __name__ == "__main__":
