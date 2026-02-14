@@ -31,9 +31,38 @@ def get_kernel():
     return _KERNEL
 
 
+from fastapi.responses import HTMLResponse
+import os
+
+
 @api_router.get("/health")
 def health():
     return {"status": "ok", "kernel": "ready" if _KERNEL else "unavailable"}
+
+
+def _ui_html() -> str:
+    here = os.path.dirname(os.path.abspath(__file__))
+    ui_path = os.path.join(here, "ui", "index.html")
+    try:
+        with open(ui_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception:
+        return (
+            "<!doctype html><html><body>"
+            "<h1>RFSN UI unavailable</h1>"
+            "<p>Missing services/orchestrator/ui/index.html</p>"
+            "</body></html>"
+        )
+
+
+@api_router.get("/", response_class=HTMLResponse)
+def ui_root():
+    return _ui_html()
+
+
+@api_router.get("/ui", response_class=HTMLResponse)
+def ui_page():
+    return _ui_html()
 
 
 @api_router.post("/run")
