@@ -139,6 +139,28 @@ if _HAS_AUTH:
     app.add_middleware(ServiceAuthMiddleware)  # type: ignore[possibly-unbound]
 
 
+@app.on_event("startup")
+async def startup_check_hardening():
+    """Run SHH self-healing checks on startup."""
+    import sys
+    import subprocess
+
+    try:
+        cmd = [sys.executable, "-m", "services.hardening_guard.app"]
+        print(f"KERNEL: Running hardening checks: {' '.join(cmd)}", flush=True)
+        subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError:
+        print("KERNEL: Hardening checks FAILED. Aborting startup.", flush=True)
+        sys.exit(2)
+    except Exception as exc:
+        print(f"KERNEL: Error running hardening checks: {exc}", flush=True)
+        if (
+            os.getenv("RFSN_HARDENING_STRICT", "1") == "1"
+            and os.getenv("RFSN_DEV_MODE", "0") != "1"
+        ):
+            sys.exit(2)
+
+
 def _ui_html() -> str:
     here = os.path.dirname(os.path.abspath(__file__))
     ui_path = os.path.join(here, "ui", "index.html")

@@ -1,0 +1,12 @@
+{
+  "task_id": "matplotlib__matplotlib-23476",
+  "status": "FAIL",
+  "iters": 5,
+  "final_patch_unified_diff": "",
+  "tests": {},
+  "risk": {
+    "decision": "ALLOW",
+    "reasons": []
+  },
+  "replay_dir": "/tmp/swebench_work/matplotlib__matplotlib-23476/replays/matplotlib__matplotlib-23476_1771028056003"
+}
