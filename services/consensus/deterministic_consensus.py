@@ -64,5 +64,11 @@ class ConsensusNode:
     def receive_append_entries(
         self, leader_id: str, prev_index: int, prev_term: int, entries: List[dict]
     ):
-        # Convert dicts back to entries...
-        pass
+        # TODO: implement Raft AppendEntries RPC
+        # This requires: term validation, log conflict resolution,
+        # commit index advancement, and follower state machine updates.
+        # See Raft paper §5.3 for specification.
+        raise NotImplementedError(
+            "Raft AppendEntries RPC is not yet implemented. "
+            "ConsensusLog.append() handles local log operations only."
+        )

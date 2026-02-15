@@ -13,6 +13,9 @@ import yaml  # type: ignore[import-untyped]
 from fastapi import FastAPI, HTTPException  # type: ignore[import-not-found]
 from pydantic import BaseModel  # type: ignore[import-not-found]
 
+from services.executor.syscall_watch import audit_exec as _audit_exec
+from services.executor.net_sim import check_egress as _check_egress
+
 # --- Auth middleware: only tool_gateway (with valid token) can reach us ---
 import sys
 
@@ -2235,6 +2238,17 @@ def run(req: ExecReq):
     allow_network = bool(step.get("_rfsn_allow_network"))
     tier = _coerce_int(step.get("_rfsn_tier"), 0)
     network_reason = str(step.get("_rfsn_network_reason") or "")
+
+    # Pre-exec security gates: audit commands for dangerous patterns
+    cmd_str = step.get("cmd") or step.get("template") or ""
+    if cmd_str:
+        alerts = _audit_exec(str(cmd_str))
+        high_alerts = [a for a in alerts if a.severity == "HIGH"]
+        if high_alerts:
+            raise HTTPException(
+                403,
+                f"Command blocked by syscall monitor: {high_alerts[0].message}",
+            )
 
     if t == "ensure_deps":
         _require_network_tier(step)

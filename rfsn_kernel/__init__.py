@@ -34,6 +34,11 @@ from rfsn_kernel.patch_minimize import minimize_unified_diff
 from rfsn_kernel.sim_cache import SimCache
 from rfsn_kernel.scheduler import Scheduler, RunBudget
 
+# Honestly-named modules (preferred imports).
+from rfsn_kernel.ast_lint import AstIssue, check_file as ast_check_file
+from rfsn_kernel.state_search import SearchResult, explore_bfs, explore_dfs
+from rfsn_kernel.guard_checks import GuardViolation, check_guards
+
 __all__ = [
     "HardKernel",
     "KernelStepResult",
@@ -65,4 +70,12 @@ __all__ = [
     "SimCache",
     "Scheduler",
     "RunBudget",
+    # Honestly-named modules
+    "AstIssue",
+    "ast_check_file",
+    "SearchResult",
+    "explore_bfs",
+    "explore_dfs",
+    "GuardViolation",
+    "check_guards",
 ]

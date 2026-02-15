@@ -1,4 +1,4 @@
-"""Memory Immune System (CIS-style) — selective memory governance.
+"""Scored memory store with admission filtering and decay.
 
 Memory must become selective, not append-heavy.
 

@@ -92,27 +92,54 @@ def run_logic(run_id: str, req: RunReq, kernel: HardKernel, ledger: LedgerSink) 
             # 2. apply_semantic_patch (Phase 2.3)
 
             step_intent = {}
-            if iters == 1:
-                step_intent = {
-                    "type": "generate_repo_map",
-                    "path": ".",
-                    "focus": ["important_function"],
-                }
-            elif iters == 2:
-                step_intent = {
-                    "type": "apply_semantic_patch",
-                    "path": "src/utils.py",
-                    "patch": "<<<<<<< SEARCH\ndef foo(): pass\n=======\ndef foo(): return 1\n>>>>>>> REPLACE",
-                }
+            if os.environ.get("RFSN_DEMO_MODE", "0") == "1":
+                # Demo mode: hardcoded steps for development/testing
+                if iters == 1:
+                    step_intent = {
+                        "type": "generate_repo_map",
+                        "path": ".",
+                        "focus": ["important_function"],
+                    }
+                elif iters == 2:
+                    step_intent = {
+                        "type": "apply_semantic_patch",
+                        "path": "src/utils.py",
+                        "patch": "<<<<<<< SEARCH\ndef foo(): pass\n=======\ndef foo(): return 1\n>>>>>>> REPLACE",
+                    }
+                else:
+                    step_intent = {"type": "command", "cmd": "echo 'Done'"}
             else:
-                step_intent = {"type": "command", "cmd": "echo 'Done'"}
+                # Production mode: call LLM service for next step
+                try:
+                    import requests
 
-            # Simulated Confidence Check (Phase 5.1)
-            # Default high confidence
-            confidence = 0.95
-            # Force low confidence on step 2 for demo purposes
-            if iters == 2:
-                confidence = 0.5
+                    llm_url = os.environ.get("LLM_URL", "http://localhost:8001")
+                    resp = requests.post(
+                        f"{llm_url}/propose",
+                        json={
+                            "run_id": run_id,
+                            "repo_id": repo_id,
+                            "task": req.task,
+                            "iteration": iters,
+                            "context": ctx.get("steps", []),
+                        },
+                        timeout=120,
+                    )
+                    resp.raise_for_status()
+                    step_intent = resp.json().get("step", {})
+                except Exception as e:
+                    ledger.append({"type": "LLM_ERROR", "error": str(e)})
+                    status = "error"
+                    reason = f"LLM proposal failed: {e}"
+                    break
+
+            # Confidence check (Phase 5.1)
+            # In demo mode, force low confidence on step 2 to exercise HITL
+            if os.environ.get("RFSN_DEMO_MODE", "0") == "1":
+                confidence = 0.95 if iters != 2 else 0.5
+            else:
+                # In production, confidence comes from the LLM proposal
+                confidence = float(step_intent.get("_confidence", 0.95))
 
             if confidence < req.confidence_threshold:
                 ctx["status"] = "paused"

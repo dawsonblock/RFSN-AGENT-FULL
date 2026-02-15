@@ -2,9 +2,9 @@ import textwrap
 
 import yaml
 
-from rfsn_kernel.kernel import HardKernel
+from rfsn_kernel.kernel import HardKernel, _DEFAULT_TIER_POLICY
 from rfsn_kernel.replay import ReplayRunner
-from rfsn_kernel.state import Outcome
+from rfsn_kernel.state import Outcome, Proposal
 from rfsn_kernel.tier_policy import (
     pick_next_tier,
     step_touches,
@@ -315,3 +315,123 @@ def test_kernel_uses_learner_failure_clusters_for_loop_risk(tmp_path):
     assert not kr.approved
     assert kr.decision is not None
     assert "loop_risk" in kr.decision.reason
+
+
+# ── _load_tier_policy unit tests ─────────────────────────────
+
+
+class TestLoadTierPolicy:
+    """Verify _load_tier_policy loads YAML, normalises keys, and falls back."""
+
+    def test_fallback_when_file_missing(self, tmp_path):
+        missing = str(tmp_path / "nonexistent.yaml")
+        k = HardKernel(ledger_path=str(tmp_path / "ledger.jsonl"))
+        result = k._load_tier_policy(missing)
+        assert result == dict(_DEFAULT_TIER_POLICY)
+
+    def test_loads_valid_yaml(self, tmp_path):
+        policy = {
+            "tiers": {
+                "0": {"name": "read-only", "allow": {}},
+                "1": {"name": "write", "allow": {"edit_tests": True}},
+            },
+            "classifiers": {"tests_globs": ["tests/**"]},
+        }
+        path = str(tmp_path / "policy.yaml")
+        with open(path, "w") as f:
+            yaml.safe_dump(policy, f)
+
+        k = HardKernel(ledger_path=str(tmp_path / "ledger.jsonl"))
+        loaded = k._load_tier_policy(path)
+        # String keys "0","1" must be normalised to int keys
+        assert 0 in loaded["tiers"]
+        assert 1 in loaded["tiers"]
+        assert loaded["tiers"][0]["name"] == "read-only"
+        assert loaded["classifiers"] == {"tests_globs": ["tests/**"]}
+
+    def test_non_dict_yaml_returns_default(self, tmp_path):
+        path = str(tmp_path / "bad.yaml")
+        with open(path, "w") as f:
+            f.write("- item1\n- item2\n")
+
+        k = HardKernel(ledger_path=str(tmp_path / "ledger.jsonl"))
+        result = k._load_tier_policy(path)
+        assert result == dict(_DEFAULT_TIER_POLICY)
+
+    def test_empty_yaml_gets_default_tiers(self, tmp_path):
+        path = str(tmp_path / "empty.yaml")
+        with open(path, "w") as f:
+            f.write("{}\n")
+
+        k = HardKernel(ledger_path=str(tmp_path / "ledger.jsonl"))
+        result = k._load_tier_policy(path)
+        assert result["tiers"] == dict(_DEFAULT_TIER_POLICY["tiers"])
+
+    def test_invalid_tier_keys_skipped(self, tmp_path):
+        policy = {
+            "tiers": {
+                "zero": {"name": "bad-key"},
+                "1": {"name": "good-key"},
+            },
+        }
+        path = str(tmp_path / "mixed.yaml")
+        with open(path, "w") as f:
+            yaml.safe_dump(policy, f)
+
+        k = HardKernel(ledger_path=str(tmp_path / "ledger.jsonl"))
+        result = k._load_tier_policy(path)
+        assert 1 in result["tiers"]
+        assert "zero" not in result["tiers"]
+
+    def test_constructor_calls_load_tier_policy(self, tmp_path):
+        k = HardKernel(ledger_path=str(tmp_path / "ledger.jsonl"))
+        assert isinstance(k.tier_policy, dict)
+        assert "tiers" in k.tier_policy
+
+
+# ── _reject_tier_budget unit tests ───────────────────────────
+
+
+class TestRejectTierBudget:
+    """Verify the extracted _reject_tier_budget helper."""
+
+    def test_returns_rejected_result(self, tmp_path):
+        k = HardKernel(ledger_path=str(tmp_path / "ledger.jsonl"))
+        proposal = Proposal(
+            action="apply_patch",
+            params={"patch": "---"},
+            context_hash="ctx",
+            planner_hash="plan",
+            intent="test intent",
+            bundle_id="b1",
+        )
+        result = k._reject_tier_budget(
+            reason="test budget exceeded",
+            proposal=proposal,
+            run_id="run-0",
+            intent="test intent",
+            bundle_id="b1",
+            tier=1,
+        )
+        assert result.phase == "VALIDATE"
+        assert result.decision is not None
+        assert result.decision.approved is False
+        assert "test budget exceeded" in result.decision.reason
+        assert result.error == "tier budget rejected step"
+
+
+# ── _tier_cfg unit tests ─────────────────────────────────────
+
+
+class TestTierCfg:
+    """Verify _tier_cfg lookups by int and str keys."""
+
+    def test_int_key_lookup(self, tmp_path):
+        k = HardKernel(ledger_path=str(tmp_path / "ledger.jsonl"))
+        cfg = k._tier_cfg(0)
+        assert isinstance(cfg, dict)
+        assert cfg.get("name") == "code-only"
+
+    def test_missing_tier_returns_empty(self, tmp_path):
+        k = HardKernel(ledger_path=str(tmp_path / "ledger.jsonl"))
+        assert k._tier_cfg(99) == {}

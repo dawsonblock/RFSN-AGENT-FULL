@@ -184,38 +184,26 @@ class HardKernel:
         self.consecutive_failures = 0
         self.active_hypothesis_hash = ""
 
-    def _check_and_trigger_rollback(self, run_id: str):
+    def _check_failure_escalation(self, run_id: str):
+        """Detect consecutive failures and signal strategy change.
+
+        After 3 consecutive execution failures, resets the counter
+        and returns True so the caller can inject a strategy-change
+        signal into the outcome.
         """
-        Phase 3.1: Anti-Looping Rollback Trigger.
-        If we hit 3 consecutive execution failures on the same hypothesis (or generally),
-        we trigger a rollback.
-        """
+        import logging
+
         if self.consecutive_failures >= 3:
-            print(
-                f"KERNEL: MCTS TRIGGER - 3 consecutive failures detected for run {run_id}."
+            logging.warning(
+                "Kernel: 3 consecutive failures for run %s — escalating strategy.",
+                run_id,
             )
-            print("KERNEL: Triggering Algorithm Rollback...")
-
-            # Logic to perform rollback would go here.
-            # In a real impl, we would call the Service Layer to revert FS.
-            # For now, we just reset the counter and inject a system warning via event bus?
-            # Or just return a flag to the caller.
-
-            # Reset
             self.consecutive_failures = 0
             return True
         return False
 
-    def kernel_step(
-        self,
-        raw_step: Dict[str, Any],
-        execute_fn: ExecuteCallback,
-        context: str = "",
-        intent: str = "",
-        bundle_id: str = "",
-        run_id: str = "",
-        learner_evidence: Optional[Dict[str, Any]] = None,
-    ) -> KernelStepResult:
+    def _load_tier_policy(self, path: str) -> Dict[str, Any]:
+        """Load tier policy from YAML file, falling back to defaults."""
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
@@ -251,6 +239,38 @@ class HardKernel:
         if isinstance(cfg, dict):
             return cfg
         return {}
+
+    def _reject_tier_budget(
+        self,
+        reason: str,
+        proposal: "Proposal",
+        run_id: str,
+        intent: str,
+        bundle_id: str,
+        tier: int,
+    ) -> KernelStepResult:
+        """Reject a step due to tier budget violation.
+
+        Centralizes the event-append + ledger-commit + result-build
+        pattern used by all tier budget checks.
+        """
+        self._append_kernel_event(
+            event_type="TIER_STEP_REJECTED",
+            run_id=run_id,
+            intent=intent,
+            bundle_id=bundle_id,
+            fields={"tier": tier, "reason": reason},
+        )
+        record = self._commit_ledger(
+            proposal, None, None, "REJECT", reason, None, None, run_id,
+        )
+        return KernelStepResult(
+            phase="VALIDATE",
+            proposal=proposal,
+            decision=Decision(approved=False, reason=reason),
+            ledger_record=record,
+            error="tier budget rejected step",
+        )
 
     def _append_kernel_event(
         self,
@@ -342,39 +362,10 @@ class HardKernel:
             budgets.get("max_total_steps", 0) or 0,
         )
         if max_total_steps > 0 and self.state.step_count >= max_total_steps:
-            reason = (
-                "tier max_total_steps exceeded:"
-                f" {self.state.step_count} >= {max_total_steps}"
-            )
-            self._append_kernel_event(
-                event_type="TIER_STEP_REJECTED",
-                run_id=run_id,
-                intent=intent,
-                bundle_id=bundle_id,
-                fields={
-                    "tier": rs.tier,
-                    "reason": reason,
-                },
-            )
-            record = self._commit_ledger(
-                proposal,
-                None,
-                None,
-                "REJECT",
-                reason,
-                None,
-                None,
-                run_id,
-            )
-            return KernelStepResult(
-                phase="VALIDATE",
-                proposal=proposal,
-                decision=Decision(
-                    approved=False,
-                    reason=reason,
-                ),
-                ledger_record=record,
-                error="tier budget rejected step",
+            return self._reject_tier_budget(
+                f"tier max_total_steps exceeded:"
+                f" {self.state.step_count} >= {max_total_steps}",
+                proposal, run_id, intent, bundle_id, rs.tier,
             )
 
         if raw_step.get("type") == "apply_patch":
@@ -382,46 +373,11 @@ class HardKernel:
             max_patch_bytes = int(
                 budgets.get("max_patch_bytes", 0) or 0,
             )
-            if (
-                max_patch_bytes > 0
-                and len(
-                    patch.encode(
-                        "utf-8",
-                        errors="replace",
-                    )
-                )
-                > max_patch_bytes
-            ):
-                reason = "tier max_patch_bytes exceeded:" f" > {max_patch_bytes}"
-                self._append_kernel_event(
-                    event_type="TIER_STEP_REJECTED",
-                    run_id=run_id,
-                    intent=intent,
-                    bundle_id=bundle_id,
-                    fields={
-                        "tier": rs.tier,
-                        "reason": reason,
-                    },
-                )
-                record = self._commit_ledger(
-                    proposal,
-                    None,
-                    None,
-                    "REJECT",
-                    reason,
-                    None,
-                    None,
-                    run_id,
-                )
-                return KernelStepResult(
-                    phase="VALIDATE",
-                    proposal=proposal,
-                    decision=Decision(
-                        approved=False,
-                        reason=reason,
-                    ),
-                    ledger_record=record,
-                    error="tier budget rejected step",
+            patch_size = len(patch.encode("utf-8", errors="replace"))
+            if max_patch_bytes > 0 and patch_size > max_patch_bytes:
+                return self._reject_tier_budget(
+                    f"tier max_patch_bytes exceeded: > {max_patch_bytes}",
+                    proposal, run_id, intent, bundle_id, rs.tier,
                 )
 
             max_files_touched = int(
@@ -429,39 +385,10 @@ class HardKernel:
             )
             touched = step_touches(raw_step)
             if max_files_touched > 0 and len(touched) > max_files_touched:
-                reason = (
-                    "tier max_files_touched exceeded:"
-                    f" {len(touched)} > {max_files_touched}"
-                )
-                self._append_kernel_event(
-                    event_type="TIER_STEP_REJECTED",
-                    run_id=run_id,
-                    intent=intent,
-                    bundle_id=bundle_id,
-                    fields={
-                        "tier": rs.tier,
-                        "reason": reason,
-                    },
-                )
-                record = self._commit_ledger(
-                    proposal,
-                    None,
-                    None,
-                    "REJECT",
-                    reason,
-                    None,
-                    None,
-                    run_id,
-                )
-                return KernelStepResult(
-                    phase="VALIDATE",
-                    proposal=proposal,
-                    decision=Decision(
-                        approved=False,
-                        reason=reason,
-                    ),
-                    ledger_record=record,
-                    error="tier budget rejected step",
+                return self._reject_tier_budget(
+                    f"tier max_files_touched exceeded:"
+                    f" {len(touched)} > {max_files_touched}",
+                    proposal, run_id, intent, bundle_id, rs.tier,
                 )
 
             max_lines_changed = int(
@@ -480,39 +407,10 @@ class HardKernel:
                     elif ln.startswith("-") and not ln.startswith("---"):
                         deleted += 1
                 if (added + deleted) > max_lines_changed:
-                    reason = (
-                        "tier max_total_lines_changed exceeded:"
-                        f" {added + deleted} > {max_lines_changed}"
-                    )
-                    self._append_kernel_event(
-                        event_type="TIER_STEP_REJECTED",
-                        run_id=run_id,
-                        intent=intent,
-                        bundle_id=bundle_id,
-                        fields={
-                            "tier": rs.tier,
-                            "reason": reason,
-                        },
-                    )
-                    record = self._commit_ledger(
-                        proposal,
-                        None,
-                        None,
-                        "REJECT",
-                        reason,
-                        None,
-                        None,
-                        run_id,
-                    )
-                    return KernelStepResult(
-                        phase="VALIDATE",
-                        proposal=proposal,
-                        decision=Decision(
-                            approved=False,
-                            reason=reason,
-                        ),
-                        ledger_record=record,
-                        error="tier budget rejected step",
+                    return self._reject_tier_budget(
+                        f"tier max_total_lines_changed exceeded:"
+                        f" {added + deleted} > {max_lines_changed}",
+                        proposal, run_id, intent, bundle_id, rs.tier,
                     )
 
         # Tier gate is enforced before any simulation/execution.
@@ -522,36 +420,9 @@ class HardKernel:
             self.classifiers,
         )
         if not tier_ok:
-            reason = tier_reason or "tier_policy_reject"
-            self._append_kernel_event(
-                event_type="TIER_STEP_REJECTED",
-                run_id=run_id,
-                intent=intent,
-                bundle_id=bundle_id,
-                fields={
-                    "tier": rs.tier,
-                    "reason": reason,
-                },
-            )
-            record = self._commit_ledger(
-                proposal,
-                None,
-                None,
-                "REJECT",
-                reason,
-                None,
-                None,
-                run_id,
-            )
-            return KernelStepResult(
-                phase="VALIDATE",
-                proposal=proposal,
-                decision=Decision(
-                    approved=False,
-                    reason=reason,
-                ),
-                ledger_record=record,
-                error="tier policy rejected step",
+            return self._reject_tier_budget(
+                tier_reason or "tier_policy_reject",
+                proposal, run_id, intent, bundle_id, rs.tier,
             )
 
         # ── 2. VALIDATE ──
@@ -715,14 +586,12 @@ class HardKernel:
             self.state.record_failure()
             self.consecutive_failures += 1
 
-        # Check Backtracking
-        rollback_triggered = self._check_and_trigger_rollback(run_id)
-        if rollback_triggered:
-            # We should probably mutate the outcome or append a special event
-            # to force the Planner to see the rollback.
+        # Check for failure escalation
+        escalation_triggered = self._check_failure_escalation(run_id)
+        if escalation_triggered:
             outcome.error = (
                 (outcome.error or "")
-                + "\n[KERNEL SYSTEM OVERRIDE]: 3 consecutive failures. WORKSPACE ROLLED BACK. ABANDON HYPOTHESIS."
+                + "\n[KERNEL]: 3 consecutive failures — escalating strategy."
             )
 
         # Record in outcome history for future simulation.

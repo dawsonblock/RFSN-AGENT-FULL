@@ -1,10 +1,10 @@
-"""Execution simulation — predictive control layer.
+"""Heuristic pre-execution analysis.
 
-Runs BEFORE execution to predict outcome, detect
+Runs BEFORE execution to estimate outcome probability, detect
 unsafe actions, estimate cost, and prevent drift loops.
 
-No side effects. No ML required initially —
-heuristic models produce major stability gains.
+No side effects. Uses heuristic models (not ML) —
+base-rate priors blended with outcome history and learner evidence.
 """
 
 from __future__ import annotations

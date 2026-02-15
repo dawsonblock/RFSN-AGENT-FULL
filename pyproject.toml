@@ -1,0 +1,17 @@
+[project]
+name = "rfsn-agent"
+version = "6.4.0"
+description = "Policy-gated coding agent with security-hardened execution"
+requires-python = ">=3.9"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "security: marks security-critical tests",
+    "fuzz: marks property-based (Hypothesis) fuzz tests",
+    "integration: marks integration tests requiring multiple components",
+]
