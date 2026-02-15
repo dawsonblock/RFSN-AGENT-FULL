@@ -226,7 +226,7 @@ RFSN-AGENT-FULL/
 
 - [x] **Phase 1–6: The Master Upgrade** — Performance, Quality, Resilience, Security, GitOps, Data Flywheel
 - [x] **Phase 7: Self-Healing & Hardening** — Capsule, Ledger, Immune System, Deterministic Replay
-- [ ] **Phase 8: Multi-Agent Swarm** — Architect, Coder, and QA agents collaborating
+- [x] **Phase 8: Multi-Agent Swarm** — Architect / Coder / QA debate loop with consensus
 - [ ] **Phase 9: Self-Hosting CI/CD** — Agent manages its own deployment pipeline
 
 ---
