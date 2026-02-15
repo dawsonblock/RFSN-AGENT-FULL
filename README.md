@@ -1,136 +1,131 @@
-<p align="center">
-  <strong>RFSN Agent — Hardened v6</strong><br>
-  <em>Deterministic, policy-gated coding agent with self-healing security and upstream learning</em>
-</p>
+<div align="center">
 
-<p align="center">
-  <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python 3.9+">
-  <img src="https://img.shields.io/badge/OS-Apple_Silicon_Native-black" alt="Mac Silicon">
-  <img src="https://img.shields.io/badge/Security-Hardened_v6-red" alt="Hardened v6">
-  <img src="https://img.shields.io/badge/Status-Verified_Passed-green" alt="Verified Passed">
-</p>
+# RFSN Agent v6.4
 
----
+### The Autonomous Software Engineer: Hardened, Resilient, Self-Improving
 
-## Master Upgrade (Phase 1-6 Complete)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/downloads/)
+[![Code Style: Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+[![Status: Production](https://img.shields.io/badge/Status-Production-green)](https://github.com/dawsonblock/RFSN-AGENT-FULL)
 
-**RFSN v6.4** introduces a comprehensive suite of enhancements:
+[Features](#-key-features) • [Architecture](#-architecture) • [Quick Start](#-quick-start) • [Security](#-hardened-security) • [Roadmap](#-roadmap)
 
-1. **Performance**: Native Prompt Caching, Parallel Speculative Execution.
-2. **Code Quality**: AST-Aware Context Slicing, Semantic Patching.
-3. **Resilience**: MCTS Backtracking, Frustration Detection, Anti-Looping.
-4. **Security**: Indirect Prompt Injection Firewalls, Secret Scanning.
-5. **GitOps**: Native GitHub App, Confidence-Triggered HITL.
-6. **Data Flywheel**: Automated Trajectory Harvesting, DPO Export.
+</div>
 
 ---
 
-## What is RFSN Agent?
+## 🚀 Overview
 
-RFSN is a **production-hardened**, microservice-based coding agent designed for autonomous bug repair. It enforces a strict separation between **Proposal** (LLM), **Validation** (Safety Kernel), and **Execution** (Isolated Sandbox).
+**RFSN (Recursive Feedback & Safety Network)** is a production-grade autonomous coding agent designed to solve complex software engineering tasks. Unlike standard "chat-with-code" tools, RFSN operates as a deterministic, policy-gated system that:
 
-### Core Components
+1. **Observes** codebase state via AST-aware context slicing.
+2. **Plans** multi-step refactors using MCTS-inspired backtracking.
+3. **Executes** changes in isolated, ephemeral sandboxes.
+4. **Learns** from every run, building a database of successful repair trajectories.
 
+It is built for **enterprise reliability**, enforcing strict security boundaries (SHH/DRV) and maintaining a cryptographically verifiable audit trail.
+
+## ✨ Key Features (v6.4 Upgrade)
+
+The **Master Upgrade** introduces a complete overhaul of the agent's core faculties:
+
+### 🧠 Cognitive Resilience
+
+- **Trace Recovery**: Automatically recovers from infinite loops and stalled steps using **Frustration Detection**.
+- **MCTS Backtracking**: Explicitly rolls back failed attempts to explore alternative solution paths.
+- **Speculative Execution**: Parallels execution of multiple patch candidates to find the optimal fix faster.
+
+### 🛡️ Enterprise Security
+
+- **Indirect Injection Firewalls**: Scans all inputs for jailbreak attempts before they reach the planner.
+- **Secret Scanning**: Inline SAST prevents API keys and credentials from leaking into patches.
+- **Drift Guard (SHH)**: Automatically repairs its own configuration if security settings are tampered with.
+
+### ⚡ Performance & Quality
+
+- **Native Prompt Caching**: Reduces latency and cost by caching prefix states across turns.
+- **Semantic Patching**: Uses fuzzy-matching `SemanticPatcher` to apply edits robustly, ignoring minor whitespace differences.
+- **AST Locator**: Slices context intelligently, providing the LLM with relevant code skeletons instead of raw files.
+
+### 🔄 The Data Flywheel
+
+- **Trajectory Harvesting**: Captures every thought, action, and result into `learner.duckdb`.
+- **DPO Export**: Automatically formats successful runs into Direct Preference Optimization datasets for fine-tuning.
+- **RAG Playbooks**: Retrieves historical fix patterns for common errors (e.g., "ImportError", "SyntaxError").
+
+## 🏗️ Architecture
+
+RFSN enforces a strict **Control Plane / Data Plane** separation:
+
+```mermaid
+graph LR
+    User[User / GitHub] -->|Task| Orch[Orchestrator]
+    Orch -->|Plan| LLM[LLM Service]
+    Orch -->|Validate| Kernel[Safety Kernel]
+    Kernel -->|Enforce| Gateway[Tool Gateway]
+    Gateway -->|Execute| Sandbox[MicroVM Executor]
+    Sandbox -->|Result| Learner[Learner DB]
+    Learner -.->|Feedback| LLM
 ```
-┌──────────┐     ┌───────────┐     ┌──────────────┐     ┌──────────────┐     ┌──────────┐
-│  Learner │────▶│    LLM    │────▶│ Safety Kernel│────▶│ Tool Gateway │────▶│ Executor │
-│ (advise) │     │ (propose) │     │  (SHH/DRV)   │     │ (Enforce)    │     │ (Sandboxed)│
-└──────────┘     └───────────┘     └──────────────┘     └──────────────┘     └──────────┘
-```
 
-- 🛡️ **Self-Healing Hardening (SHH)** — Continuous detection and repair of configuration drift.
-- 🧬 **Deterministic Replay (DRV)** — Cryptographic verification of run equivalence across environments.
-- 🔒 **Mandatory Policy Tiers** — Strict budget enforcement on patches, steps, and system resources.
-- 📒 **Hash-Chained Ledger** — Audit-trail for every decision, signed with SHA-256.
+| Service | Role | Key Tech |
+| :--- | :--- | :--- |
+| **Orchestrator** | The "Cortex". Manages lifecycle and decisions. | Python 3.9+, FastAPI |
+| **Safety Kernel** | The "conscience". Validates patches & enforces policy. | Cryptographic Signatures |
+| **Executor** | The "hands". Runs code in isolated environments. | Docker, gVisor / MicroVM |
+| **Learner** | The "memory". Stores trajectories and strategies. | DuckDB, RAG |
 
----
+## 🏁 Quick Start
 
-## Architecture v6
+### Prerequisites
 
-### Services
-
-| Service | Port | Role |
-|---------|------|------|
-| **Orchestrator** | 8000 | The "Cortex". Manages SHH startup checks and ledger integrity. |
-| **LLM Service** | 8001 | Inference endpoint with cassette persistence (caching). |
-| **Tool Gateway** | 8002 | Policy enforcement, budget tracking, and Diff-Guard. |
-| **Executor** | 8003 | Sandboxed runner with per-run Venv isolation and non-root containment. |
-| **Learner** | 8004 | Thompson-sampling strategy selector for repo-specific optimization. |
-
-### New Reliability Modules
-
-- **[SHH](services/hardening_guard/)**: Automatically restores security settings (auth, sandboxing) if they drift.
-- **[DRV](services/replay_verifier/)**: Verifies that a replayed run produces bit-identical artifacts and traces.
-- **[PST Map](docs/perf_security_map.md)**: Allows dialing Performance vs Security without breaking the safety shell.
-
----
-
-## Local LLM Integration (Mac Silicon)
-
-Optimized for **Apple Silicon (M1/M2/M3)** using MLX and Metal.
-
-| Model Recommendation | Tier | Setup |
-|----------------------|------|-------|
-| **Qwen2.5-Coder-32B** | **SOTA** | `ollama run qwen2.5-coder:32b` |
-| **DeepSeek-R1 (Distill)** | **Reasoning** | `ollama run deepseek-r1:32b` |
-| **Llama-3.3-70B** | **Expert** | (Requires 64GB+ RAM) |
-
-**Integration**: Set `LLM_URL` to your local endpoint (Ollama: `http://host.docker.internal:11434`) and configure the `model` flag in CLI.
-
----
-
-## Security & Hardening Deep-Dive
-
-RFSN v6 has undergone a comprehensive hardening pass:
-
-1. **Mandatory Service Auth**: Every microservice requires bearer token validation.
-2. **Kernel-Gated Startup**: Orchestrator aborts if SHH guard detects insecure configuration.
-3. **Containment**:
-    - `RFSN_VENV_MODE=per_run`: Every task gets a fresh, isolated virtualenv.
-    - `WARM_SANDBOX=0`: Default cold-boot ensures no cross-task pollution.
-    - Non-root execution with `no-new-privileges` and `read-only` rootfs.
-4. **Template Boundary**: Command templates are static and validated against shell metacharacter injection.
-5. **Audit Integrity**: `deps_state.json` accurately snapshots the environment for replay.
-
----
-
-## Quick Start
+- Docker (for sandboxing)
+- Python 3.9+
+- An LLM Endpoint (Ollama, vLLM, or OpenAI-compatible)
 
 ### 1. Hardening Bootstrap
 
+Verify your environment meets security standards:
+
 ```bash
-# Verify the system state before running
 python3 scripts/verify_hardening.py
 ```
 
-### 2. Standalone Mode
+### 2. Run a Task
+
+Solve a GitHub issue or local task description:
 
 ```bash
 python3 -m rfsn_swebench.cli \
-    --task data/tasks/task_demo_failrepo.json \
-    --proposer direct \
+    --task "Fix the deadlock in connection_pool.py" \
+    --repo_path $(pwd) \
     --model qwen2.5-coder:32b
 ```
 
-### 3. Full Stack (Composition)
+### 3. Full Deployment
+
+Deploy the full microservice mesh:
 
 ```bash
-# Digest-pinned build for security
 docker compose up --build -d
 ```
 
----
+## 🔒 Hardened Security
 
-## Replay Verification (DRV)
+RFSN v6 is designed for **Zero Trust** environments:
 
-To verify a run against a previously recorded bundle:
+- **No Root**: All code runs as non-root users with `no-new-privileges`.
+- **Network Airlock**: Sandboxes have no internet access (`network: none`) by default.
+- **Audit Ledger**: Every action is hashed and recorded in a tamper-evident ledger.
+- **Replay Verification (DRV)**: Cryptographically guarantees that runs are reproducible.
 
-```bash
-python3 -m services.replay_verifier.verify /data/run_orig /data/run_replay
-```
+## 🗺️ Roadmap
 
----
+- [x] **Phase 1-6: The Master Upgrade** (Completed Feb 2026)
+- [ ] **Phase 7: Multi-Agent Swarm** (Collaboration between Architect, Coder, and QA agents)
+- [ ] **Phase 8: Self-Hosting CI/CD** (Agent manages its own deployment pipeline)
 
-## License
+## 📄 License
 
-MIT
+MIT © 2026 RFSN Project.
