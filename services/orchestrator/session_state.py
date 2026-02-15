@@ -21,11 +21,17 @@ def ensure_run_context(
     from rfsn_kernel.sim_cache import (
         SimCache,
     )  # Lazy import to avoid cycle if kernel imports this
+    from rfsn_kernel.advisor import Advisor
 
     ctx = {
+        "repo_id": "",  # Will be set by run_engine
         "cmd_plan": default_cmd_plan or {},
         "baseline_test_template": "",
         "sim_cache": SimCache(),
+        "advisor": Advisor(),
+        "status": "running",
+        "approval_event": None,  # Will be threading.Event()
+        "approval_result": None,  # "approved" or "rejected"
         "repair": {
             "phase": "SEARCH",
             "attempt": 0,
@@ -40,3 +46,11 @@ def ensure_run_context(
 def clear_run_context(run_id: str):
     if run_id in _RUN_CONTEXT:
         del _RUN_CONTEXT[run_id]
+
+
+def get_active_run_by_repo(repo_id: str) -> Optional[str]:
+    """Find active run ID for a given repo."""
+    for rid, ctx in _RUN_CONTEXT.items():
+        if ctx.get("repo_id") == repo_id and ctx.get("status") in ("running", "paused"):
+            return rid
+    return None

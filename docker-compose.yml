@@ -117,7 +117,9 @@ services:
       start_period: 8s
 
   executor:
-    build: ./services/executor
+    build:
+      context: .
+      dockerfile: services/executor/Dockerfile
     # NOT exposed to host — only reachable via tool_gateway (internal network)
     expose: ["8003"]
     volumes:

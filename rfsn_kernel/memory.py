@@ -563,11 +563,90 @@ class MemoryImmuneSystem:
                             self._core_axioms[key] = entry
                         elif entry.status == "quarantined":
                             self._quarantine[key] = entry
-                        else:
-                            self._store[key] = entry
-                        count += 1
                     except (json.JSONDecodeError, TypeError, KeyError):
                         continue
         except Exception:
             pass  # file inaccessible
         return count
+
+
+@dataclass
+class FrustrationSignal:
+    """A signal indicating potential agent frustration/looping."""
+
+    severity: float  # 0.0 to 1.0
+    reason: str
+    suggested_action: str  # "compress", "stop", "hint"
+
+
+class FrustrationManager:
+    """Monitors execution stream for repetitive failures and noise.
+
+    Phase 3.2 of Master Upgrade.
+    """
+
+    def __init__(self, history_size: int = 10) -> None:
+        self.history: List[str] = []
+        self._last_error_hash = ""
+        self._consecutive_error_count = 0
+        self.history_size = history_size
+
+    def check(self, output: str, is_error: bool) -> Optional[FrustrationSignal]:
+        """Analyze latest output for frustration signals."""
+
+        # 1. Update history
+        self.history.append(output[:1000])  # store prefix
+        if len(self.history) > self.history_size:
+            self.history.pop(0)
+
+        # 2. Check repetitive errors
+        if is_error:
+            # Simple content hash for "same error" detection
+            curr_hash = hashlib.md5(output.encode("utf-8", errors="ignore")).hexdigest()
+            if curr_hash == self._last_error_hash:
+                self._consecutive_error_count += 1
+            else:
+                self._last_error_hash = curr_hash
+                self._consecutive_error_count = 1
+
+            if self._consecutive_error_count >= 3:
+                return FrustrationSignal(
+                    severity=0.8,
+                    reason=f"Identical error detected {self._consecutive_error_count} times in a row.",
+                    suggested_action="stop",
+                )
+        else:
+            # Reset on success? Or keep track of "spinning"?
+            # For now, strict reset on clear success might be too optimistic if we are flaky.
+            # But let's reset to be safe.
+            self._consecutive_error_count = 0
+
+        # 3. Check for massive stack trace noise (Context Compression)
+        if len(output) > 2000 and "Traceback" in output:
+            return FrustrationSignal(
+                severity=0.4,
+                reason="Large stack trace detected.",
+                suggested_action="compress",
+            )
+
+        return None
+
+    def compress_context(self, text: str) -> str:
+        """Compress a large text block (e.g. stack trace) to essential info."""
+        if len(text) < 1000:
+            return text
+
+        lines = text.splitlines()
+        if len(lines) < 20:
+            return text
+
+        # Keep head and tail
+        head = lines[:5]
+        tail = lines[-15:]
+
+        compressed = []
+        compressed.extend(head)
+        compressed.append(f"... [Compressed {len(lines) - 20} lines of output] ...")
+        compressed.extend(tail)
+
+        return "\n".join(compressed)

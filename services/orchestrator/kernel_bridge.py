@@ -31,12 +31,25 @@ class LedgerSink:
             return
         # Normalize event logic here if needed, or pass raw
         # Using a simplified version of _event_record logic
+        # Map orchestrator events to metadata
+        meta = {
+            "type": event.get("type", "UNKNOWN"),
+            "run_id": event.get("run_id", ""),
+            "iter": event.get("iter", 0),
+            "payload": event,
+            "timestamp": time.time(),
+        }
+
         rec = LedgerRecord(
-            type=event.get("type", "UNKNOWN"),
-            run_id=event.get("run_id", ""),
-            iter_num=event.get("iter", 0),
-            payload=json.dumps(event, default=str),
-            timestamp=time.time(),
+            proposal_hash="",
+            simulation={},
+            risk={},
+            decision="INFO",
+            decision_reason="orchestrator_event",
+            outcome_hash=None,
+            state_hash="",
+            verification=None,
+            metadata=meta,
         )
         self._kernel.ledger.append(rec)
 

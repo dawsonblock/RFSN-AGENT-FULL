@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -23,7 +24,9 @@
       --shadow: 0 20px 60px rgba(3, 8, 24, 0.46);
     }
 
-    * { box-sizing: border-box; }
+    * {
+      box-sizing: border-box;
+    }
 
     body {
       margin: 0;
@@ -41,8 +44,8 @@
       position: fixed;
       inset: 0;
       background-image:
-        linear-gradient(to right, rgba(141,169,255,.06) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(141,169,255,.05) 1px, transparent 1px);
+        linear-gradient(to right, rgba(141, 169, 255, .06) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(141, 169, 255, .05) 1px, transparent 1px);
       background-size: 40px 40px;
       mask-image: radial-gradient(circle at 50% 20%, black 30%, transparent 80%);
       pointer-events: none;
@@ -56,8 +59,15 @@
     }
 
     @keyframes rise {
-      from { opacity: 0; transform: translateY(10px) scale(.99); }
-      to { opacity: 1; transform: translateY(0) scale(1); }
+      from {
+        opacity: 0;
+        transform: translateY(10px) scale(.99);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
     }
 
     .headline {
@@ -85,7 +95,7 @@
 
     .panel-grid {
       display: grid;
-      grid-template-columns: repeat(12, minmax(0,1fr));
+      grid-template-columns: repeat(12, minmax(0, 1fr));
       gap: 14px;
     }
 
@@ -106,22 +116,42 @@
       text-transform: uppercase;
     }
 
-    .full { grid-column: span 12; }
-    .half { grid-column: span 6; }
-    .third { grid-column: span 4; }
-
-    @media (max-width: 980px) {
-      .half, .third { grid-column: span 12; }
+    .full {
+      grid-column: span 12;
     }
 
-    .kv { display: grid; gap: 8px; }
+    .half {
+      grid-column: span 6;
+    }
+
+    .third {
+      grid-column: span 4;
+    }
+
+    @media (max-width: 980px) {
+
+      .half,
+      .third {
+        grid-column: span 12;
+      }
+    }
+
+    .kv {
+      display: grid;
+      gap: 8px;
+    }
+
     .kv .row {
       display: grid;
       grid-template-columns: 150px 1fr;
       gap: 10px;
       font-size: .92rem;
     }
-    .kv .k { color: var(--ink-dim); }
+
+    .kv .k {
+      color: var(--ink-dim);
+    }
+
     .mono {
       font-family: "IBM Plex Mono", monospace;
       font-size: .83rem;
@@ -136,20 +166,45 @@
       font-weight: 700;
       font-family: "IBM Plex Mono", monospace;
     }
-    .pill.ok { background: #143427; color: var(--ok); }
-    .pill.bad { background: #361720; color: var(--bad); }
-    .pill.warn { background: #3f2f11; color: var(--warn); }
 
-    form { display: grid; gap: 10px; }
-    .fgrid {
+    .pill.ok {
+      background: #143427;
+      color: var(--ok);
+    }
+
+    .pill.bad {
+      background: #361720;
+      color: var(--bad);
+    }
+
+    .pill.warn {
+      background: #3f2f11;
+      color: var(--warn);
+    }
+
+    form {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0,1fr));
       gap: 10px;
     }
-    .fgrid .fullcol { grid-column: span 2; }
+
+    .fgrid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .fgrid .fullcol {
+      grid-column: span 2;
+    }
+
     @media (max-width: 740px) {
-      .fgrid { grid-template-columns: 1fr; }
-      .fgrid .fullcol { grid-column: span 1; }
+      .fgrid {
+        grid-template-columns: 1fr;
+      }
+
+      .fgrid .fullcol {
+        grid-column: span 1;
+      }
     }
 
     label {
@@ -161,7 +216,9 @@
       letter-spacing: .04em;
     }
 
-    input, textarea, select {
+    input,
+    textarea,
+    select {
       width: 100%;
       border: 1px solid #3f558a;
       background: #0f1733;
@@ -171,7 +228,10 @@
       font: inherit;
     }
 
-    textarea { min-height: 100px; resize: vertical; }
+    textarea {
+      min-height: 100px;
+      resize: vertical;
+    }
 
     .actions {
       display: flex;
@@ -212,9 +272,13 @@
       word-wrap: break-word;
     }
 
-    .tiny { font-size: .75rem; color: var(--ink-dim); }
+    .tiny {
+      font-size: .75rem;
+      color: var(--ink-dim);
+    }
   </style>
 </head>
+
 <body>
   <div class="grid-backdrop"></div>
   <main class="shell">
@@ -316,6 +380,11 @@
             <label>Scenario
               <input id="scenario" placeholder="golden" />
             </label>
+            <label>Confidence Threshold
+              <input id="confThresh" type="range" min="0" max="1" step="0.1" value="0.7"
+                oninput="document.getElementById('confVal').textContent=this.value" />
+              <span id="confVal" class="tiny">0.7</span>
+            </label>
           </div>
           <div class="actions">
             <button type="submit">Start Run</button>
@@ -334,6 +403,15 @@
             <input id="tailN" type="number" min="10" max="5000" value="150" />
           </label>
         </div>
+        <div id="hitlControls"
+          style="display:none; margin-top:10px; padding:10px; background:#3f2f11; border-radius:8px;">
+          <strong style="color:var(--warn)">⚠️ Low Confidence Step Detected</strong>
+          <div style="font-size:0.8rem; margin:5px 0" id="hitlReason">System is unsure about the next step.</div>
+          <div class="actions">
+            <button id="btnApprove" style="background:#143427; border-color:#38d39f">Approve</button>
+            <button id="btnReject" style="background:#361720; border-color:#ff6b7a">Reject</button>
+          </div>
+        </div>
         <div class="actions" style="margin-top:10px">
           <button id="loadRun" class="secondary">Load Run Ledger</button>
           <button id="loadTier" class="secondary">Load Policy Tier</button>
@@ -351,7 +429,8 @@
               <input id="chatThreadId" placeholder="chat-..." />
             </label>
             <label class="fullcol">Message
-              <textarea id="chatMessage" required placeholder="Ask about architecture, files, behavior, or where to patch..."></textarea>
+              <textarea id="chatMessage" required
+                placeholder="Ask about architecture, files, behavior, or where to patch..."></textarea>
             </label>
           </div>
           <div class="actions">
@@ -374,7 +453,8 @@
               <input value="general" readonly />
             </label>
             <label class="fullcol">Message
-              <textarea id="textChatMessage" required placeholder="Ask anything about the system, implementation, or next steps..."></textarea>
+              <textarea id="textChatMessage" required
+                placeholder="Ask anything about the system, implementation, or next steps..."></textarea>
             </label>
           </div>
           <div class="actions">
@@ -417,7 +497,7 @@
       return h;
     }
 
-    async function api(path, opts={}) {
+    async function api(path, opts = {}) {
       const res = await fetch(path, {
         ...opts,
         headers: {
@@ -435,7 +515,7 @@
       return payload;
     }
 
-    function row(k, v, cls='mono') {
+    function row(k, v, cls = 'mono') {
       const val = (v === undefined || v === null || v === '') ? '-' : v;
       return `<div class="row"><div class="k">${k}</div><div class="${cls}">${val}</div></div>`;
     }
@@ -661,7 +741,7 @@
     async function refreshAll() {
       authState.textContent = readToken() ? 'Token set' : 'No token set';
       await Promise.allSettled([loadHealth(), loadMetrics(), loadKernel(), loadRepos()]);
-      try { await loadLedger(); } catch {}
+      try { await loadLedger(); } catch { }
     }
 
     document.getElementById('saveToken').addEventListener('click', async () => {
@@ -684,7 +764,7 @@
       const threadInput = document.getElementById('chatThreadId');
       const tid = threadInput.value.trim();
       if (tid) {
-        try { await api(`/chat/${encodeURIComponent(tid)}`, { method: 'DELETE' }); } catch {}
+        try { await api(`/chat/${encodeURIComponent(tid)}`, { method: 'DELETE' }); } catch { }
       }
       threadInput.value = '';
       document.getElementById('chatBox').textContent = 'No chat messages yet.';
@@ -695,20 +775,60 @@
       const threadInput = document.getElementById('textThreadId');
       const tid = threadInput.value.trim();
       if (tid) {
-        try { await api(`/chat/text/${encodeURIComponent(tid)}`, { method: 'DELETE' }); } catch {}
+        try { await api(`/chat/text/${encodeURIComponent(tid)}`, { method: 'DELETE' }); } catch { }
       }
       threadInput.value = '';
       document.getElementById('textChatBox').textContent = 'No text chat messages yet.';
       textChatState.textContent = 'Started new thread.';
     });
 
+    let pollInterval = null;
+
+    async function pollStatus() {
+      const runId = document.getElementById('runId').value.trim();
+      if (!runId) return;
+      try {
+        const s = await api(`/run/${runId}/status`);
+        const hitl = document.getElementById('hitlControls');
+        if (s.approval_needed) {
+          hitl.style.display = 'block';
+          if (s.last_step) {
+            document.getElementById('hitlReason').textContent = `Proposed: ${JSON.stringify(s.last_step.type)}`;
+          }
+        } else {
+          hitl.style.display = 'none';
+        }
+        if (s.status === 'completed' || s.status === 'failed' || s.status === 'aborted') {
+          runState.textContent = `Run ${s.status}`;
+          if (pollInterval) clearInterval(pollInterval);
+        } else {
+          runState.textContent = `Status: ${s.status}`;
+        }
+      } catch (e) {
+        console.error('Poll failed', e);
+      }
+    }
+
+    document.getElementById('btnApprove').addEventListener('click', async () => {
+      const runId = document.getElementById('runId').value.trim();
+      await api(`/run/${runId}/approve`, { method: 'POST' });
+      document.getElementById('hitlControls').style.display = 'none';
+    });
+
+    document.getElementById('btnReject').addEventListener('click', async () => {
+      const runId = document.getElementById('runId').value.trim();
+      await api(`/run/${runId}/reject`, { method: 'POST' });
+      document.getElementById('hitlControls').style.display = 'none';
+    });
+
     document.getElementById('runForm').addEventListener('submit', async (e) => {
       e.preventDefault();
-      runState.textContent = 'Running...';
+      runState.textContent = 'Starting...';
       const body = {
         repo_id: document.getElementById('repoId').value.trim(),
         task: document.getElementById('task').value,
         max_iters: parseInt(document.getElementById('maxIters').value || '3', 10),
+        confidence_threshold: parseFloat(document.getElementById('confThresh').value),
       };
       const scenario = document.getElementById('scenario').value.trim();
       if (scenario) body.scenario = scenario;
@@ -717,10 +837,13 @@
         document.getElementById('runResult').textContent = JSON.stringify(out, null, 2);
         if (out.run_id) {
           document.getElementById('runId').value = out.run_id;
-          await loadTier(out.run_id);
-          await loadLedger(out.run_id);
+          // Start polling
+          if (pollInterval) clearInterval(pollInterval);
+          pollInterval = setInterval(async () => {
+            await pollStatus();
+            await loadLedger(out.run_id);
+          }, 1000);
         }
-        runState.textContent = 'Run completed.';
       } catch (err) {
         document.getElementById('runResult').textContent = `Run failed: ${err.message}`;
         runState.textContent = 'Run failed.';
@@ -745,4 +868,5 @@
     refreshAll();
   </script>
 </body>
+
 </html>

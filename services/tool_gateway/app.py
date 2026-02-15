@@ -1,6 +1,6 @@
 import os
 import re
-from typing import Optional
+from typing import Optional, List
 import json
 
 from fastapi import FastAPI, HTTPException, Header  # type: ignore[import-not-found]
@@ -245,6 +245,12 @@ class Step(BaseModel):
     workdir_id: Optional[str] = None
     workdir: Optional[str] = None
     max_depth: Optional[int] = None
+    # Phase 3 Fields
+    focus: Optional[List[str]] = None  # for generate_repo_map
+    target_file: Optional[str] = None  # for trace_execution
+    lineno: Optional[int] = None  # for trace_execution
+    variables: Optional[List[str]] = None  # for trace_execution
+    triggering_test: Optional[str] = None  # for trace_execution
 
 
 class RunStepReq(BaseModel):

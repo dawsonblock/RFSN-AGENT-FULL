@@ -697,7 +697,6 @@ def repo_import(req: RepoImportReq):
 class SandboxReq(BaseModel):
     run_id: str
     repo_id: str
-    network: str = "none"
 
 
 @app.post("/sandbox/create")
@@ -716,7 +715,6 @@ def sandbox_create(req: SandboxReq):
         art_host,
         venv_host,
         wheels_host,
-        req.network,
     )
     return {
         "ok": True,
@@ -970,9 +968,11 @@ def _run_docker_with_data(
                 net,
                 "--user",
                 "1000:1000",
-                "--security-opt", "no-new-privileges:true",
+                "--security-opt",
+                "no-new-privileges:true",
                 "--read-only",
-                "--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=256m",
+                "--tmpfs",
+                "/tmp:rw,noexec,nosuid,nodev,size=256m",
                 "--memory",
                 "2g",
                 "--cpus",
@@ -981,7 +981,8 @@ def _run_docker_with_data(
                 "256",
                 "--cap-drop",
                 "ALL",
-                "-e", "HOME=/tmp",
+                "-e",
+                "HOME=/tmp",
             ]
             + extra_mounts
             + [
@@ -1595,6 +1596,26 @@ def _verify_patch_result(
     return out
 
 
+def _read_local_lib(name: str) -> str:
+    """Read source code of a local library file to inject into sandbox."""
+    # Logic to find rfsn_swebench relative to app.py
+    # In Docker: /app/rfsn_swebench
+    # Local Dev: ../rfsn_swebench
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(here, "rfsn_swebench", name),
+        os.path.join(here, "..", "..", "rfsn_swebench", name),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception:
+                pass
+    return f"# Error: Could not find library {name}"
+
+
 def _build_step_script(
     step_type: str,
     step: dict,
@@ -1810,6 +1831,149 @@ def _build_step_script(
             "#!/bin/bash\nset -euo pipefail\n"
             "cd /work/repo\n"
             "python3 /tmp/rfsn_data/reader.py\n"
+        )
+        return script, data_files
+
+    if step_type == "trace_execution":
+        # Phase 3.3: Variable Probing / Execution Tracing
+        # We inject print statements into a target file and run a test.
+        # Params: target_file, lineno, vars (list of str), triggering_test
+
+        target_file = step.get("target_file") or ""
+        lineno = int(step.get("lineno") or 0)
+        variables = step.get("variables") or []
+        triggering_test = step.get("triggering_test") or "pytest"
+
+        probe_code = "; ".join(
+            [f"print(f'[PROBE] {v}={{repr({v})}}')" for v in variables]
+        )
+
+        # We'll use a python script to apply the probe, run test, then revert.
+        tracer_py = (
+            "import sys, os, json\n"
+            f"tgt = {json.dumps(target_file)}\n"
+            f"lno = {lineno}\n"
+            f"probe = {json.dumps(probe_code)}\n"
+            f"cmd = {json.dumps(triggering_test)}\n"
+            "\n"
+            "if not os.path.exists(tgt):\n"
+            "    print(f'Target {tgt} not found'); sys.exit(1)\n"
+            "\n"
+            "lines = open(tgt).readlines()\n"
+            "if lno < 1 or lno > len(lines):\n"
+            "    print(f'Line {lno} out of range'); sys.exit(1)\n"
+            "\n"
+            "# Inject probe (indentation matching)\n"
+            "orig_line = lines[lno-1]\n"
+            "indent = len(orig_line) - len(orig_line.lstrip())\n"
+            "probe_line = (' ' * indent) + probe + '\\n'\n"
+            "lines.insert(lno-1, probe_line)\n"
+            "\n"
+            "# Write modified\n"
+            "with open(tgt, 'w') as f: f.writelines(lines)\n"
+            "\n"
+            "print(f' injected probe at line {lno}. Running test...')\n"
+            "ret = os.system(cmd)\n"
+            "\n"
+            "# Revert\n"
+            "lines.pop(lno-1)\n"
+            "with open(tgt, 'w') as f: f.writelines(lines)\n"
+            "print(' reverted probe.')\n"
+        )
+        spy_file = _write_data_file(tracer_py, suffix=".py")
+        data_files = {"/tmp/rfsn_data/trace.py": spy_file}
+        script = (
+            "#!/bin/bash\nset -euo pipefail\n"
+            "cd /work/repo\n"
+            "python3 /tmp/rfsn_data/trace.py\n"
+        )
+        return script, data_files
+
+    if step_type == "generate_repo_map":
+        target = step.get("path") or "."
+        focus = step.get("focus") or []  # List of names
+        locator_src = _read_local_lib("locator.py")
+
+        map_py = (
+            "import sys, os, ast, json\n"
+            f"{locator_src}\n"  # Inject library
+            "\n"
+            f"tgt = {json.dumps(target)}\n"
+            f"foc = {json.dumps(focus)}\n"
+            "try:\n"
+            "    # Walk if target is dir, else single file\n"
+            "    if os.path.isdir(tgt):\n"
+            "        # Simple walk and map specialized for prompt usage?\n"
+            "        # The instruction says 'generate_repo_map(filepath)'\n"
+            "        # Master plan says 'skeleton of target directory'.\n"
+            "        # Let's assume input is a list of files or a specific file for now.\n"
+            "        # For directory, maybe we map all .py files?\n"
+            "        out = ''\n"
+            "        for root, dirs, files in os.walk(tgt):\n"
+            "            for f in files:\n"
+            "                if f.endswith('.py'):\n"
+            "                    fp = os.path.join(root, f)\n"
+            "                    out += f'--- {fp} ---\\n'\n"
+            "                    out += generate_repo_map(fp, focus_nodes=foc) + '\\n\\n'\n"
+            "        print(out)\n"
+            "    else:\n"
+            "        print(generate_repo_map(tgt, focus_nodes=foc))\n"
+            "except Exception as e:\n"
+            "    print(f'Error generating map: {e}')\n"
+        )
+        spy_file = _write_data_file(map_py, suffix=".py")
+        data_files = {"/tmp/rfsn_data/map.py": spy_file}
+        script = (
+            "#!/bin/bash\nset -euo pipefail\n"
+            "cd /work/repo\n"
+            "python3 /tmp/rfsn_data/map.py\n"
+        )
+        return script, data_files
+
+    if step_type == "apply_semantic_patch":
+        patch_content = step.get("patch") or ""
+        target_file = step.get("path") or ""
+        patcher_src = _read_local_lib("patcher.py")
+
+        patch_py = (
+            "import sys, os, re\n"
+            f"{patcher_src}\n"  # Inject library
+            "\n"
+            f"tgt = {json.dumps(target_file)}\n"
+            # We must be careful passing patch content via f-string if it has quotes/backslashes
+            # Better to read from a data file.
+            "patch_txt = open('/tmp/rfsn_data/patch.txt', 'r').read()\n"
+            "\n"
+            "if not os.path.exists(tgt):\n"
+            "    print(f'Error: Target file {tgt} not found.')\n"
+            "    sys.exit(1)\n"
+            "\n"
+            "try:\n"
+            "    with open(tgt, 'r', encoding='utf-8') as f:\n"
+            "        content = f.read()\n"
+            "    new_content = apply_semantic_patch(content, patch_txt)\n"
+            "    with open(tgt, 'w', encoding='utf-8') as f:\n"
+            "        f.write(new_content)\n"
+            "    print('SUCCESS: Semantic patch applied.')\n"
+            "except PatchConflictError as e:\n"
+            "    print(f'CONFLICT: {e}')\n"
+            "    sys.exit(1)\n"
+            "except Exception as e:\n"
+            "    print(f'ERROR: {e}')\n"
+            "    sys.exit(1)\n"
+        )
+
+        script_path = _write_data_file(patch_py, suffix=".py")
+        patch_path = _write_data_file(patch_content, suffix=".patch")
+
+        data_files = {
+            "/tmp/rfsn_data/apply.py": script_path,
+            "/tmp/rfsn_data/patch.txt": patch_path,
+        }
+        script = (
+            "#!/bin/bash\nset -euo pipefail\n"
+            "cd /work/repo\n"
+            "python3 /tmp/rfsn_data/apply.py\n"
         )
         return script, data_files
 

@@ -26,15 +26,21 @@ class RunReq(BaseModel):
     task: str
     max_iters: int = 3
     scenario: Optional[str] = None
+    confidence_threshold: float = 0.7
 
 
-def run_logic(req: RunReq, kernel: HardKernel, ledger: LedgerSink) -> dict:
+def run_logic(run_id: str, req: RunReq, kernel: HardKernel, ledger: LedgerSink) -> dict:
     """Main execution loop logic."""
-    run_id = f"run-{int(time.time()*1000)}"
+    # run_id passed in from API
     repo_id = req.repo_id
 
     # 1. Init Session
-    ensure_run_context(run_id)
+    import threading
+
+    ctx = ensure_run_context(run_id)
+    ctx["repo_id"] = repo_id
+    ctx["approval_event"] = threading.Event()
+    ctx["status"] = "running"
 
     # 2. Init Ledger/Manifest
     manifest_base = init_replay_manifest(
@@ -60,9 +66,80 @@ def run_logic(req: RunReq, kernel: HardKernel, ledger: LedgerSink) -> dict:
         while iters < req.max_iters:
             iters += 1
 
-            # Placeholder: In real logic, this calls LLM to get next step
-            # Here we simulate a simplified step for structure demo
-            step_intent = {"type": "command", "cmd": "ls -la"}
+            # Check for advice/feedback
+            advisor = ctx.get("advisor")
+            if advisor and advisor.has_pending_advice():
+                pending = advisor.get_pending_advice()
+                # Log advice to ledger
+                ledger.append(
+                    {
+                        "type": "ADVICE_RECEIVED",
+                        "advice": [
+                            {
+                                "source": a.source,
+                                "content": a.content,
+                                "timestamp": a.timestamp,
+                            }
+                            for a in pending
+                        ],
+                    }
+                )
+                # In a real run, we would pass 'pending' to the planner here.
+
+            # In a real run, we would call LLM here.
+            # For verification/demo of the Master Upgrade, we simulate a sequence:
+            # 1. generate_repo_map (Phase 2.1)
+            # 2. apply_semantic_patch (Phase 2.3)
+
+            step_intent = {}
+            if iters == 1:
+                step_intent = {
+                    "type": "generate_repo_map",
+                    "path": ".",
+                    "focus": ["important_function"],
+                }
+            elif iters == 2:
+                step_intent = {
+                    "type": "apply_semantic_patch",
+                    "path": "src/utils.py",
+                    "patch": "<<<<<<< SEARCH\ndef foo(): pass\n=======\ndef foo(): return 1\n>>>>>>> REPLACE",
+                }
+            else:
+                step_intent = {"type": "command", "cmd": "echo 'Done'"}
+
+            # Simulated Confidence Check (Phase 5.1)
+            # Default high confidence
+            confidence = 0.95
+            # Force low confidence on step 2 for demo purposes
+            if iters == 2:
+                confidence = 0.5
+
+            if confidence < req.confidence_threshold:
+                ctx["status"] = "paused"
+                ledger.append(
+                    {
+                        "type": "HITL_PAUSE",
+                        "reason": f"Low confidence ({confidence} < {req.confidence_threshold})",
+                        "step": step_intent,
+                    }
+                )
+                # Wait for approval
+                ctx["approval_event"].wait()
+                ctx["approval_event"].clear()  # Reset for next time
+
+                if ctx.get("approval_result") == "rejected":
+                    status = "aborted"
+                    reason = "User rejected step"
+                    ledger.append({"type": "HITL_REJECT", "user": "human"})
+                    break
+
+                ledger.append({"type": "HITL_APPROVE", "user": "human"})
+                ctx["status"] = "running"
+
+            # Map V2 tool names if coming from LLM (pseudo-code/comment for implementation)
+            # if "tool_name" in action:
+            #     step_intent["type"] = action["tool_name"]
+            #     step_intent.update(action.get("parameters", {}))
 
             # Execute via Kernel Bridge
             result = execute_approved_step(
@@ -72,9 +149,19 @@ def run_logic(req: RunReq, kernel: HardKernel, ledger: LedgerSink) -> dict:
                 it=iters,
                 step=step_intent,
                 run_id=run_id,
-                intent="Simulated step",
+                intent=f"Simulated Step {iters}",
                 tier_now=1,
             )
+
+            # Capture step for trajectory
+            step_record = {
+                "iteration": iters,
+                "intent": step_intent,
+                "confidence": confidence,
+                "approval": ctx.get("approval_result", "auto"),
+                "result": result,
+            }
+            ctx.setdefault("steps", []).append(step_record)
 
             if not result["ok"]:
                 status = "failed"
@@ -90,14 +177,40 @@ def run_logic(req: RunReq, kernel: HardKernel, ledger: LedgerSink) -> dict:
         ledger.append({"type": "RUN_ERROR", "error": str(e)})
     finally:
         # 5. Cleanup
-        sandbox_destroy(run_id, repo_id)
-        finalize_replay_manifest(
-            run_id=run_id,
-            repo_id=repo_id,
-            manifest=manifest_base,
-            status=status,
-            reason=reason,
-        )
+        try:
+            sandbox_destroy(run_id, repo_id)
+        except Exception:
+            pass
+
+        try:
+            finalize_replay_manifest(
+                run_id=run_id,
+                repo_id=repo_id,
+                manifest=manifest_base,
+                status=status,
+                reason=reason,
+            )
+        except Exception:
+            pass
+
+        # 6. Harvest Trajectory (Phase 6.3)
+        try:
+            from services.learner_service.store_duckdb import DuckStore
+
+            # Ideally this path comes from config
+            store = DuckStore("data/learner.duckdb")
+            store.record_trajectory(
+                run_id=run_id,
+                repo_id=repo_id,
+                task_hash=str(hash(req.task)),  # Simple hash for now
+                strategy_id="default_v1",  # Placeholder
+                success=(status == "completed"),
+                steps=ctx.get("steps", []),
+            )
+            print(f"INFO: Trajectory recorded for {run_id}")
+        except Exception as e:
+            print(f"WARN: Failed to record trajectory: {e}")
+
         clear_run_context(run_id)
 
     return {"run_id": run_id, "status": status, "reason": reason}

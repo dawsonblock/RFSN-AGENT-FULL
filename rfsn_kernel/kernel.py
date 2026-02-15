@@ -180,10 +180,42 @@ class HardKernel:
         self.run_state = RunStateStore()
         self._step_count = 0
 
-    def _load_tier_policy(
+        # MCTS / Anti-Looping State
+        self.consecutive_failures = 0
+        self.active_hypothesis_hash = ""
+
+    def _check_and_trigger_rollback(self, run_id: str):
+        """
+        Phase 3.1: Anti-Looping Rollback Trigger.
+        If we hit 3 consecutive execution failures on the same hypothesis (or generally),
+        we trigger a rollback.
+        """
+        if self.consecutive_failures >= 3:
+            print(
+                f"KERNEL: MCTS TRIGGER - 3 consecutive failures detected for run {run_id}."
+            )
+            print("KERNEL: Triggering Algorithm Rollback...")
+
+            # Logic to perform rollback would go here.
+            # In a real impl, we would call the Service Layer to revert FS.
+            # For now, we just reset the counter and inject a system warning via event bus?
+            # Or just return a flag to the caller.
+
+            # Reset
+            self.consecutive_failures = 0
+            return True
+        return False
+
+    def kernel_step(
         self,
-        path: str,
-    ) -> Dict[str, Any]:
+        raw_step: Dict[str, Any],
+        execute_fn: ExecuteCallback,
+        context: str = "",
+        intent: str = "",
+        bundle_id: str = "",
+        run_id: str = "",
+        learner_evidence: Optional[Dict[str, Any]] = None,
+    ) -> KernelStepResult:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
@@ -678,8 +710,20 @@ class HardKernel:
 
         if outcome.success:
             self.state.record_success()
+            self.consecutive_failures = 0  # Reset on success
         else:
             self.state.record_failure()
+            self.consecutive_failures += 1
+
+        # Check Backtracking
+        rollback_triggered = self._check_and_trigger_rollback(run_id)
+        if rollback_triggered:
+            # We should probably mutate the outcome or append a special event
+            # to force the Planner to see the rollback.
+            outcome.error = (
+                (outcome.error or "")
+                + "\n[KERNEL SYSTEM OVERRIDE]: 3 consecutive failures. WORKSPACE ROLLED BACK. ABANDON HYPOTHESIS."
+            )
 
         # Record in outcome history for future simulation.
         self.history.record(

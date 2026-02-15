@@ -10,6 +10,9 @@ allowed_step_types:
   - run_tests
   - run_cmd_template
   - format_fix
+  - trace_execution
+  - generate_repo_map
+  - apply_semantic_patch
 
 # Paths are repo-root-relative (src/foo.py, not repo/src/foo.py).
 repo_root_required: true

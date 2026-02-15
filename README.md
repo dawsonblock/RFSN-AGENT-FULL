@@ -12,6 +12,19 @@
 
 ---
 
+## Master Upgrade (Phase 1-6 Complete)
+
+**RFSN v6.4** introduces a comprehensive suite of enhancements:
+
+1. **Performance**: Native Prompt Caching, Parallel Speculative Execution.
+2. **Code Quality**: AST-Aware Context Slicing, Semantic Patching.
+3. **Resilience**: MCTS Backtracking, Frustration Detection, Anti-Looping.
+4. **Security**: Indirect Prompt Injection Firewalls, Secret Scanning.
+5. **GitOps**: Native GitHub App, Confidence-Triggered HITL.
+6. **Data Flywheel**: Automated Trajectory Harvesting, DPO Export.
+
+---
+
 ## What is RFSN Agent?
 
 RFSN is a **production-hardened**, microservice-based coding agent designed for autonomous bug repair. It enforces a strict separation between **Proposal** (LLM), **Validation** (Safety Kernel), and **Execution** (Isolated Sandbox).

@@ -11,7 +11,7 @@ the run ends (success, fail, or timeout).
       - --read-only + tmpfs /tmp
       - --memory 2g / --cpus 2 / --pids-limit 256
       - --cap-drop ALL
-      - network disabled by default
+      - network ALWAYS disabled (none)
 """
 
 from __future__ import annotations
@@ -101,7 +101,6 @@ class SandboxPool:
         art_host: str,
         venv_host: str,
         wheels_host: str,
-        network: str = "none",
     ) -> Sandbox:
         """Get existing sandbox or create one."""
         with self._pool_lock:
@@ -117,7 +116,6 @@ class SandboxPool:
             art_host,
             venv_host,
             wheels_host,
-            network,
         )
 
         with self._pool_lock:
@@ -198,55 +196,121 @@ class SandboxPool:
                     )
                     copied.append(hpath)
 
-                # Execute.
+                # Execute with streaming to prevent OOM on massive output.
                 start = time.time()
+                proc = subprocess.Popen(
+                    [
+                        "docker",
+                        "exec",
+                        "-w",
+                        workdir,
+                        cid,
+                        "bash",
+                        "/tmp/rfsn_script.sh",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,  # Line buffered
+                )
+
+                output_chunks: list[str] = []
+                total_bytes = 0
+                hit_limit = False
+
                 try:
-                    p = subprocess.run(
-                        [
-                            "docker",
-                            "exec",
-                            "-w",
-                            workdir,
-                            cid,
-                            "bash",
-                            "/tmp/rfsn_script.sh",
-                        ],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        timeout=timeout_s,
-                        text=True,
-                    )
-                    raw_logs = (p.stdout or "").replace(
-                        "\r\n",
-                        "\n",
-                    )
-                    out, trunc = _truncate_text_bytes(
-                        raw_logs,
-                        _MAX_STEP_LOG_BYTES,
-                    )
+                    # We can't easily use communicate() with a limit, so we read manually.
+                    # But we also need to enforce timeout.
+                    # Simplified approach: read in a thread or use blocking reads with timeout?
+                    # Docker exec output might block.
+                    # Best valid approach for Popen with timeout AND output limit is tricky in pure Python.
+                    # Let's use a simpler approach: communicate with timeout, BUT we still risk OOM if we don't stream.
+                    # We will read line-by-line using a loop and selector or just simple readline with non-blocking check?
+                    # Given checking time/complexity, let's just loop reading lines.
+
+                    import select
+
+                    if proc.stdout is None:
+                        raise RuntimeError("Failed to capture stdout")
+
+                    while True:
+                        # Check timeout
+                        if time.time() - start > timeout_s:
+                            proc.kill()
+                            raise subprocess.TimeoutExpired(
+                                proc.args, timeout_s, output="".join(output_chunks)
+                            )
+
+                        # Check if process exited
+                        if proc.poll() is not None:
+                            # Read remaining
+                            rest = proc.stdout.read()
+                            if rest:
+                                if total_bytes < _MAX_STEP_LOG_BYTES:
+                                    output_chunks.append(rest)
+                                    total_bytes += len(rest)
+                            break
+
+                        # Wait for data (non-blocking read would be better, but select works on POSIX)
+                        # We use select to wait up to 0.1s for data
+                        r, _, _ = select.select([proc.stdout], [], [], 0.1)
+                        if r:
+                            chunk = proc.stdout.read(4096)  # read small chunks
+                            if not chunk:
+                                break  # EOF
+
+                            if total_bytes < _MAX_STEP_LOG_BYTES:
+                                output_chunks.append(chunk)
+                                total_bytes += len(chunk)
+                            else:
+                                if not hit_limit:
+                                    output_chunks.append(
+                                        "\n[OUTPUT TRUNCATED - LIMIT EXCEEDED]\n"
+                                    )
+                                    hit_limit = True
+                                # We continue reading to drain pipe but don't store,
+                                # OR we kill if it goes too crazy?
+                                # Let's kill if it goes 2x over limit to save CPU/IO.
+                                if total_bytes > _MAX_STEP_LOG_BYTES * 2:
+                                    proc.kill()
+                                    output_chunks.append(
+                                        "\n[KILLED - OUTPUT TOO MASSIVE]\n"
+                                    )
+                                    break
+
                     return {
-                        "status": p.returncode,
+                        "status": (
+                            proc.returncode if proc.returncode is not None else 137
+                        ),
                         "seconds": time.time() - start,
-                        "logs": out,
-                        "logs_truncated": trunc,
+                        "logs": "".join(output_chunks),
+                        "logs_truncated": hit_limit
+                        or (total_bytes > _MAX_STEP_LOG_BYTES),
                     }
-                except subprocess.TimeoutExpired as e:
-                    raw_out = e.stdout or ""
-                    if isinstance(raw_out, bytes):
-                        raw_out = raw_out.decode(
-                            "utf-8",
-                            errors="replace",
-                        )
-                    out, trunc = _truncate_text_bytes(
-                        str(raw_out) + "\n[TIMEOUT]\n",
-                        _MAX_STEP_LOG_BYTES,
-                    )
+
+                except subprocess.TimeoutExpired:
+                    proc.kill()
                     return {
                         "status": 124,
                         "seconds": time.time() - start,
-                        "logs": out,
-                        "logs_truncated": trunc,
+                        "logs": "".join(output_chunks) + "\n[TIMEOUT]\n",
+                        "logs_truncated": True,
                     }
+                except Exception as e:
+                    proc.kill()
+                    return {
+                        "status": 1,
+                        "seconds": time.time() - start,
+                        "logs": f"Internal Error: {e}",
+                        "logs_truncated": False,
+                    }
+                finally:
+                    if proc.stdout:
+                        proc.stdout.close()
+                    # Ensure process is dead
+                    if proc.poll() is None:
+                        proc.kill()
+                        proc.wait()
 
             finally:
                 # Clean up local temp files.
@@ -304,7 +368,6 @@ class SandboxPool:
         art_host: str,
         venv_host: str,
         wheels_host: str,
-        network: str,
     ) -> Sandbox:
         """Start a new persistent container."""
         # Generate a deterministic container name.
@@ -320,7 +383,7 @@ class SandboxPool:
             "--name",
             name,
             "--network",
-            network,
+            "none",
             "--user",
             "1000:1000",
             "--security-opt",

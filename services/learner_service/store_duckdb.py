@@ -91,6 +91,21 @@ class DuckStore:
             );
             """
         )
+        # Trajectories: full step-by-step execution logs
+        # for offline reinforcement learning (DPO/CQL).
+        self.con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS trajectories(
+              run_id VARCHAR PRIMARY KEY,
+              repo_id VARCHAR,
+              task_hash VARCHAR,
+              strategy_id VARCHAR,
+              success BOOLEAN,
+              steps JSON,
+              ts DOUBLE
+            );
+            """
+        )
 
     # ── Strategy stats (Thompson sampling) ────
 
@@ -117,7 +132,8 @@ class DuckStore:
         )
 
     def get_posteriors(
-        self, context_key: str,
+        self,
+        context_key: str,
     ) -> dict:
         rows = self.con.execute(
             """
@@ -150,8 +166,7 @@ class DuckStore:
     ) -> None:
         ts = time.time()
         self.con.execute(
-            "INSERT INTO episodes"
-            " VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO episodes" " VALUES (?, ?, ?, ?, ?, ?)",
             [
                 run_id,
                 context_key,
@@ -213,15 +228,23 @@ class DuckStore:
              ?, ?, ?, ?, ?, ?)
             """,
             [
-                run_id, repo_id, task_hash,
-                patch_hash, patch_files,
-                patch_added, patch_deleted,
+                run_id,
+                repo_id,
+                task_hash,
+                patch_hash,
+                patch_files,
+                patch_added,
+                patch_deleted,
                 test_exit_code,
-                tests_passed, tests_failed,
+                tests_passed,
+                tests_failed,
                 tests_total,
-                failure_class, failure_signature,
-                strategy_id, bool(success),
-                dense_reward, time.time(),
+                failure_class,
+                failure_signature,
+                strategy_id,
+                bool(success),
+                dense_reward,
+                time.time(),
             ],
         )
 
@@ -283,6 +306,43 @@ class DuckStore:
             "tests_total": int(r[3] or 0),
         }
 
+    # ── Trajectories ──────────────────────────
+
+    def record_trajectory(
+        self,
+        run_id: str,
+        repo_id: str,
+        task_hash: str,
+        strategy_id: str,
+        success: bool,
+        steps: list[dict],
+    ) -> None:
+        """Record a full execution trajectory."""
+        import json
+
+        self.con.execute(
+            """
+            INSERT INTO trajectories(
+              run_id, repo_id, task_hash,
+              strategy_id, success, steps, ts
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+              steps = excluded.steps,
+              success = excluded.success,
+              ts = excluded.ts
+            """,
+            [
+                run_id,
+                repo_id,
+                task_hash,
+                strategy_id,
+                success,
+                json.dumps(steps),
+                time.time(),
+            ],
+        )
+
     def get_strategy_win_rates(
         self,
         context_key: str,
@@ -301,10 +361,7 @@ class DuckStore:
             """,
             [f"%{context_key}%"],
         ).fetchall()
-        return {
-            r[0]: float(r[1]) / max(r[2], 1)
-            for r in rows
-        }
+        return {r[0]: float(r[1]) / max(r[2], 1) for r in rows}
 
     # ── Failure signature index ───────────────
 
@@ -345,18 +402,24 @@ class DuckStore:
               )
             """,
             [
-                signature_hash, failure_class,
-                failure_module, failure_test,
-                failure_message, repo_id,
+                signature_hash,
+                failure_class,
+                failure_module,
+                failure_test,
+                failure_message,
+                repo_id,
                 time.time(),
-                best_strategy_id, best_win_rate,
+                best_strategy_id,
+                best_win_rate,
                 time.time(),
-                best_strategy_id, best_win_rate,
+                best_strategy_id,
+                best_win_rate,
             ],
         )
 
     def lookup_failure(
-        self, signature_hash: str,
+        self,
+        signature_hash: str,
     ) -> Optional[dict]:
         """Look up a known failure signature."""
         rows = self.con.execute(
@@ -381,9 +444,7 @@ class DuckStore:
             "failure_message": r[3],
             "occurrence_count": int(r[4]),
             "best_strategy_id": r[5],
-            "best_strategy_win_rate": (
-                float(r[6]) if r[6] else None
-            ),
+            "best_strategy_win_rate": (float(r[6]) if r[6] else None),
         }
 
     def find_similar_failures(
@@ -416,9 +477,7 @@ class DuckStore:
                 "failure_test": r[3],
                 "occurrence_count": int(r[4]),
                 "best_strategy_id": r[5],
-                "best_strategy_win_rate": (
-                    float(r[6]) if r[6] else None
-                ),
+                "best_strategy_win_rate": (float(r[6]) if r[6] else None),
             }
             for r in rows
         ]

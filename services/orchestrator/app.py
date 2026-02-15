@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from services.orchestrator.api_routes import api_router, _KERNEL
+from services.orchestrator.github_routes import github_router
 from services.orchestrator import (
     api_routes,
 )  # Need modifying the module/global directly
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
 
     # Routes
     app.include_router(api_router)
+    app.include_router(github_router)
 
     return app
 

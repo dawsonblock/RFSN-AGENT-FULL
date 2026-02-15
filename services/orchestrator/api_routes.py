@@ -68,16 +68,79 @@ def ui_page():
 @api_router.post("/run")
 def run_endpoint(req: RunReq):
     """Start an agent run."""
+    # Phase 4.1: Firewall Check
+    from services.orchestrator.security import validate_input_safety
+
+    # Validate the task description/prompt
+    if req.task:
+        validate_input_safety(req.task)
+
     try:
         kernel = get_kernel()
         # Create a ledger sink for this run
         ledger = LedgerSink(kernel)
 
-        # Execute run logic (blocking for now, would be async in real world)
-        result = run_logic(req, kernel, ledger)
-        return result
+        # Generate run_id here
+        import time, threading
+
+        run_id = f"run-{int(time.time()*1000)}"
+
+        # Execute in background thread
+        t = threading.Thread(
+            target=run_logic, args=(run_id, req, kernel, ledger), daemon=True
+        )
+        t.start()
+
+        return {"run_id": run_id, "status": "starting"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.get("/run/{run_id}/status")
+def run_status(run_id: str):
+    ctx = get_run_context(run_id)
+    if not ctx:
+        raise HTTPException(404, "Run not found")
+
+    return {
+        "status": ctx.get("status", "unknown"),
+        "approval_needed": ctx.get("status") == "paused",
+        "last_step": ctx.get(
+            "last_step_intent"
+        ),  # We didn't save this yet, but good for UI
+    }
+
+
+@api_router.post("/run/{run_id}/approve")
+def approve_step(run_id: str):
+    ctx = get_run_context(run_id)
+    if not ctx:
+        raise HTTPException(404, "Run not found")
+
+    if ctx.get("status") != "paused":
+        raise HTTPException(400, "Run is not paused")
+
+    ctx["approval_result"] = "approved"
+    if ctx.get("approval_event"):
+        ctx["approval_event"].set()
+
+    return {"status": "approved"}
+
+
+@api_router.post("/run/{run_id}/reject")
+def reject_step(run_id: str):
+    ctx = get_run_context(run_id)
+    if not ctx:
+        raise HTTPException(404, "Run not found")
+
+    if ctx.get("status") != "paused":
+        raise HTTPException(400, "Run is not paused")
+
+    ctx["approval_result"] = "rejected"
+    if ctx.get("approval_event"):
+        ctx["approval_event"].set()
+
+    return {"status": "rejected"}
 
 
 @api_router.post("/query/repos")

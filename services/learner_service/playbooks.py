@@ -19,10 +19,10 @@ from typing import Optional
 class PlaybookStep:
     """One phase in a playbook."""
 
-    label: str           # human-readable name
-    step_type: str       # kernel step type
-    guidance: str        # instruction for the LLM
-    max_calls: int = 1   # how many calls allowed
+    label: str  # human-readable name
+    step_type: str  # kernel step type
+    guidance: str  # instruction for the LLM
+    max_calls: int = 1  # how many calls allowed
 
 
 @dataclass(frozen=True)
@@ -47,14 +47,8 @@ class Playbook:
             "Follow these phases IN ORDER:",
         ]
         for i, ph in enumerate(self.phases, 1):
-            calls = (
-                f" (up to {ph.max_calls}x)"
-                if ph.max_calls > 1 else ""
-            )
-            lines.append(
-                f"  {i}. [{ph.step_type}]{calls}"
-                f" — {ph.guidance}"
-            )
+            calls = f" (up to {ph.max_calls}x)" if ph.max_calls > 1 else ""
+            lines.append(f"  {i}. [{ph.step_type}]{calls}" f" — {ph.guidance}")
         lines.append("")
         lines.append(
             "Do NOT skip phases."
@@ -78,15 +72,15 @@ PB_IMPORT_FIX = Playbook(
         " before touching application code."
     ),
     target_failures=(
-        "ImportError", "ModuleNotFoundError",
+        "ImportError",
+        "ModuleNotFoundError",
     ),
     phases=(
         PlaybookStep(
             label="locate_import",
             step_type="repo_search",
             guidance=(
-                "Search for the missing module or"
-                " import statement in the codebase."
+                "Search for the missing module or" " import statement in the codebase."
             ),
             max_calls=2,
         ),
@@ -113,10 +107,7 @@ PB_IMPORT_FIX = Playbook(
         PlaybookStep(
             label="verify_import",
             step_type="run_tests",
-            guidance=(
-                "Run targeted tests to verify the"
-                " import error is resolved."
-            ),
+            guidance=("Run targeted tests to verify the" " import error is resolved."),
             max_calls=1,
         ),
         PlaybookStep(
@@ -133,10 +124,7 @@ PB_IMPORT_FIX = Playbook(
         PlaybookStep(
             label="final_test",
             step_type="run_tests",
-            guidance=(
-                "Run the full test suite to"
-                " confirm no regressions."
-            ),
+            guidance=("Run the full test suite to" " confirm no regressions."),
             max_calls=1,
         ),
     ),
@@ -151,7 +139,8 @@ PB_ASSERTION_FIX = Playbook(
         " the implementation, patch the impl."
     ),
     target_failures=(
-        "AssertionError", "AssertionError",
+        "AssertionError",
+        "AssertionError",
     ),
     phases=(
         PlaybookStep(
@@ -167,28 +156,21 @@ PB_ASSERTION_FIX = Playbook(
         PlaybookStep(
             label="read_test",
             step_type="repo_read_range",
-            guidance=(
-                "Read the failing test to"
-                " understand what it expects."
-            ),
+            guidance=("Read the failing test to" " understand what it expects."),
             max_calls=2,
         ),
         PlaybookStep(
             label="find_impl",
             step_type="repo_search",
             guidance=(
-                "Search for the symbol/function"
-                " under test in the source code."
+                "Search for the symbol/function" " under test in the source code."
             ),
             max_calls=2,
         ),
         PlaybookStep(
             label="read_impl",
             step_type="repo_read_range",
-            guidance=(
-                "Read the implementation to"
-                " understand the bug."
-            ),
+            guidance=("Read the implementation to" " understand the bug."),
             max_calls=3,
         ),
         PlaybookStep(
@@ -204,19 +186,13 @@ PB_ASSERTION_FIX = Playbook(
         PlaybookStep(
             label="targeted_test",
             step_type="run_tests",
-            guidance=(
-                "Run the failing test(s) with"
-                " pytest_targeted to verify fix."
-            ),
+            guidance=("Run the failing test(s) with" " pytest_targeted to verify fix."),
             max_calls=1,
         ),
         PlaybookStep(
             label="suite_test",
             step_type="run_tests",
-            guidance=(
-                "Run full suite to confirm"
-                " no regressions."
-            ),
+            guidance=("Run full suite to confirm" " no regressions."),
             max_calls=1,
         ),
     ),
@@ -236,8 +212,7 @@ PB_SYNTAX_FIX = Playbook(
             label="locate_file",
             step_type="repo_search",
             guidance=(
-                "Search for the file mentioned"
-                " in the syntax error traceback."
+                "Search for the file mentioned" " in the syntax error traceback."
             ),
             max_calls=1,
         ),
@@ -254,19 +229,13 @@ PB_SYNTAX_FIX = Playbook(
         PlaybookStep(
             label="patch_syntax",
             step_type="apply_patch",
-            guidance=(
-                "Fix the syntax error with a"
-                " minimal patch. Do NOT refactor."
-            ),
+            guidance=("Fix the syntax error with a" " minimal patch. Do NOT refactor."),
             max_calls=1,
         ),
         PlaybookStep(
             label="verify",
             step_type="run_tests",
-            guidance=(
-                "Run targeted tests then full"
-                " suite to confirm fix."
-            ),
+            guidance=("Run targeted tests then full" " suite to confirm fix."),
             max_calls=2,
         ),
     ),
@@ -283,8 +252,10 @@ PB_TRACEBACK_FIX = Playbook(
         " and patch."
     ),
     target_failures=(
-        "TypeError", "ValueError",
-        "KeyError", "IndexError",
+        "TypeError",
+        "ValueError",
+        "KeyError",
+        "IndexError",
         "AttributeError",
     ),
     phases=(
@@ -292,9 +263,7 @@ PB_TRACEBACK_FIX = Playbook(
             label="search_error_site",
             step_type="repo_search",
             guidance=(
-                "Search for the function or"
-                " symbol mentioned in the"
-                " traceback."
+                "Search for the function or" " symbol mentioned in the" " traceback."
             ),
             max_calls=2,
         ),
@@ -302,8 +271,7 @@ PB_TRACEBACK_FIX = Playbook(
             label="read_error_site",
             step_type="repo_read_range",
             guidance=(
-                "Read the code at the error site"
-                " to understand the root cause."
+                "Read the code at the error site" " to understand the root cause."
             ),
             max_calls=3,
         ),
@@ -320,19 +288,13 @@ PB_TRACEBACK_FIX = Playbook(
         PlaybookStep(
             label="targeted_test",
             step_type="run_tests",
-            guidance=(
-                "Run targeted tests to verify"
-                " the fix."
-            ),
+            guidance=("Run targeted tests to verify" " the fix."),
             max_calls=1,
         ),
         PlaybookStep(
             label="suite_test",
             step_type="run_tests",
-            guidance=(
-                "Run full suite to confirm"
-                " no regressions."
-            ),
+            guidance=("Run full suite to confirm" " no regressions."),
             max_calls=1,
         ),
     ),
@@ -351,46 +313,31 @@ PB_GENERIC_FIX = Playbook(
         PlaybookStep(
             label="search",
             step_type="repo_search",
-            guidance=(
-                "Search for code relevant to"
-                " the task or error."
-            ),
+            guidance=("Search for code relevant to" " the task or error."),
             max_calls=3,
         ),
         PlaybookStep(
             label="read",
             step_type="repo_read_range",
-            guidance=(
-                "Read relevant source files"
-                " to understand the codebase."
-            ),
+            guidance=("Read relevant source files" " to understand the codebase."),
             max_calls=4,
         ),
         PlaybookStep(
             label="patch",
             step_type="apply_patch",
-            guidance=(
-                "Apply a minimal patch."
-                " No refactoring."
-                " Keep diff small."
-            ),
+            guidance=("Apply a minimal patch." " No refactoring." " Keep diff small."),
             max_calls=2,
         ),
         PlaybookStep(
             label="targeted_test",
             step_type="run_tests",
-            guidance=(
-                "Run pytest_targeted first."
-            ),
+            guidance=("Run pytest_targeted first."),
             max_calls=1,
         ),
         PlaybookStep(
             label="suite_test",
             step_type="run_tests",
-            guidance=(
-                "Run full suite to confirm"
-                " no regressions."
-            ),
+            guidance=("Run full suite to confirm" " no regressions."),
             max_calls=1,
         ),
     ),
@@ -398,48 +345,139 @@ PB_GENERIC_FIX = Playbook(
 
 
 # ─────────────────────────────────────────────
-#  Registry
+#  Registry & RAG
 # ─────────────────────────────────────────────
 
-# Ordered list — this is the set of bandit arms.
-PLAYBOOKS: list[Playbook] = [
-    PB_IMPORT_FIX,
-    PB_ASSERTION_FIX,
-    PB_SYNTAX_FIX,
-    PB_TRACEBACK_FIX,
-    PB_GENERIC_FIX,
-]
 
-PLAYBOOK_IDS: list[str] = [
-    pb.playbook_id for pb in PLAYBOOKS
-]
+class PlaybookRegistry:
+    """Manages static and dynamic playbooks with RAG retrieval.
 
-PLAYBOOK_MAP: dict[str, Playbook] = {
-    pb.playbook_id: pb for pb in PLAYBOOKS
-}
+    Acts as the 'Active Experience Replay' store.
+    """
 
-# Build failure-class → playbook prior mapping.
-# When the bandit has zero data, pick the playbook
-# designed for that failure class.
-FAILURE_PLAYBOOK_PRIORS: dict[str, str] = {}
-for _pb in PLAYBOOKS:
-    for _fc in _pb.target_failures:
-        if _fc not in FAILURE_PLAYBOOK_PRIORS:
-            FAILURE_PLAYBOOK_PRIORS[_fc] = (
-                _pb.playbook_id
+    def __init__(self) -> None:
+        self._playbooks: dict[str, Playbook] = {}
+        self._failure_map: dict[str, str] = {}
+
+        # Load static defaults
+        self.register(PB_IMPORT_FIX)
+        self.register(PB_ASSERTION_FIX)
+        self.register(PB_SYNTAX_FIX)
+        self.register(PB_TRACEBACK_FIX)
+        self.register(PB_GENERIC_FIX)
+
+    def register(self, playbook: Playbook) -> None:
+        """Register a playbook."""
+        self._playbooks[playbook.playbook_id] = playbook
+        for fc in playbook.target_failures:
+            # First-come-first-serve for failure mapping, or overwrite?
+            # Let's preserve first generic match, but specialized ones might override.
+            # For now, simple registration.
+            if fc not in self._failure_map:
+                self._failure_map[fc] = playbook.playbook_id
+
+    def get(self, playbook_id: str) -> Optional[Playbook]:
+        return self._playbooks.get(playbook_id)
+
+    def best_for_failure(self, failure_class: str) -> str:
+        return self._failure_map.get(failure_class, PB_GENERIC_FIX.playbook_id)
+
+    def retrieve_relevant(self, query: str, limit: int = 3) -> list[Playbook]:
+        """Retrieve playbooks relevant to a query (RAG).
+
+        Uses keyword overlap + prioritization of failure class matches.
+        """
+        query_words = set(query.lower().split())
+        scored = []
+
+        for pb in self._playbooks.values():
+            # Index text: name + description + phases
+            content_parts = [pb.name, pb.description]
+            for ph in pb.phases:
+                content_parts.append(ph.label)
+                content_parts.append(ph.guidance)
+
+            full_text = " ".join(content_parts).lower()
+            pb_words = set(full_text.split())
+
+            if not pb_words:
+                continue
+
+            overlap = len(query_words & pb_words)
+            score = overlap / len(query_words) if query_words else 0.0
+
+            # Boost matches on failure classes (strong signal)
+            for fc in pb.target_failures:
+                if fc.lower() in query_words:
+                    score += 0.5
+
+            if score > 0.1:  # Filter low relevance
+                scored.append((score, pb))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [pb for _, pb in scored[:limit]]
+
+    def load_from_directory(self, directory: str) -> int:
+        """Load dynamic playbooks from a directory of JSON/YAML files."""
+        import os
+        import json
+
+        count = 0
+        if not os.path.exists(directory):
+            return 0
+
+        for filename in os.listdir(directory):
+            if filename.endswith(".json"):
+                path = os.path.join(directory, filename)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        self._load_from_dict(data)
+                        count += 1
+                except Exception as e:
+                    print(f"WARN: Failed to load playbook {filename}: {e}")
+        return count
+
+    def _load_from_dict(self, data: dict) -> None:
+        """Parse dictionary into Playbook and register."""
+        try:
+            phases = []
+            for p in data.get("phases", []):
+                phases.append(
+                    PlaybookStep(
+                        label=p["label"],
+                        step_type=p["step_type"],
+                        guidance=p["guidance"],
+                        max_calls=p.get("max_calls", 1),
+                    )
+                )
+
+            pb = Playbook(
+                playbook_id=data["playbook_id"],
+                name=data["name"],
+                description=data["description"],
+                phases=tuple(phases),
+                target_failures=tuple(data.get("target_failures", [])),
             )
+            self.register(pb)
+        except KeyError as e:
+            print(f"WARN: Invalid playbook data: missing {e}")
+
+
+# Global instance
+REGISTRY = PlaybookRegistry()
 
 
 def get_playbook(playbook_id: str) -> Optional[Playbook]:
     """Look up a playbook by ID."""
-    return PLAYBOOK_MAP.get(playbook_id)
+    return REGISTRY.get(playbook_id)
 
 
-def best_playbook_for_failure(
-    failure_class: str,
-) -> str:
-    """Return the best prior playbook ID for a
-    failure class, or the generic fallback."""
-    return FAILURE_PLAYBOOK_PRIORS.get(
-        failure_class, PB_GENERIC_FIX.playbook_id,
-    )
+def best_playbook_for_failure(failure_class: str) -> str:
+    """Return the best prior playbook ID for a failure class."""
+    return REGISTRY.best_for_failure(failure_class)
+
+
+def retrieve_playbooks(query: str, limit: int = 3) -> list[Playbook]:
+    """RAG interface: Retrieve playbooks relevant to a query."""
+    return REGISTRY.retrieve_relevant(query, limit)
