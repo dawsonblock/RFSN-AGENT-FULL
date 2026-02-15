@@ -31,7 +31,6 @@ class ConsensusLog:
                 return False  # Term mismatch (divergence)
 
         # Append new entries (handling conflict/truncate if needed)
-        # Simplified: just append for now
         start = prev_index + 1
         for i, entry in enumerate(entries):
             idx = start + i
@@ -62,13 +61,47 @@ class ConsensusNode:
         self.log = ConsensusLog(node_id)
 
     def receive_append_entries(
-        self, leader_id: str, prev_index: int, prev_term: int, entries: List[dict]
-    ):
-        # TODO: implement Raft AppendEntries RPC
-        # This requires: term validation, log conflict resolution,
-        # commit index advancement, and follower state machine updates.
-        # See Raft paper §5.3 for specification.
-        raise NotImplementedError(
-            "Raft AppendEntries RPC is not yet implemented. "
-            "ConsensusLog.append() handles local log operations only."
-        )
+        self,
+        term: int,
+        leader_id: str,
+        prev_log_index: int,
+        prev_log_term: int,
+        entries: List[dict],
+        leader_commit: int,
+    ) -> dict:
+        """Handle incoming AppendEntries RPC from leader."""
+        # 1. Reply false if term < currentTerm (§5.1)
+        if term < self.log.current_term:
+            return {"term": self.log.current_term, "success": False}
+
+        # Update current term if we see a valid leader
+        if term > self.log.current_term:
+            self.log.current_term = term
+            # In a full implementation, we would convert to Follower here
+
+        # 2. Reply false if log doesn't contain an entry at prevLogIndex
+        # whose term matches prevLogTerm (§5.3)
+        # Note: ConsensusLog.append handles the consistency check internally
+        # but needs LogEntry objects, so we convert them here.
+        log_entries = [
+            LogEntry(
+                term=e.get("term", term),
+                index=e.get("index", prev_log_index + 1 + i),
+                content=e.get("content", e),
+                leader_id=leader_id,
+            )
+            for i, e in enumerate(entries)
+        ]
+
+        success = self.log.append(prev_log_index, prev_log_term, log_entries)
+
+        if success:
+            # 5. If leaderCommit > commitIndex, set commitIndex =
+            # min(leaderCommit, index of last new entry)
+            if leader_commit > self.log.commit_index:
+                last_new_index = (
+                    log_entries[-1].index if log_entries else prev_log_index
+                )
+                self.log.commit_index = min(leader_commit, last_new_index)
+
+        return {"term": self.log.current_term, "success": success}

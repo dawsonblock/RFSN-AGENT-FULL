@@ -4,11 +4,11 @@
 # Build:
 #   docker build -t ${BLESSED_BUILD_TAG:-rfsn-blessed:0.2} -f blessed.Dockerfile .
 #
-# This image is intentionally minimal: Python 3.11 + git + common build
+# This image is intentionally minimal: Python 3.12 + git + common build
 # tools.  No repo code is baked in — repos, venvs, and wheels are mounted
 # at runtime by the Executor via Docker volumes.
 
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         bash \
