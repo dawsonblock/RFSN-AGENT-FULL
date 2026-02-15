@@ -17,7 +17,9 @@ Extends the existing Ledger with kernel-specific records.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass, field, asdict
@@ -25,15 +27,22 @@ from typing import Any, Dict, List, Optional
 
 try:
     import fcntl
+
     _HAS_FCNTL = True
 except ImportError:
     _HAS_FCNTL = False
+
+log = logging.getLogger(__name__)
+
+# HMAC key for ledger signing (set via env for production)
+_LEDGER_HMAC_KEY = os.getenv("RFSN_LEDGER_HMAC_KEY", "").encode() or None
 
 
 def _canon(obj: Any) -> str:
     """Canonical JSON serialization for hashing."""
     return json.dumps(
-        obj, sort_keys=True,
+        obj,
+        sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
         default=str,
@@ -47,7 +56,7 @@ class LedgerRecord:
     proposal_hash: str
     simulation: Dict[str, Any]
     risk: Dict[str, Any]
-    decision: str              # "APPROVE" | "REJECT"
+    decision: str  # "APPROVE" | "REJECT"
     decision_reason: str
     outcome_hash: Optional[str]
     state_hash: str
@@ -69,7 +78,7 @@ class HardLedger:
     Chain integrity is verifiable at any time.
     """
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, auto_verify: bool = True) -> None:
         self.path = path
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         self.prev = "0" * 64
@@ -87,6 +96,15 @@ class HardLedger:
                         self._count += 1
                     except json.JSONDecodeError:
                         pass
+            # Phase 7.2: Auto-verify chain integrity on load
+            if auto_verify and self._count > 0:
+                result = self.verify_chain()
+                if not result["ok"]:
+                    log.warning(
+                        "LEDGER INTEGRITY VIOLATION on load: %d errors in %s",
+                        len(result["errors"]),
+                        path,
+                    )
 
     @property
     def count(self) -> int:
@@ -102,16 +120,18 @@ class HardLedger:
         record.ts = float(fixed) if fixed else time.time()
 
         # Compute entry hash from record content.
-        body = _canon({
-            "proposal_hash": record.proposal_hash,
-            "simulation": record.simulation,
-            "risk": record.risk,
-            "decision": record.decision,
-            "decision_reason": record.decision_reason,
-            "outcome_hash": record.outcome_hash,
-            "state_hash": record.state_hash,
-            "verification": record.verification,
-        })
+        body = _canon(
+            {
+                "proposal_hash": record.proposal_hash,
+                "simulation": record.simulation,
+                "risk": record.risk,
+                "decision": record.decision,
+                "decision_reason": record.decision_reason,
+                "outcome_hash": record.outcome_hash,
+                "state_hash": record.state_hash,
+                "verification": record.verification,
+            }
+        )
         record.entry_hash = hashlib.sha256(
             body.encode("utf-8"),
         ).hexdigest()
@@ -122,12 +142,22 @@ class HardLedger:
             (self.prev + record.entry_hash).encode("utf-8"),
         ).hexdigest()
 
+        # Phase 7.2: HMAC signature (if key configured)
+        if _LEDGER_HMAC_KEY:
+            record.metadata["hmac"] = hmac.new(
+                _LEDGER_HMAC_KEY,
+                record.chain_hash.encode(),
+                hashlib.sha256,
+            ).hexdigest()
+
         # Atomic write with file lock.
         with open(self.path, "a", encoding="utf-8") as f:
             if _HAS_FCNTL:
                 fcntl.flock(f.fileno(), fcntl.LOCK_EX)
             try:
-                f.write(json.dumps(record.to_dict(), ensure_ascii=False, default=str) + "\n")
+                f.write(
+                    json.dumps(record.to_dict(), ensure_ascii=False, default=str) + "\n"
+                )
                 f.flush()
                 os.fsync(f.fileno())
             finally:
@@ -169,27 +199,58 @@ class HardLedger:
                     continue
 
                 if stored_prev != prev_hash:
-                    errors.append({
-                        "line": line_num,
-                        "error": f"Chain break: expected={prev_hash[:12]}... got={stored_prev[:12]}...",
-                    })
+                    errors.append(
+                        {
+                            "line": line_num,
+                            "error": f"Chain break: expected={prev_hash[:12]}... got={stored_prev[:12]}...",
+                        }
+                    )
+
+                # Phase 7.2: Re-compute entry_hash from record content
+                # to detect field-level tampering.
+                body = _canon(
+                    {
+                        "proposal_hash": rec.get("proposal_hash", ""),
+                        "simulation": rec.get("simulation", {}),
+                        "risk": rec.get("risk", {}),
+                        "decision": rec.get("decision", ""),
+                        "decision_reason": rec.get("decision_reason", ""),
+                        "outcome_hash": rec.get("outcome_hash"),
+                        "state_hash": rec.get("state_hash", ""),
+                        "verification": rec.get("verification"),
+                    }
+                )
+                recomputed_entry = hashlib.sha256(
+                    body.encode("utf-8"),
+                ).hexdigest()
+                if recomputed_entry != entry_hash:
+                    errors.append(
+                        {
+                            "line": line_num,
+                            "error": f"Entry hash mismatch (content tampered): "
+                            f"computed={recomputed_entry[:12]}... stored={entry_hash[:12]}...",
+                        }
+                    )
 
                 # Verify chain_hash.
                 computed = hashlib.sha256(
                     (prev_hash + entry_hash).encode("utf-8"),
                 ).hexdigest()
                 if computed != chain_hash:
-                    errors.append({
-                        "line": line_num,
-                        "error": f"Chain hash mismatch: computed={computed[:12]}... stored={chain_hash[:12]}...",
-                    })
+                    errors.append(
+                        {
+                            "line": line_num,
+                            "error": f"Chain hash mismatch: computed={computed[:12]}... stored={chain_hash[:12]}...",
+                        }
+                    )
 
                 prev_hash = chain_hash
 
         return {"ok": len(errors) == 0, "entries": count, "errors": errors}
 
     def read_all(
-        self, run_id: Optional[str] = None,
+        self,
+        run_id: Optional[str] = None,
     ) -> List[LedgerRecord]:
         """Read ledger records (optionally filtered by run_id)."""
         if not os.path.exists(self.path):
@@ -206,21 +267,23 @@ class HardLedger:
                     rec_meta = data.get("metadata", {}) or {}
                     if run_id and rec_meta.get("run_id") != run_id:
                         continue
-                    records.append(LedgerRecord(
-                        proposal_hash=data.get("proposal_hash", ""),
-                        simulation=data.get("simulation", {}),
-                        risk=data.get("risk", {}),
-                        decision=data.get("decision", ""),
-                        decision_reason=data.get("decision_reason", ""),
-                        outcome_hash=data.get("outcome_hash"),
-                        state_hash=data.get("state_hash", ""),
-                        verification=data.get("verification"),
-                        entry_hash=data.get("entry_hash", ""),
-                        prev_chain_hash=data.get("prev_chain_hash", ""),
-                        chain_hash=data.get("chain_hash", ""),
-                        ts=data.get("ts", 0.0),
-                        metadata=data.get("metadata", {}),
-                    ))
+                    records.append(
+                        LedgerRecord(
+                            proposal_hash=data.get("proposal_hash", ""),
+                            simulation=data.get("simulation", {}),
+                            risk=data.get("risk", {}),
+                            decision=data.get("decision", ""),
+                            decision_reason=data.get("decision_reason", ""),
+                            outcome_hash=data.get("outcome_hash"),
+                            state_hash=data.get("state_hash", ""),
+                            verification=data.get("verification"),
+                            entry_hash=data.get("entry_hash", ""),
+                            prev_chain_hash=data.get("prev_chain_hash", ""),
+                            chain_hash=data.get("chain_hash", ""),
+                            ts=data.get("ts", 0.0),
+                            metadata=data.get("metadata", {}),
+                        )
+                    )
                 except (json.JSONDecodeError, TypeError):
                     continue
         return records

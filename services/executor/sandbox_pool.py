@@ -23,7 +23,8 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, Optional, List
+from .capsule import Capsule
 
 
 BLESSED_IMAGE = os.getenv(
@@ -376,47 +377,24 @@ class SandboxPool:
         ).hexdigest()[:12]
         name = f"rfsn-sandbox-{tag}"
 
-        args = [
-            "docker",
-            "run",
-            "-d",
-            "--name",
-            name,
-            "--network",
-            "none",
-            "--user",
-            "1000:1000",
-            "--security-opt",
-            "no-new-privileges:true",
-            "--read-only",
-            "--tmpfs",
-            "/tmp:rw,noexec,nosuid,nodev,size=256m",
-            "--memory",
-            "2g",
-            "--cpus",
-            "2",
-            "--pids-limit",
-            "256",
-            "--cap-drop",
-            "ALL",
-            "-e",
-            "HOME=/tmp",
-            "-v",
-            f"{repo_host}:/work/repo:rw",
-            "-v",
-            f"{art_host}:/work/artifacts:rw",
-            "-v",
-            f"{venv_host}:/work/venv:rw",
-            "-v",
-            f"{wheels_host}:/work/wheels:rw",
-            "-w",
-            "/work",
-            BLESSED_IMAGE,
-            # Keep alive with tail -f /dev/null.
-            "tail",
-            "-f",
-            "/dev/null",
-        ]
+        # Phase 7.1: Use Capsule for strict isolation
+        capsule = Capsule(
+            container_name=name,
+            image=BLESSED_IMAGE,
+            repo_host_path=repo_host,
+            work_type="tmpfs",  # Warm sandboxes use RAM-backed workspace
+            network_mode="none",
+        )
+
+        args = capsule.docker_args()
+
+        # Add persistent mounts (artifacts/venv/wheels)
+        args.extend(["-v", f"{art_host}:/work/artifacts:rw"])
+        args.extend(["-v", f"{venv_host}:/work/venv:rw"])
+        args.extend(["-v", f"{wheels_host}:/work/wheels:rw"])
+
+        # Add entrypoint (Copy-on-Write init)
+        args.extend(capsule.entrypoint_cmd("tail -f /dev/null"))
 
         p = subprocess.run(
             args,
@@ -425,7 +403,7 @@ class SandboxPool:
             timeout=30,
         )
         if p.returncode != 0:
-            raise RuntimeError(f"Failed to create sandbox:" f" {p.stderr.strip()}")
+            raise RuntimeError(f"Failed to create sandbox: {p.stderr.strip()}")
         cid = p.stdout.strip()
 
         # Get image hash.

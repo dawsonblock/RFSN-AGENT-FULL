@@ -12,6 +12,8 @@ from urllib.parse import urlparse
 import yaml  # type: ignore[import-untyped]
 from fastapi import FastAPI, HTTPException  # type: ignore[import-not-found]
 from pydantic import BaseModel  # type: ignore[import-not-found]
+from capsule import Capsule
+import uuid
 
 # --- Auth middleware: only tool_gateway (with valid token) can reach us ---
 import sys
@@ -955,52 +957,47 @@ def _run_docker_with_data(
     script_path = _write_data_file(script, suffix=".sh")
     try:
         net = "none" if network_disabled else "bridge"
+
+        # Use Capsule for container configuration
+        # For cold execution, we must use bind mount (RW) to preserve persistence
+        # until we implement per-run artifacts.
+        capsule = Capsule(
+            container_name=f"rfsn-ephemeral-{uuid.uuid4().hex[:8]}",
+            image=BLESSED_IMAGE,
+            repo_host_path=repo_host,
+            work_type="bind",
+            work_host_path=repo_host,
+            network_mode=net,
+        )
+
+        args = capsule.docker_args()
+
+        # Adjust for ephemeral execution (remove -d, add --rm)
+        if "-d" in args:
+            args.remove("-d")
+        args.insert(2, "--rm")
+
+        # Extra mounts for script and data files
         extra_mounts = ["-v", f"{script_path}:/tmp/rfsn_script.sh:ro"]
         for cpath, hpath in data_files.items():
             extra_mounts.extend(["-v", f"{hpath}:{cpath}:ro"])
 
-        args = (
+        args.extend(extra_mounts)
+
+        # Standard RFSN mounts
+        args.extend(
             [
-                "docker",
-                "run",
-                "--rm",
-                "--network",
-                net,
-                "--user",
-                "1000:1000",
-                "--security-opt",
-                "no-new-privileges:true",
-                "--read-only",
-                "--tmpfs",
-                "/tmp:rw,noexec,nosuid,nodev,size=256m",
-                "--memory",
-                "2g",
-                "--cpus",
-                "2",
-                "--pids-limit",
-                "256",
-                "--cap-drop",
-                "ALL",
-                "-e",
-                "HOME=/tmp",
-            ]
-            + extra_mounts
-            + [
-                "-v",
-                f"{repo_host}:/work/repo:rw",
                 "-v",
                 f"{art_host}:/work/artifacts:rw",
                 "-v",
                 f"{venv_host}:/work/venv:rw",
                 "-v",
                 f"{wheels_host}:/work/wheels:rw",
-                "-w",
-                "/work",
-                BLESSED_IMAGE,
-                "bash",
-                "/tmp/rfsn_script.sh",
             ]
         )
+
+        # Command
+        args.extend([BLESSED_IMAGE, "bash", "/tmp/rfsn_script.sh"])
 
         start = time.time()
         try:
