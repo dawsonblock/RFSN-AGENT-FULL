@@ -184,8 +184,8 @@ def validate(
 
     # 1b. Unsafe tools are blocked unless explicitly allowed by policy.
     if proposal.action in _UNSAFE_TOOLS:
-        allowed_unsafe = policy.get("allow_unsafe_tools") or []
-        if proposal.action not in set(str(t) for t in allowed_unsafe):
+        allowed_unsafe_set = set(str(t) for t in (policy.get("allow_unsafe_tools") or []))
+        if proposal.action not in allowed_unsafe_set:
             errors.append({
                 "code": "UNSAFE_TOOL_BLOCKED",
                 "msg": (

@@ -121,14 +121,24 @@ class TestHardKernelBoot:
         ), "_load_tier_policy missing from HardKernel"
         assert callable(kernel._load_tier_policy)
 
-    def test_only_one_kernel_step_method(self):
-        """There must be exactly one kernel_step method — no duplicates."""
+    def test_only_one_kernel_step_method(self, tmp_path):
+        """There must be exactly one kernel_step method — no duplicates.
+
+        Also instantiates the kernel to confirm the duplicate doesn't survive
+        at runtime (a duplicate would silently shadow the real implementation).
+        """
         import inspect
+        kernel = HardKernel(
+            ledger_path=_make_ledger_path(tmp_path),
+            tier_policy_path=None,
+        )
         members = inspect.getmembers(HardKernel, predicate=inspect.isfunction)
         ks_members = [m for m in members if m[0] == "kernel_step"]
         assert len(ks_members) == 1, (
             f"Expected exactly 1 kernel_step, found {len(ks_members)}"
         )
+        # Confirm the method on the instance is the real one (has a docstring).
+        assert kernel.kernel_step.__doc__ is not None
 
     def test_load_tier_policy_returns_dict(self, tmp_path):
         """_load_tier_policy must return a dict in all code paths."""
