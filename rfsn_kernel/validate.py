@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Set, Tuple
 
 from rfsn_kernel.state import Proposal, SystemState
+from rfsn_kernel.tool_registry import CANONICAL_TOOL_NAMES
 
 
 @dataclass
@@ -20,14 +21,9 @@ class ValidationResult:
     errors: List[Dict[str, Any]] = field(default_factory=list)
 
 
-# Known action types.
-VALID_ACTIONS = {
-    "repo_search", "repo_read_range",
-    "read_file", "detect_project",
-    "detect_workdirs", "apply_patch",
-    "run_tests", "run_cmd_template",
-    "format_fix", "ensure_deps",
-}
+# Single source of truth: derived from the canonical tool registry.
+# Do NOT add tool names here directly — edit tool_registry.py instead.
+VALID_ACTIONS: Set[str] = set(CANONICAL_TOOL_NAMES)
 
 # Banned patterns in patch content (plus-lines only).
 _BANNED_PATCH_PATTERNS = [
