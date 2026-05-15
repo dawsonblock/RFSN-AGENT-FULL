@@ -1,0 +1,335 @@
+# Instincts generated from https://github.com/dawsonblock/RFSN-AGENT-FULL
+# Generated: 2026-05-15T23:27:31.039Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: RFSN-AGENT-FULL-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/dawsonblock/RFSN-AGENT-FULL
+---
+
+# RFSN AGENT FULL Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: fix
+
+## Evidence
+
+- 3 commits analyzed
+- Detected conventional commit pattern
+- Examples: fix: restore _load_tier_policy, add tool_registry, update VALID_ACTIONS, fix: gate unsafe tools in validate.py via policy allow_unsafe_tools list
+
+---
+id: RFSN-AGENT-FULL-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/dawsonblock/RFSN-AGENT-FULL
+---
+
+# RFSN AGENT FULL Commit Length
+
+## Action
+
+Write moderate-length commit messages (~77 characters)
+
+## Evidence
+
+- Average commit message length: 77 chars
+- Based on 3 commits
+
+---
+id: RFSN-AGENT-FULL-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/dawsonblock/RFSN-AGENT-FULL
+---
+
+# RFSN AGENT FULL Naming Files
+
+## Action
+
+Use snake_case naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: snake_case
+
+---
+id: RFSN-AGENT-FULL-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/dawsonblock/RFSN-AGENT-FULL
+---
+
+# RFSN AGENT FULL Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: RFSN-AGENT-FULL-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/dawsonblock/RFSN-AGENT-FULL
+---
+
+# RFSN AGENT FULL Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: RFSN-AGENT-FULL-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/dawsonblock/RFSN-AGENT-FULL
+---
+
+# RFSN AGENT FULL Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: RFSN-AGENT-FULL-workflow-feature-implementation-with-validation-and-tests
+trigger: "when doing feature implementation with validation and tests"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/dawsonblock/RFSN-AGENT-FULL
+---
+
+# RFSN AGENT FULL Workflow Feature Implementation With Validation And Tests
+
+## Action
+
+Follow the feature-implementation-with-validation-and-tests workflow:
+1. Edit or add core implementation files (e.g., kernel.py, tool_registry.py)
+2. Update validation logic (e.g., validate.py)
+3. Add or update regression or unit tests (e.g., tests/test_kernel_boot.py)
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: rfsn_kernel/kernel.py, rfsn_kernel/tool_registry.py, rfsn_kernel/validate.py
+
+---
+id: RFSN-AGENT-FULL-workflow-validation-logic-update-with-test-adjustment
+trigger: "when doing validation logic update with test adjustment"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/dawsonblock/RFSN-AGENT-FULL
+---
+
+# RFSN AGENT FULL Workflow Validation Logic Update With Test Adjustment
+
+## Action
+
+Follow the validation-logic-update-with-test-adjustment workflow:
+1. Edit validation logic (e.g., validate.py)
+2. Update or strengthen related tests (e.g., tests/test_kernel_boot.py)
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: rfsn_kernel/validate.py, tests/test_kernel_boot.py
+
+---
+id: rfsn-agent-full-instinct-naming-conventions
+trigger: "When writing new Python code or refactoring existing code"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: dawsonblock/RFSN-AGENT-FULL
+---
+
+# Rfsn Agent Full Instinct Naming Conventions
+
+## Action
+
+Use snake_case for files, camelCase for functions, PascalCase for classes, and SCREAMING_SNAKE_CASE for constants
+
+## Evidence
+
+- Pattern in rfsn_kernel/kernel.py, rfsn_kernel/tool_registry.py, rfsn_kernel/validate.py
+- Naming conventions described in analysis
+
+---
+id: rfsn-agent-full-instinct-import-style
+trigger: "When importing modules within the package"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: dawsonblock/RFSN-AGENT-FULL
+---
+
+# Rfsn Agent Full Instinct Import Style
+
+## Action
+
+Use relative imports
+
+## Evidence
+
+- Pattern in rfsn_kernel/* files
+- Import style described in analysis
+
+---
+id: rfsn-agent-full-instinct-export-style
+trigger: "When exporting functions or classes from modules"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: dawsonblock/RFSN-AGENT-FULL
+---
+
+# Rfsn Agent Full Instinct Export Style
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- Pattern in rfsn_kernel/* files
+- Export style described in analysis
+
+---
+id: rfsn-agent-full-instinct-test-location
+trigger: "When adding or updating tests"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: dawsonblock/RFSN-AGENT-FULL
+---
+
+# Rfsn Agent Full Instinct Test Location
+
+## Action
+
+Place tests in the separate 'tests' folder, mirroring the structure of source files
+
+## Evidence
+
+- Pattern in tests/test_kernel_boot.py
+- Architecture folder structure
+
+---
+id: rfsn-agent-full-instinct-test-update-pattern
+trigger: "When modifying core or validation logic"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: dawsonblock/RFSN-AGENT-FULL
+---
+
+# Rfsn Agent Full Instinct Test Update Pattern
+
+## Action
+
+Update or add corresponding regression or unit tests to cover the changes
+
+## Evidence
+
+- Workflow: feature-implementation-with-validation-and-tests
+- Workflow: validation-logic-update-with-test-adjustment
+- Commits updating both code and tests
+
+---
+id: rfsn-agent-full-instinct-git-commit-format
+trigger: "When writing a commit message"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: dawsonblock/RFSN-AGENT-FULL
+---
+
+# Rfsn Agent Full Instinct Git Commit Format
+
+## Action
+
+Use the conventional commit format with 'fix:' prefix for bug fixes
+
+## Evidence
+
+- Commits: 'fix: restore _load_tier_policy, add tool_registry, update VALID_ACTIONS', etc.
+- Pattern in commit history
+
+---
+id: rfsn-agent-full-instinct-feature-impl-workflow
+trigger: "When adding or fixing a feature that affects core logic, validation, and tests"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: dawsonblock/RFSN-AGENT-FULL
+---
+
+# Rfsn Agent Full Instinct Feature Impl Workflow
+
+## Action
+
+Edit or add core implementation files, update validation logic, and add or update regression/unit tests in a single workflow
+
+## Evidence
+
+- Workflow: feature-implementation-with-validation-and-tests
+- Files: rfsn_kernel/kernel.py, rfsn_kernel/tool_registry.py, rfsn_kernel/validate.py, tests/test_kernel_boot.py
+
+---
+id: rfsn-agent-full-instinct-validation-update-workflow
+trigger: "When refining, optimizing, or fixing validation logic"
+confidence: 0.85
+domain: workflow
+source: repo-analysis
+source_repo: dawsonblock/RFSN-AGENT-FULL
+---
+
+# Rfsn Agent Full Instinct Validation Update Workflow
+
+## Action
+
+Edit validation logic and update or strengthen related tests in tandem
+
+## Evidence
+
+- Workflow: validation-logic-update-with-test-adjustment
+- Files: rfsn_kernel/validate.py, tests/test_kernel_boot.py
+
