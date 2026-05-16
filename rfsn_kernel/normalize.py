@@ -11,24 +11,15 @@ import json
 from typing import Any, Dict
 
 from rfsn_kernel.state import Proposal
+from rfsn_kernel.tool_registry import CANONICAL_TOOLS
 
 
 # Fields the planner is allowed to set per step type.
+# Derived from the canonical tool registry so the two contracts stay in sync.
+# Do NOT add entries here directly — edit tool_registry.py instead.
 _ALLOWED_PARAMS: Dict[str, set] = {
-    "repo_search": {"pattern", "timeout_s"},
-    "repo_read_range": {"path", "line_start", "line_end", "timeout_s"},
-    "read_file": {"path", "timeout_s"},
-    "detect_project": {"timeout_s"},
-    "detect_workdirs": {"max_depth", "timeout_s"},
-    "apply_patch": {"patch", "timeout_s"},
-    "run_tests": {"template_id", "template_params", "timeout_s"},
-    "run_cmd_template": {
-        "template", "workdir_id", "timeout_s",
-    },
-    "format_fix": {
-        "template", "workdir_id", "timeout_s",
-    },
-    "ensure_deps": {"manifest", "timeout_s"},
+    name: set(spec.allowed_params)
+    for name, spec in CANONICAL_TOOLS.items()
 }
 
 

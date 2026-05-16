@@ -1,13 +1,25 @@
-"""Canonical tool registry — single source of truth for every tool name.
+"""Canonical tool registry — single source of truth for tool names and params.
 
-All layers (validate, gateway, executor, orchestrator) MUST derive their
-accepted tool sets from CANONICAL_TOOLS.  No tool name may be hard-coded
-anywhere else.
+Current consumers
+-----------------
+* ``rfsn_kernel/validate.py`` — derives ``VALID_ACTIONS`` and the unsafe-tool
+  gate from this registry.
+* ``rfsn_kernel/normalize.py`` — derives ``_ALLOWED_PARAMS`` from
+  ``ToolSpec.allowed_params`` so the two contracts stay in sync.
+
+Pending wiring
+--------------
+* ``services/tool_gateway/app.py`` — still reads ``allowed_step_types`` from
+  ``policies/tool_allowlist.yaml``.  That YAML must be kept manually in sync
+  with ``CANONICAL_TOOLS`` until a follow-on PR wires the gateway directly.
 
 Design notes
 ------------
 * ``ToolSpec.safe`` marks tools whose implementation is verified as
   non-shell, non-dynamic; the kernel may add extra gating for unsafe ones.
+* ``ToolSpec.allowed_params`` is the authoritative list of parameters that
+  may survive the normalize → validate pipeline.  Any extra key the planner
+  emits will be silently stripped by ``normalize()``.
 * ``ToolSpec.description`` is human-readable only — not enforced by policy.
 """
 
@@ -46,13 +58,13 @@ CANONICAL_TOOLS: Dict[str, ToolSpec] = {
         name="repo_read_range",
         description="Read a line range from a repo file.",
         safe=True,
-        allowed_params=frozenset({"path", "line_start", "line_end"}),
+        allowed_params=frozenset({"path", "line_start", "line_end", "timeout_s"}),
     ),
     "read_file": ToolSpec(
         name="read_file",
         description="Read an entire file.",
         safe=True,
-        allowed_params=frozenset({"path"}),
+        allowed_params=frozenset({"path", "timeout_s"}),
     ),
     "list_files": ToolSpec(
         name="list_files",
@@ -64,13 +76,13 @@ CANONICAL_TOOLS: Dict[str, ToolSpec] = {
         name="detect_project",
         description="Detect project type and structure.",
         safe=True,
-        allowed_params=frozenset({"path"}),
+        allowed_params=frozenset({"path", "timeout_s"}),
     ),
     "detect_workdirs": ToolSpec(
         name="detect_workdirs",
         description="Detect working directories in a monorepo.",
         safe=True,
-        allowed_params=frozenset({"max_depth"}),
+        allowed_params=frozenset({"max_depth", "timeout_s"}),
     ),
     # ── Mutation tools ──────────────────────────────────────────────────────
     "apply_patch": ToolSpec(
@@ -94,7 +106,9 @@ CANONICAL_TOOLS: Dict[str, ToolSpec] = {
         name="run_tests",
         description="Run tests via an allowlisted template.",
         safe=True,
-        allowed_params=frozenset({"template_id", "workdir_id", "timeout_s"}),
+        allowed_params=frozenset({
+            "template_id", "template_params", "workdir_id", "timeout_s",
+        }),
     ),
     "run_cmd_template": ToolSpec(
         name="run_cmd_template",
@@ -112,7 +126,7 @@ CANONICAL_TOOLS: Dict[str, ToolSpec] = {
         name="ensure_deps",
         description="Ensure project dependencies are installed.",
         safe=True,
-        allowed_params=frozenset({"workdir_id", "timeout_s"}),
+        allowed_params=frozenset({"manifest", "workdir_id", "timeout_s"}),
     ),
     # ── Introspection / analysis tools ─────────────────────────────────────
     "generate_repo_map": ToolSpec(
