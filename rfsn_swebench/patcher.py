@@ -170,10 +170,16 @@ def _check_patch_gate(rel_path: str) -> None:
 
 def _line_diff_stats(before: str, after: str):
     """Return (lines_added, lines_removed) between two strings."""
-    b_lines = set(before.splitlines())
-    a_lines = set(after.splitlines())
-    removed = len(b_lines - a_lines)
-    added = len(a_lines - b_lines)
+    import difflib
+
+    diff = difflib.ndiff(before.splitlines(), after.splitlines())
+    added = 0
+    removed = 0
+    for line in diff:
+        if line.startswith("+ "):
+            added += 1
+        elif line.startswith("- "):
+            removed += 1
     return added, removed
 
 
