@@ -25,13 +25,13 @@ def add(a, b):
     return a - b  # bug: should be a + b
 EOF
 
+mkdir -p /tmp/toy_repo/tests
 cat > /tmp/toy_repo/tests/test_utils.py << 'EOF'
 from src.utils import add
 
 def test_add():
     assert add(2, 3) == 5
 EOF
-mkdir -p /tmp/toy_repo/tests
 ```
 
 ---
