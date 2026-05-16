@@ -6,11 +6,9 @@ Current consumers
   gate from this registry.
 * ``rfsn_kernel/normalize.py`` — derives ``_ALLOWED_PARAMS`` from
   ``ToolSpec.allowed_params`` so the two contracts stay in sync.
-* ``services/tool_gateway/app.py`` — reads ``CANONICAL_TOOLS`` to verify that
-  ``allowed_step_types`` in ``tool_allowlist.yaml`` only contains known,
-  enabled tools.
-* ``services/executor/app.py`` — checks ``CANONICAL_TOOLS`` before dispatching
-  any step so that disabled or unknown tools fail closed.
+* Other services may mirror or consume this registry indirectly, but the
+  current tree should not be read as guaranteeing runtime enforcement in
+  ``services/tool_gateway/app.py`` or ``services/executor/app.py``.
 
 Design notes
 ------------
