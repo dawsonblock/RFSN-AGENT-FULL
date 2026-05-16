@@ -197,21 +197,27 @@ def read_file_context(
     """
     parts: List[str] = []
     total = 0
+    root_real = os.path.realpath(root)
     for relpath in files:
         header = f"## File: {relpath}\n"
-        full = os.path.join(root, relpath)
-        if not os.path.isfile(full):
+        if os.path.isabs(relpath):
             block = header + "(file not found)\n"
         else:
-            try:
-                with open(full, "r", encoding="utf-8", errors="replace") as fh:
-                    raw_lines = fh.readlines()
-                numbered = "".join(
-                    f"{i + 1:4d} | {line}" for i, line in enumerate(raw_lines)
-                )
-                block = header + numbered
-            except OSError as exc:
-                block = header + f"(error reading file: {exc})\n"
+            full = os.path.realpath(os.path.join(root_real, relpath))
+            if os.path.commonpath([root_real, full]) != root_real:
+                block = header + "(file not found)\n"
+            elif not os.path.isfile(full):
+                block = header + "(file not found)\n"
+            else:
+                try:
+                    with open(full, "r", encoding="utf-8", errors="replace") as fh:
+                        raw_lines = fh.readlines()
+                    numbered = "".join(
+                        f"{i + 1:4d} | {line}" for i, line in enumerate(raw_lines)
+                    )
+                    block = header + numbered
+                except OSError as exc:
+                    block = header + f"(error reading file: {exc})\n"
         if total + len(block) > max_total_chars:
             block = block[: max_total_chars - total]
         parts.append(block)
