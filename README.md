@@ -1,195 +1,136 @@
 <div align="center">
 
-# RFSN Agent v7.0
+# RFSN Agent
 
-### Autonomous Software Engineer — Hardened · Resilient · Self-Healing
+### Autonomous Coding-Agent Core — Repair Stage
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/downloads/)
-[![Code Style: Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
-[![Status: Production](https://img.shields.io/badge/Status-Production-green)](https://github.com/dawsonblock/RFSN-AGENT-FULL)
-[![Security: Hardened](https://img.shields.io/badge/Security-Hardened-critical)](https://github.com/dawsonblock/RFSN-AGENT-FULL)
-
-[Features](#-key-features) · [Architecture](#-architecture) · [Quick Start](#-quick-start) · [Security](#-security-model) · [Verification](#-verification) · [Roadmap](#-roadmap)
+[![Status: Prototype / Repair Stage](https://img.shields.io/badge/Status-Prototype%20%2F%20Repair%20Stage-yellow)](https://github.com/dawsonblock/RFSN-AGENT-FULL)
 
 </div>
 
 ---
 
-## Overview
+> ⚠️ **This is NOT production-ready software.**
+> It is a partially repaired autonomous coding-agent prototype.
+> Do not run against untrusted repositories unless a secure Docker sandbox is
+> configured and tested.  See [Security Model](#security-model) below.
 
-**RFSN (Recursive Feedback & Safety Network)** is a production-grade autonomous coding agent that solves complex software engineering tasks inside cryptographically audited, sandboxed execution capsules.
+---
 
-Unlike "chat-with-code" tools, RFSN is a **deterministic, policy-gated system** with a full immune response:
+## What Currently Works
 
-| Step | What happens | Module |
+| Component | Status | Notes |
 |:---|:---|:---|
-| **Observe** | AST-aware context slicing extracts relevant code skeletons | `rfsn_swebench/locator.py` |
-| **Plan** | MCTS-inspired backtracking explores solution paths | `rfsn_kernel/planner.py` |
-| **Execute** | Isolated capsules enforce read-only base + ephemeral workspace | `services/executor/capsule.py` |
-| **Learn** | Trajectories harvested, DPO datasets exported | `services/learner_service/` |
-| **Heal** | Adaptive hardening responds to failure clusters | `rfsn_kernel/self_healing/` |
+| Safety kernel (`rfsn_kernel/`) | ✅ Working | Normalize → Validate → Simulate → Decide pipeline |
+| Hard ledger (`hard_ledger.py`) | ✅ Working | HMAC hash-chain audit log |
+| Memory immune system | ✅ Fixed | `load()` now correctly restores active entries |
+| Tool registry (`tool_registry.py`) | ✅ Working | Single source of truth; wired into validate/normalize |
+| `apply_patch` | ✅ Enabled | Requires patch gate |
+| `repo_search`, `read_file`, `list_files`, etc. | ✅ Enabled | Read-only tools |
+| `run_tests`, `run_cmd_template` | ✅ Enabled | Require sandbox |
+| Replay log | ✅ Working | Written by orchestrator on every run |
+| Pytest collection | ✅ Fixed | Demo repos excluded via `pytest.ini` |
 
----
+## What Is Disabled
 
-## Key Features
+| Tool | Reason |
+|:---|:---|
+| `trace_execution` | Used `os.system()` with agent-controlled strings — **critical shell injection**; quarantined |
+| `apply_semantic_patch` | API was inconsistent across layers; re-enabled only after all safety tests pass |
 
-### 🧠 Cognitive Resilience
+## What Is Experimental / Placeholder
 
-- **Frustration Detection** — Identifies infinite loops and stalled steps, auto-triggers rollback
-- **MCTS Backtracking** — Explicitly prunes failed branches and explores alternatives
-- **Variable Probing** — Injects ephemeral print statements to debug ambiguous failures
-- **Defensive Terminal Management** — Streaming process control with strict output limits
-
-### 🛡️ Enterprise Security
-
-- **Indirect Injection Firewalls** — Scans all inputs for jailbreak attempts before the planner
-- **Secret Scanning** — Inline SAST prevents API keys from leaking into patches
-- **Drift Guard (SHH)** — Auto-repairs configuration if security settings are tampered with
-- **Capsule Isolation** — Read-only base, tmpfs workspace, `--cap-drop ALL`, no network by default
-
-### ⚡ Performance & Quality
-
-- **Semantic Patching** — Fuzzy-matching `SEARCH/REPLACE` blocks resilient to whitespace drift
-- **AST Locator** — Provides the LLM with focused code skeletons, not raw files
-- **Native Prompt Caching** — Reduces latency and cost by caching prefix states across turns
-
-### 🔄 Data Flywheel
-
-- **Trajectory Harvesting** — Every thought, action, and result stored in `learner.duckdb`
-- **DPO Export** — Successful/failed runs auto-formatted into preference datasets
-- **RAG Playbooks** — Static + dynamic retrieval of historical fix patterns
-
-### 🩺 Self-Healing Core (v7.0)
-
-- **Signal Extraction** — Pattern-matches 12 failure types from raw logs (ImportError, Timeout, OOM, etc.)
-- **Traceback Fingerprinting** — SHA-256 hash of normalized tracebacks groups structurally identical crashes
-- **Failure Clustering** — Tracks recurrence rate and auto-diagnoses root causes from templates
-- **Adaptive Hardening** — Stability score drives execution policy (Fast → Balanced → Hardened)
-
----
-
-## Architecture
-
-RFSN enforces a strict **Control Plane / Data Plane** separation:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        CONTROL PLANE                            │
-│                                                                 │
-│   ┌──────────┐    ┌──────────────┐    ┌───────────────────┐    │
-│   │   User   │───▶│ Orchestrator │───▶│  Safety Kernel    │    │
-│   │  GitHub  │    │   (Cortex)   │    │  (Plan/Risk Gate) │    │
-│   └──────────┘    └──────┬───────┘    └────────┬──────────┘    │
-│                          │                     │               │
-│               ┌──────────▼─────────────────────▼──────────┐    │
-│               │           Tool Gateway                    │    │
-│               └──────────────────┬────────────────────────┘    │
-│                                  │                              │
-├──────────────────────────────────┼──────────────────────────────┤
-│                        DATA PLANE│                              │
-│                                  ▼                              │
-│   ┌──────────────────────────────────────────────────────┐     │
-│   │              Execution Capsule (Docker)              │     │
-│   │  ┌────────────┐  ┌────────────┐  ┌───────────────┐  │     │
-│   │  │ /mnt/repo  │  │ /work/repo │  │  /work/venv   │  │     │
-│   │  │ (read-only)│  │  (tmpfs)   │  │   (bind)      │  │     │
-│   │  └────────────┘  └────────────┘  └───────────────┘  │     │
-│   │  --cap-drop ALL  --user 1000  --network none        │     │
-│   └──────────────────────────────────────────────────────┘     │
-│                          │                                      │
-│   ┌──────────▼──────────┐    ┌────────────────────────────┐    │
-│   │   Hard Ledger       │    │   Self-Healing Core        │    │
-│   │  (HMAC + SHA-256    │    │  (Signals → Clusters →     │    │
-│   │   hash chain)       │    │   Adaptive Hardening)      │    │
-│   └─────────────────────┘    └────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-| Service | Role | Key Tech |
-|:---|:---|:---|
-| **Orchestrator** | The "Cortex" — manages lifecycle and decisions | FastAPI, Python 3.9+ |
-| **Safety Kernel** | The "Conscience" — validates patches & enforces policy | Cryptographic Signatures |
-| **Executor** | The "Hands" — runs code in Capsule isolation | Docker, `--read-only`, tmpfs |
-| **Learner** | The "Memory" — stores trajectories and strategies | DuckDB, RAG Playbooks |
-| **Self-Healing** | The "Immune System" — adapts hardening to stability | Sliding-window, Failure Clusters |
-
----
-
-## Quick Start
-
-### Prerequisites
-
-- Docker (for sandboxed execution)
-- Python 3.9+
-- An LLM endpoint (Ollama, vLLM, or OpenAI-compatible)
-
-### 1. Bootstrap & Verify
-
-```bash
-# Clone and install
-git clone https://github.com/dawsonblock/RFSN-AGENT-FULL.git
-cd RFSN-AGENT-FULL
-pip install -r requirements-ci.txt
-
-# Verify hardening
-python3 scripts/verify_hardening.py
-```
-
-### 2. Run a Task
-
-```bash
-python3 -m rfsn_swebench.cli \
-    --task "Fix the deadlock in connection_pool.py" \
-    --repo_path $(pwd) \
-    --model qwen2.5-coder:32b
-```
-
-### 3. Full Deployment
-
-```bash
-docker compose up --build -d
-```
-
-### 4. Run Test Suite
-
-```bash
-PYTHONPATH=. python3 -m pytest tests/ -v
-```
+- `services/learner_service/self_evolve.py` — stub; does nothing
+- `services/learner_service/policy_synth.py` — stub; does nothing
+- `services/learner_service/auto_patch.py` — stub; does nothing
+- `rfsn_kernel/policy_prover.py` — stub; always returns True
+- `rfsn_kernel/symbolic_graph.py` — stub; returns empty dict
+- `rfsn_kernel/virtual_time.py` — stub; returns 0
+- `cluster/`, `diagnostics/`, `system/`, `stability/` — experimental or unused
+- Multi-agent swarm — not part of the active execution path
 
 ---
 
 ## Security Model
 
-RFSN v7.0 is designed for **Zero Trust** execution:
+See [SECURITY_MODEL.md](SECURITY_MODEL.md) for the full model.
 
-| Layer | Mechanism | Implementation |
-|:---|:---|:---|
-| **Filesystem** | Read-only base + ephemeral workspace | `Capsule` → `--read-only` + `tmpfs` |
-| **Privileges** | Non-root, no capability escalation | `--user 1000:1000`, `--cap-drop ALL` |
-| **Network** | Default deny | `--network none` |
-| **Audit** | Tamper-evident hash chain | `HardLedger` → SHA-256 + HMAC |
-| **Replay** | Physical deterministic snapshots | `physical.py` → env/seeds/filesystem |
-| **Config** | Self-healing drift guard | `SHH` → auto-repair on tamper |
+**Active sandbox mode: `local_dev`** (set via `RFSN_SANDBOX_MODE`).
+
+- Local dev mode is **only safe for trusted repositories**.
+- Do NOT run against untrusted code in local dev mode.
+- Docker sandbox mode is available but requires a running Docker daemon and
+  explicit configuration (`RFSN_EXEC_USE_DOCKER=1`).
+
+**Shell execution policy:**
+- No `shell=True` in runtime paths.
+- No `os.system()`.
+- All command execution uses structured argument lists.
+- Agent-controlled content never reaches the shell.
+- `trace_execution` is disabled because it violated this policy.
+
+**Patch policy:**
+- All patches go through the patch risk gate.
+- Test files, CI configs, and dependency manifests are protected.
+- No-op patches are rejected (do not silently succeed).
 
 ---
 
-## Verification
+## Tool Registry
 
-**34 Phase 7 tests**, all passing:
+Every tool is declared in `rfsn_kernel/tool_registry.py`.
+No tool can be used unless it appears in the registry with `enabled=True`.
 
-| Phase | Component | Tests |
-|:---|:---|---:|
-| 7.1 | Execution Containment (Capsule) | 3 |
-| 7.2 | Cryptographic Ledger Chain | 5 |
-| 7.3 | Self-Healing Core | 16 |
-| 7.4 | Physical Deterministic Replay | 10 |
+**Enabled tools:** `repo_search`, `repo_read_range`, `read_file`, `list_files`,
+`detect_project`, `detect_workdirs`, `apply_patch`, `ensure_deps`, `run_tests`,
+`run_cmd_template`, `format_fix`, `generate_repo_map`
+
+**Disabled tools:** `trace_execution` (unsafe), `apply_semantic_patch` (pending validation)
+
+---
+
+## How to Run Tests
 
 ```bash
-# Run all Phase 7 tests
-PYTHONPATH=. python3 -m pytest tests/test_capsule.py tests/test_ledger_chain.py \
-    tests/test_self_healing.py tests/test_physical_replay.py -v
+pip install pytest
+python -m pytest tests/test_kernel_boot.py -q
+python -m pytest tests/test_rfsn_kernel.py -q
+python -m pytest tests/test_tool_registry_consistency.py -q
+python -m pytest tests/test_semantic_patch_safety.py -q
+python -m pytest tests/test_command_safety.py -q
+python -m pytest tests/test_executor_dispatch_consistency.py -q
+python -m pytest tests/test_orchestrator_minimal_loop.py -q
+python -m pytest tests/test_sandbox_mode.py -q
+python -m pytest -q   # full suite (excludes demo repos)
 ```
+
+---
+
+## How to Run a Local Toy Repair
+
+See [RUN_LOCAL_TOY_REPAIR.md](RUN_LOCAL_TOY_REPAIR.md) for step-by-step instructions.
+
+---
+
+## Known Limitations
+
+1. No LLM planner is wired in.  Orchestrator runs in `dry_run` mode without a
+   `manual_plan`.
+2. Docker sandbox is not enabled by default.  Local dev mode is unsafe for
+   untrusted code.
+3. `apply_semantic_patch` is disabled until all safety tests pass.
+4. `trace_execution` is quarantined; do not re-enable without a safe rewrite.
+5. Self-healing and learner modules are experimental stubs.
+6. SWE-bench harness exists but no benchmark run has been completed.
+
+---
+
+## Benchmark Status
+
+**SWE-bench:** The harness (`rfsn_swebench/`) exists but **no benchmark run
+has been completed**.  Do not claim SWE-bench success.
 
 ---
 
@@ -197,37 +138,27 @@ PYTHONPATH=. python3 -m pytest tests/test_capsule.py tests/test_ledger_chain.py 
 
 ```
 RFSN-AGENT-FULL/
-├── rfsn_kernel/            # Safety kernel, planner, risk engine
-│   ├── kernel.py           #   Core decision loop
-│   ├── hard_ledger.py      #   Cryptographic hash-chain audit ledger
-│   ├── planner.py          #   Multi-step planning engine
-│   └── self_healing/       #   Adaptive immune system (v7.0)
-│       ├── core.py          #     SelfHealingCore (stability → hardening)
-│       ├── signals.py       #     Failure signal extraction
-│       └── memory.py        #     Failure clustering + root cause
+├── rfsn_kernel/            # Safety kernel (canonical)
+│   ├── kernel.py           #   HardKernel — core decision loop
+│   ├── tool_registry.py    #   Canonical tool registry (single source of truth)
+│   ├── dispatcher.py       #   Unified tool dispatcher (warm+cold)
+│   ├── normalize.py        #   Proposal normalization
+│   ├── validate.py         #   Hard-bound validation
+│   ├── hard_ledger.py      #   HMAC hash-chain audit ledger
+│   └── memory.py           #   Memory immune system
 ├── services/
-│   ├── executor/           # Sandboxed code execution
-│   │   ├── app.py          #   FastAPI executor service
-│   │   ├── capsule.py      #   Docker isolation policy (v7.0)
-│   │   └── sandbox_pool.py #   Warm sandbox management
-│   ├── orchestrator/       # Task lifecycle + UI
-│   ├── learner_service/    # DuckDB trajectory store + DPO export
-│   └── replay_verifier/    # Physical deterministic replay (v7.0)
-├── rfsn_swebench/          # SWE-bench evaluation harness
-├── scripts/                # Verification and utility scripts
-├── tests/                  # Unit + integration tests
-├── policies/               # Security policy definitions
-└── docker-compose.yml      # Full deployment manifest
+│   ├── executor/           #   Sandboxed execution
+│   ├── orchestrator/       #   Task lifecycle + bounded loop
+│   ├── tool_gateway/       #   HTTP gateway with policy enforcement
+│   └── learner_service/    #   Trajectory store (experimental)
+├── rfsn_swebench/          #   SWE-bench harness (not yet benchmarked)
+├── autofix/                #   Corrective action executor (shell=True removed)
+├── policies/               #   YAML policy definitions
+├── tests/                  #   Unit + integration tests
+├── CHANGELOG_FIXES.md      #   What was fixed in this repair pass
+├── SECURITY_MODEL.md       #   Security model documentation
+└── RUN_LOCAL_TOY_REPAIR.md #   How to run a local toy repair
 ```
-
----
-
-## Roadmap
-
-- [x] **Phase 1–6: The Master Upgrade** — Performance, Quality, Resilience, Security, GitOps, Data Flywheel
-- [x] **Phase 7: Self-Healing & Hardening** — Capsule, Ledger, Immune System, Deterministic Replay
-- [x] **Phase 8: Multi-Agent Swarm** — Architect / Coder / QA debate loop with consensus
-- [ ] **Phase 9: Self-Hosting CI/CD** — Agent manages its own deployment pipeline
 
 ---
 
