@@ -439,8 +439,10 @@ def apply_semantic_patch(content: str, patch_text: str) -> str:
     Raises :class:`PatchConflictError` if any search text is not found and
     :class:`NoOpPatchError` if a block would make no change.
 
-    .. deprecated::
-        Prefer :func:`apply_semantic_patch_to_content` for new code.
+    This is a compatibility wrapper for legacy callers.  New code should
+    use :func:`apply_semantic_patch_to_content` (path/search/replace API)
+    directly rather than the ``<<<<<<< SEARCH / ======= / >>>>>>> REPLACE``
+    block format accepted here.
     """
     return SemanticPatcher(content).apply_patches(patch_text)
 

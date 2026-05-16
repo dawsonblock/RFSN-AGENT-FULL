@@ -218,7 +218,10 @@ def read_file_context(
                         f"{i + 1:4d} | {line}" for i, line in enumerate(raw_lines)
                     )
                     if max_chars_per_file is not None and len(numbered) > max_chars_per_file:
-                        numbered = numbered[:max_chars_per_file]
+                        # Truncate at the last complete line boundary within the limit.
+                        truncated = numbered[:max_chars_per_file]
+                        last_nl = truncated.rfind("\n")
+                        numbered = truncated[: last_nl + 1] if last_nl >= 0 else truncated
                     block = header + numbered
                 except OSError as exc:
                     block = header + f"(error reading file: {exc})\n"
