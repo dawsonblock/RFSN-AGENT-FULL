@@ -31,6 +31,11 @@ _UNSAFE_TOOLS: Set[str] = {
     name for name, spec in CANONICAL_TOOLS.items() if not spec.safe
 }
 
+# Tools flagged enabled=False are always blocked regardless of policy.
+_DISABLED_TOOLS: Set[str] = {
+    name for name, spec in CANONICAL_TOOLS.items() if not spec.enabled
+}
+
 # Banned patterns in patch content (plus-lines only).
 _BANNED_PATCH_PATTERNS = [
     r"pytest\.skip", r"unittest\.skip",
@@ -179,6 +184,17 @@ def validate(
         errors.append({
             "code": "UNKNOWN_ACTION",
             "msg": f"Unknown action: {proposal.action}",
+        })
+        return ValidationResult(ok=False, errors=errors)
+
+    # 1a. Disabled tools fail closed unconditionally — no policy override.
+    if proposal.action in _DISABLED_TOOLS:
+        errors.append({
+            "code": "TOOL_DISABLED",
+            "msg": (
+                f"Tool '{proposal.action}' is disabled in the canonical registry"
+                " and cannot be used until it is re-enabled."
+            ),
         })
         return ValidationResult(ok=False, errors=errors)
 

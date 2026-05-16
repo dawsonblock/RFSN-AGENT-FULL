@@ -1832,59 +1832,16 @@ def _build_step_script(
         return script, data_files
 
     if step_type == "trace_execution":
-        # Phase 3.3: Variable Probing / Execution Tracing
-        # We inject print statements into a target file and run a test.
-        # Params: target_file, lineno, vars (list of str), triggering_test
-
-        target_file = step.get("target_file") or ""
-        lineno = int(step.get("lineno") or 0)
-        variables = step.get("variables") or []
-        triggering_test = step.get("triggering_test") or "pytest"
-
-        probe_code = "; ".join(
-            [f"print(f'[PROBE] {v}={{repr({v})}}')" for v in variables]
+        # DISABLED: trace_execution used os.system(cmd) with agent-controlled
+        # command strings — a critical shell injection vector.
+        # This block is quarantined.  The tool is marked enabled=False in
+        # tool_registry.py and must never reach this point through normal
+        # dispatch.  If reached, fail closed with a clear error.
+        raise ValueError(
+            "trace_execution is DISABLED: unsafe shell execution (os.system) "
+            "has been quarantined.  Do not enable until a safe, structured "
+            "implementation is provided and fully tested."
         )
-
-        # We'll use a python script to apply the probe, run test, then revert.
-        tracer_py = (
-            "import sys, os, json\n"
-            f"tgt = {json.dumps(target_file)}\n"
-            f"lno = {lineno}\n"
-            f"probe = {json.dumps(probe_code)}\n"
-            f"cmd = {json.dumps(triggering_test)}\n"
-            "\n"
-            "if not os.path.exists(tgt):\n"
-            "    print(f'Target {tgt} not found'); sys.exit(1)\n"
-            "\n"
-            "lines = open(tgt).readlines()\n"
-            "if lno < 1 or lno > len(lines):\n"
-            "    print(f'Line {lno} out of range'); sys.exit(1)\n"
-            "\n"
-            "# Inject probe (indentation matching)\n"
-            "orig_line = lines[lno-1]\n"
-            "indent = len(orig_line) - len(orig_line.lstrip())\n"
-            "probe_line = (' ' * indent) + probe + '\\n'\n"
-            "lines.insert(lno-1, probe_line)\n"
-            "\n"
-            "# Write modified\n"
-            "with open(tgt, 'w') as f: f.writelines(lines)\n"
-            "\n"
-            "print(f' injected probe at line {lno}. Running test...')\n"
-            "ret = os.system(cmd)\n"
-            "\n"
-            "# Revert\n"
-            "lines.pop(lno-1)\n"
-            "with open(tgt, 'w') as f: f.writelines(lines)\n"
-            "print(' reverted probe.')\n"
-        )
-        spy_file = _write_data_file(tracer_py, suffix=".py")
-        data_files = {"/tmp/rfsn_data/trace.py": spy_file}
-        script = (
-            "#!/bin/bash\nset -euo pipefail\n"
-            "cd /work/repo\n"
-            "python3 /tmp/rfsn_data/trace.py\n"
-        )
-        return script, data_files
 
     if step_type == "generate_repo_map":
         target = step.get("path") or "."

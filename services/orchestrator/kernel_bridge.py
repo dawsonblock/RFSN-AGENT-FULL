@@ -1,4 +1,14 @@
-"""Bridge to the RFSN Hard Kernel."""
+"""Bridge to the RFSN Hard Kernel.
+
+Integration note
+----------------
+Tool execution here flows through ``executor_client.run_step()`` which
+dispatches to the executor service (Docker sandbox or local dev mode).
+The ``rfsn_kernel.dispatcher`` module provides the canonical ``ToolResult``
+schema and disabled-tool gate.  Full service-path integration through
+``dispatch_tool()`` is planned once sandbox testing is stable — see
+``rfsn_kernel/dispatcher.py`` for the target design.
+"""
 
 import os
 import json

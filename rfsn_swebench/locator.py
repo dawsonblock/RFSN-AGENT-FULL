@@ -97,3 +97,138 @@ def generate_repo_map(filepath: str, focus_nodes: Optional[List[str]] = None) ->
     except AttributeError:
         # Fallback for older python if needed, but RFSN is modern
         return "# Error: AST unparse requires Python 3.9+"
+
+
+def build_repo_tree(
+    root: str,
+    max_files: int = 200,
+    _hidden_prefix: str = ".",
+) -> str:
+    """Return a newline-separated list of relative file paths under *root*.
+
+    Hidden directories (starting with ``_hidden_prefix``) are skipped.
+    Limited to *max_files* file entries.
+
+    Returns a string where each non-empty line is a relative file path.
+    """
+    lines: List[str] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Skip hidden directories in-place.
+        dirnames[:] = sorted(
+            d for d in dirnames if not d.startswith(_hidden_prefix)
+        )
+        for fname in sorted(filenames):
+            full = os.path.join(dirpath, fname)
+            rel = os.path.relpath(full, root)
+            lines.append(rel)
+            if len(lines) >= max_files:
+                return "\n".join(lines)
+    return "\n".join(lines)
+
+
+def locate_files(llm_response: str) -> List[str]:
+    """Parse an LLM response and extract file path references.
+
+    Handles several common formats:
+    * JSON array: ``["a.py", "b.py"]``
+    * JSON object with ``"files"`` key: ``{"files": ["a.py"]}``
+    * JSON inside a fenced code block
+    * Markdown bullet list: ``- src/foo.py``
+    * Numbered list with optional backticks: ``1. src/foo.py``
+
+    Returns a deduplicated list of paths in order of first appearance.
+    """
+    import json
+    import re
+
+    text = llm_response.strip()
+
+    # Strip fenced code block wrapper if present.
+    code_block_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    if code_block_match:
+        text = code_block_match.group(1).strip()
+
+    # Try JSON parse first.
+    try:
+        data = json.loads(text)
+        if isinstance(data, list):
+            paths = [str(p) for p in data if str(p).endswith((".py", ".js", ".ts", ".go", ".java", ".rs", ".c", ".cpp", ".h", ".md", ".yaml", ".yml", ".toml", ".txt"))]
+            # If no extension match, accept all strings that look like paths.
+            if not paths:
+                paths = [str(p) for p in data if "/" in str(p) or "." in str(p)]
+            seen: dict = {}
+            return [p for p in paths if not (p in seen or seen.update({p: True}))]  # type: ignore[func-returns-value]
+        if isinstance(data, dict):
+            files = data.get("files", [])
+            if isinstance(files, list):
+                seen2: dict = {}
+                return [str(f) for f in files if not (str(f) in seen2 or seen2.update({str(f): True}))]  # type: ignore[func-returns-value]
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Markdown / numbered list extraction.
+    paths_found: List[str] = []
+    seen_set: set = set()
+    # Match lines like: - path, * path, 1. path, 1. `path`
+    for line in llm_response.splitlines():
+        m = re.match(r"^\s*[-*]?\s*\d*\.?\s*`?([^\s`]+(?:\.[a-zA-Z0-9]+|/[^\s`]*))`?\s*$", line)
+        if m:
+            candidate = m.group(1).strip("`").strip()
+            if ("/" in candidate or "." in candidate) and candidate not in seen_set:
+                paths_found.append(candidate)
+                seen_set.add(candidate)
+
+    return paths_found
+
+
+def read_file_context(
+    root: str,
+    files: List[str],
+    max_total_chars: int = 65536,
+    max_chars_per_file: Optional[int] = None,
+) -> str:
+    """Read *files* from *root* and return a formatted context string.
+
+    Each file is rendered as:
+    ``## File: <path>``
+    followed by numbered lines (``   N | content``).
+
+    Missing files render as ``## File: <path>\n(file not found)\n``.
+    Per-file output is capped at *max_chars_per_file* (if given), and total
+    output is capped at *max_total_chars*.
+    """
+    parts: List[str] = []
+    total = 0
+    root_real = os.path.realpath(root)
+    for relpath in files:
+        header = f"## File: {relpath}\n"
+        if os.path.isabs(relpath):
+            block = header + "(file not found)\n"
+        else:
+            full = os.path.realpath(os.path.join(root_real, relpath))
+            if os.path.commonpath([root_real, full]) != root_real:
+                block = header + "(file not found)\n"
+            elif not os.path.isfile(full):
+                block = header + "(file not found)\n"
+            else:
+                try:
+                    with open(full, "r", encoding="utf-8", errors="replace") as fh:
+                        raw_lines = fh.readlines()
+                    numbered = "".join(
+                        f"{i + 1:4d} | {line}" for i, line in enumerate(raw_lines)
+                    )
+                    if max_chars_per_file is not None and len(numbered) > max_chars_per_file:
+                        # Truncate at the last complete line boundary within the limit.
+                        truncated = numbered[:max_chars_per_file]
+                        last_nl = truncated.rfind("\n")
+                        numbered = truncated[: last_nl + 1] if last_nl >= 0 else truncated
+                    block = header + numbered
+                except OSError as exc:
+                    block = header + f"(error reading file: {exc})\n"
+        if total + len(block) > max_total_chars:
+            block = block[: max_total_chars - total]
+        parts.append(block)
+        total += len(block)
+        if total >= max_total_chars:
+            break
+    return "\n".join(parts)

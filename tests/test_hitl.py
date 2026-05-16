@@ -7,7 +7,7 @@ from rfsn_kernel.kernel import HardKernel
 
 
 @pytest.fixture
-def mock_kernel():
+def mock_kernel(tmp_path):
     k = MagicMock(spec=HardKernel)
     mock_res = MagicMock()
     mock_res.approved = True
@@ -26,13 +26,24 @@ def mock_kernel():
 
 def test_hitl_pause_and_approve(mock_kernel):
     run_id = "test-run-hitl"
+    # Provide a manual_plan with a low-confidence step to trigger HITL pause.
     req = RunReq(
-        repo_id="test-repo", task="test task", max_iters=3, confidence_threshold=0.7
+        repo_id="test-repo",
+        task="test task",
+        max_iters=3,
+        confidence_threshold=0.7,
+        manual_plan=[
+            {"type": "read_file", "path": "src/main.py", "confidence": 0.5},
+        ],
     )
     ledger = LedgerSink(mock_kernel)
 
-    with patch("services.orchestrator.run_engine.sandbox_create") as mock_sc, patch(
-        "services.orchestrator.run_engine.sandbox_destroy"
+    with (
+        patch("services.orchestrator.run_engine.sandbox_create") as mock_sc,
+        patch("services.orchestrator.run_engine.sandbox_destroy"),
+        patch("services.orchestrator.run_engine.init_replay_manifest", return_value={}),
+        patch("services.orchestrator.run_engine.finalize_replay_manifest"),
+        patch("services.orchestrator.run_engine.execute_approved_step", return_value={"ok": True}),
     ):
         mock_sc.return_value = {"id": "mock-sandbox", "ip": "127.0.0.1"}
 
@@ -72,12 +83,21 @@ def test_hitl_pause_and_approve(mock_kernel):
 def test_hitl_pause_and_reject(mock_kernel):
     run_id = "test-run-reject"
     req = RunReq(
-        repo_id="test-repo", task="test task", max_iters=3, confidence_threshold=0.7
+        repo_id="test-repo",
+        task="test task",
+        max_iters=3,
+        confidence_threshold=0.7,
+        manual_plan=[
+            {"type": "read_file", "path": "src/main.py", "confidence": 0.5},
+        ],
     )
     ledger = LedgerSink(mock_kernel)
 
-    with patch("services.orchestrator.run_engine.sandbox_create") as mock_sc, patch(
-        "services.orchestrator.run_engine.sandbox_destroy"
+    with (
+        patch("services.orchestrator.run_engine.sandbox_create") as mock_sc,
+        patch("services.orchestrator.run_engine.sandbox_destroy"),
+        patch("services.orchestrator.run_engine.init_replay_manifest", return_value={}),
+        patch("services.orchestrator.run_engine.finalize_replay_manifest"),
     ):
         mock_sc.return_value = {"id": "mock-sandbox", "ip": "127.0.0.1"}
 

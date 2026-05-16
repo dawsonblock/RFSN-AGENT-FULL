@@ -526,16 +526,24 @@ class MemoryImmuneSystem:
         }
 
     def load(self, path: str) -> int:
-        """Load memory state from a JSONL file. Returns count loaded."""
+        """Load memory state from a JSONL file. Returns count of active entries loaded.
+
+        Behaviour by entry status:
+        * ``active``     — inserted into ``_store``; counted.
+        * ``core``       — inserted into both ``_core_axioms`` and ``_store``; counted.
+        * ``quarantined``— inserted into ``_quarantine`` only; not counted as active.
+        * corrupt/missing required fields — skipped with no crash.
+        """
         import os
 
         if not os.path.isfile(path):
             return 0
         count = 0
+        corrupt = 0
         try:
             with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
+                for raw_line in f:
+                    line = raw_line.strip()
                     if not line:
                         continue
                     try:
@@ -560,13 +568,35 @@ class MemoryImmuneSystem:
                         )
                         key = entry.provenance_hash
                         if entry.status == "core":
+                            # Core axioms live in both stores (mirrors protect_axiom).
                             self._core_axioms[key] = entry
+                            self._store[key] = entry
+                            count += 1
                         elif entry.status == "quarantined":
+                            # Quarantined entries do not enter active _store.
                             self._quarantine[key] = entry
-                    except (json.JSONDecodeError, TypeError, KeyError):
+                        else:
+                            # Treat "active" entries as active; preserve other
+                            # statuses (e.g., "decayed") without overwriting them.
+                            if entry.status != "active":
+                                # Log decayed entries but still reload them as active
+                                # since they were explicitly saved — pruning is the
+                                # caller's responsibility via decay().
+                                pass
+                            self._store[key] = entry
+                            count += 1
+                    except (json.JSONDecodeError, TypeError, KeyError, ValueError):
+                        corrupt += 1
                         continue
         except Exception:
-            pass  # file inaccessible
+            pass  # file inaccessible; caller receives partial count
+        if corrupt:
+            import logging
+            logging.getLogger(__name__).warning(
+                "MemoryImmuneSystem.load: skipped %d corrupt record(s) in %s",
+                corrupt,
+                path,
+            )
         return count
 
 

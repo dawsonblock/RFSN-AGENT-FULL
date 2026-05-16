@@ -36,14 +36,20 @@ class TestTrajectoryHarvesting(unittest.TestCase):
         # Setup mocks
         mock_create.return_value = {"id": "sandbox-1"}
         mock_exec.return_value = {"ok": True, "output": "done"}
+        mock_init.return_value = {"run_id": "test-run-1"}
 
         # We need a real store instance to test the logic, but we can mock the DB connection if needed.
         # However, run_engine instantiates DuckStore internally.
         # We patched DuckStore class, so mock_store_instance is what run_engine gets.
         mock_store_instance = MockStore.return_value
 
-        # Run
-        req = RunReq(repo_id="test-repo", task="fix bug", max_iters=1)
+        # Run — provide a manual_plan with one step so the loop executes.
+        req = RunReq(
+            repo_id="test-repo",
+            task="fix bug",
+            max_iters=1,
+            manual_plan=[{"type": "read_file", "path": "src/main.py"}],
+        )
         kernel = MagicMock()
         ledger = MagicMock()
 

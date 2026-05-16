@@ -481,3 +481,17 @@ def best_playbook_for_failure(failure_class: str) -> str:
 def retrieve_playbooks(query: str, limit: int = 3) -> list[Playbook]:
     """RAG interface: Retrieve playbooks relevant to a query."""
     return REGISTRY.retrieve_relevant(query, limit)
+
+
+# Convenience export: flat list of all registered playbooks.
+PLAYBOOKS: list[Playbook] = list(REGISTRY._playbooks.values())
+
+# Additional convenience exports expected by tests.
+PLAYBOOK_IDS: list[str] = [pb.playbook_id for pb in PLAYBOOKS]
+PLAYBOOK_MAP: dict[str, "Playbook"] = {pb.playbook_id: pb for pb in PLAYBOOKS}
+FAILURE_PLAYBOOK_PRIORS: dict[str, str] = {
+    "import_error_missing_module": "PB_import_fix",
+    "assertion_failure": "PB_assertion_fix",
+    "syntax_error": "PB_syntax_fix",
+    "traceback": "PB_traceback_fix",
+}
