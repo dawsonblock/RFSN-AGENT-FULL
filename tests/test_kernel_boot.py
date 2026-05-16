@@ -173,3 +173,85 @@ class TestHardKernelBoot:
         tiers = kernel.tier_policy.get("tiers", {})
         assert isinstance(tiers, dict)
         assert len(tiers) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Normalize / registry param-preservation tests
+# Verify that the params added/reconciled in tool_registry.py are not
+# silently stripped by normalize() after the registry wiring.
+# ---------------------------------------------------------------------------
+
+class TestNormalizeRegistryParamPreservation:
+    """Params that exist in ToolSpec.allowed_params must survive normalize()."""
+
+    def _norm(self, step: dict) -> dict:
+        from rfsn_kernel.normalize import normalize
+        return normalize(step, "test", "ctx", "b1").params
+
+    def test_repo_read_range_timeout_s_preserved(self):
+        params = self._norm(
+            {"type": "repo_read_range", "path": "src/a.py",
+             "line_start": 1, "line_end": 10, "timeout_s": 30}
+        )
+        assert params.get("timeout_s") == 30
+
+    def test_read_file_timeout_s_preserved(self):
+        params = self._norm({"type": "read_file", "path": "foo.py", "timeout_s": 15})
+        assert params.get("timeout_s") == 15
+
+    def test_detect_project_path_and_timeout_preserved(self):
+        params = self._norm({"type": "detect_project", "path": ".", "timeout_s": 5})
+        assert params.get("path") == "."
+        assert params.get("timeout_s") == 5
+
+    def test_detect_workdirs_timeout_s_preserved(self):
+        params = self._norm({"type": "detect_workdirs", "max_depth": 3, "timeout_s": 10})
+        assert params.get("timeout_s") == 10
+
+    def test_run_tests_template_params_preserved(self):
+        params = self._norm(
+            {"type": "run_tests", "template_id": "pytest",
+             "template_params": {"k": "v"}, "workdir_id": "workdir_1"}
+        )
+        assert params.get("template_params") == {"k": "v"}
+        assert params.get("workdir_id") == "workdir_1"
+
+    def test_ensure_deps_manifest_preserved(self):
+        params = self._norm(
+            {"type": "ensure_deps", "manifest": "requirements.txt",
+             "workdir_id": "workdir_0", "timeout_s": 60}
+        )
+        assert params.get("manifest") == "requirements.txt"
+        assert params.get("workdir_id") == "workdir_0"
+
+    def test_new_tools_params_preserved(self):
+        """New tools introduced in the registry must not have params stripped."""
+        # apply_semantic_patch
+        params = self._norm(
+            {"type": "apply_semantic_patch",
+             "path": "foo.py", "search": "old", "replace": "new"}
+        )
+        assert params.get("path") == "foo.py"
+        assert params.get("search") == "old"
+        assert params.get("replace") == "new"
+
+        # generate_repo_map
+        params = self._norm({"type": "generate_repo_map", "path": ".", "max_depth": 2})
+        assert params.get("path") == "."
+        assert params.get("max_depth") == 2
+
+        # list_files
+        params = self._norm({"type": "list_files", "path": "src", "glob": "*.py"})
+        assert params.get("path") == "src"
+        assert params.get("glob") == "*.py"
+
+    def test_unknown_extra_params_still_stripped(self):
+        """Unregistered params must still be stripped even for known actions."""
+        params = self._norm(
+            {"type": "read_file", "path": "foo.py",
+             "evil_extra": "bad", "another_extra": 99}
+        )
+        assert "evil_extra" not in params
+        assert "another_extra" not in params
+        assert params.get("path") == "foo.py"
+
