@@ -159,6 +159,7 @@ class HardKernel:
         self,
         ledger_path: str = "/data/kernel_ledger.jsonl",
         policy: Dict[str, Any] | None = None,
+        tier_policy_path: Optional[str] = None,
     ) -> None:
         self.policy = policy or {}
         self.ledger = HardLedger(ledger_path)
@@ -169,10 +170,14 @@ class HardKernel:
             rng_seed=int(self.policy.get("rng_seed", 42)),
             policy_hash=str(self.policy.get("policy_hash", "")),
         )
-        self.tier_policy_path = os.environ.get(
-            "RFSN_TIER_POLICY_PATH",
-            "/policies/gate_policy_tiers.yaml",
-        )
+        # Explicit argument takes priority over env var.
+        if tier_policy_path is not None:
+            self.tier_policy_path = tier_policy_path
+        else:
+            self.tier_policy_path = os.environ.get(
+                "RFSN_TIER_POLICY_PATH",
+                "/policies/gate_policy_tiers.yaml",
+            )
         self.tier_policy = self._load_tier_policy(
             self.tier_policy_path,
         )
@@ -206,16 +211,15 @@ class HardKernel:
             return True
         return False
 
-    def kernel_step(
-        self,
-        raw_step: Dict[str, Any],
-        execute_fn: ExecuteCallback,
-        context: str = "",
-        intent: str = "",
-        bundle_id: str = "",
-        run_id: str = "",
-        learner_evidence: Optional[Dict[str, Any]] = None,
-    ) -> KernelStepResult:
+    def _load_tier_policy(self, path: Optional[str]) -> Dict[str, Any]:
+        """Load tier policy from a YAML file.
+
+        Falls back to the safe built-in default if the path is absent,
+        invalid, or the file is unreadable/malformed.
+        Never raises during normal kernel initialisation.
+        """
+        if not path:
+            return dict(_DEFAULT_TIER_POLICY)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Set, Tuple
 
 from rfsn_kernel.state import Proposal, SystemState
+from rfsn_kernel.tool_registry import CANONICAL_TOOL_NAMES, CANONICAL_TOOLS
 
 
 @dataclass
@@ -20,13 +21,14 @@ class ValidationResult:
     errors: List[Dict[str, Any]] = field(default_factory=list)
 
 
-# Known action types.
-VALID_ACTIONS = {
-    "repo_search", "repo_read_range",
-    "read_file", "detect_project",
-    "detect_workdirs", "apply_patch",
-    "run_tests", "run_cmd_template",
-    "format_fix", "ensure_deps",
+# Single source of truth: derived from the canonical tool registry.
+# Do NOT add tool names here directly — edit tool_registry.py instead.
+VALID_ACTIONS: Set[str] = set(CANONICAL_TOOL_NAMES)
+
+# Tools flagged safe=False in the registry are blocked unless the policy
+# explicitly enables them via the "allow_unsafe_tools" list.
+_UNSAFE_TOOLS: Set[str] = {
+    name for name, spec in CANONICAL_TOOLS.items() if not spec.safe
 }
 
 # Banned patterns in patch content (plus-lines only).
@@ -179,6 +181,19 @@ def validate(
             "msg": f"Unknown action: {proposal.action}",
         })
         return ValidationResult(ok=False, errors=errors)
+
+    # 1b. Unsafe tools are blocked unless explicitly allowed by policy.
+    if proposal.action in _UNSAFE_TOOLS:
+        allowed_unsafe_set = set(str(t) for t in (policy.get("allow_unsafe_tools") or []))
+        if proposal.action not in allowed_unsafe_set:
+            errors.append({
+                "code": "UNSAFE_TOOL_BLOCKED",
+                "msg": (
+                    f"Tool '{proposal.action}' is not safe and is not listed"
+                    " in policy allow_unsafe_tools"
+                ),
+            })
+            return ValidationResult(ok=False, errors=errors)
 
     # 2. Safety level lockout.
     if state.safety_level >= 2:
