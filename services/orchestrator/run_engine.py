@@ -222,8 +222,14 @@ def run_logic(run_id: str, req: RunReq, kernel: HardKernel, ledger: LedgerSink) 
 
             if not result.get("ok"):
                 reason_str = result.get("reason") or result.get("error") or "unknown"
-                # Detect no-op patches.
-                if "no_op" in str(reason_str).lower() or "noop" in str(reason_str).lower():
+                error_code = result.get("error_code", "")
+                # Detect no-op patches via explicit code OR string heuristic.
+                is_noop = (
+                    error_code == "NO_OP_PATCH"
+                    or "no_op" in str(reason_str).lower()
+                    or "noop" in str(reason_str).lower()
+                )
+                if is_noop:
                     status = "no_op_stopped"
                     reason = f"No-op patch detected at iteration {iters}: {reason_str}"
                 else:

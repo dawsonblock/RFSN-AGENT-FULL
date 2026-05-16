@@ -92,7 +92,7 @@ class TestRegistryCompleteness:
             assert name in _ALLOWED_PARAMS, (
                 f"{name!r} is in CANONICAL_TOOLS but missing from _ALLOWED_PARAMS"
             )
-            assert set(_ALLOWED_PARAMS[name]) == set(spec.allowed_params), (
+            assert set(_ALLOWED_PARAMS[name]) == spec.allowed_params, (
                 f"_ALLOWED_PARAMS[{name!r}] does not match ToolSpec.allowed_params"
             )
 

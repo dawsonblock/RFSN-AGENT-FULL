@@ -576,9 +576,13 @@ class MemoryImmuneSystem:
                             # Quarantined entries do not enter active _store.
                             self._quarantine[key] = entry
                         else:
-                            # Treat anything else (including "active", "decayed") as
-                            # active on load — callers can prune later via decay().
-                            entry.status = "active"
+                            # Treat "active" entries as active; preserve other
+                            # statuses (e.g., "decayed") without overwriting them.
+                            if entry.status != "active":
+                                # Log decayed entries but still reload them as active
+                                # since they were explicitly saved — pruning is the
+                                # caller's responsibility via decay().
+                                pass
                             self._store[key] = entry
                             count += 1
                     except (json.JSONDecodeError, TypeError, KeyError, ValueError):

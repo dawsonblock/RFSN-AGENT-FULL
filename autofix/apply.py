@@ -28,12 +28,12 @@ ALLOWED_COMMAND_TEMPLATES: Dict[str, List[str]] = {
 }
 
 # Characters that indicate shell injection in a path or argument.
-_SHELL_METACHAR_RE = None
+# Exported so other modules can import rather than redefine.
+SHELL_METACHARACTERS: frozenset = frozenset(';|&><$()`\n\r')
 
 def _has_metachar(value: str) -> bool:
     """Return True if *value* contains shell metacharacters."""
-    dangerous = set(';|&><$()`\n\r')
-    return any(c in dangerous for c in value)
+    return any(c in SHELL_METACHARACTERS for c in value)
 
 
 def run_template(

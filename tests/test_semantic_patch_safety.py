@@ -200,15 +200,15 @@ class TestPatchGate:
 
 class TestNoOpSafety:
     def test_noop_never_reports_success_content(self):
-        """apply_semantic_patch_to_content must always raise on no-op."""
-        with pytest.raises((NoOpPatchError, PatchConflictError)):
+        """apply_semantic_patch_to_content must raise NoOpPatchError on no-op."""
+        with pytest.raises(NoOpPatchError):
             apply_semantic_patch_to_content("x = 1", "x = 1", "x = 1")
 
     def test_noop_never_reports_success_file(self, tmp_path):
-        """apply_semantic_patch_to_file must always raise on no-op."""
+        """apply_semantic_patch_to_file must raise NoOpPatchError on no-op."""
         f = tmp_path / "x.py"
         f.write_text("x = 1\n")
-        with pytest.raises((NoOpPatchError, PatchConflictError)):
+        with pytest.raises(NoOpPatchError):
             apply_semantic_patch_to_file(
                 str(tmp_path), "x.py", "x = 1", "x = 1",
                 skip_patch_gate=True,
