@@ -1,21 +1,30 @@
-"""Unified tool dispatcher — single path for warm and cold executor.
+"""Unified tool dispatcher — single schema for warm and cold executor.
 
 Both the warm (cached sandbox) and cold (fresh sandbox) execution paths
-**must** call ``dispatch_tool`` after policy validation.  There must be no
-divergent per-path tool behaviour.
+**must** produce results shaped as ``ToolResult``.
 
-Design
-------
-* ``dispatch_tool`` performs a final registry check before executing.
-* Disabled tools fail closed here regardless of how they reached the dispatcher.
-* The caller is responsible for kernel/gateway policy validation *before*
-  calling this function.  The dispatcher adds a defence-in-depth check only.
+Current integration status
+--------------------------
+This module provides:
 
-``ToolResult``
---------------
-Every tool response, whether from the warm or cold path, is wrapped in
-``ToolResult``.  The schema is stable — consumers must not rely on fields
-outside this dataclass.
+* ``ToolResult`` — the stable result schema that all executor responses
+  must eventually conform to.
+* ``ExecutionContext`` — per-dispatch metadata.
+* ``dispatch_tool`` — a kernel-layer dispatcher used by tests and the
+  kernel bridge layer for read-only and stub tools.
+
+The full service execution path (Docker sandbox, warm/cold paths) still
+flows through ``services/orchestrator/kernel_bridge.py →
+executor_client.run_step()``.  Wiring the service path through
+``dispatch_tool`` is planned for a future phase once sandbox integration
+is stable.  Until then, ``dispatch_tool`` serves as:
+
+1. The canonical gate for disabled-tool rejection (defence-in-depth).
+2. The test harness for registry/dispatcher consistency tests.
+3. The target integration point for future warm/cold unification.
+
+Do not bypass ``dispatch_tool`` for disabled tools — even in service code,
+the registry's ``enabled`` flag must be checked before executing.
 """
 
 from __future__ import annotations

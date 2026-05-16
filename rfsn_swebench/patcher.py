@@ -417,3 +417,30 @@ class SemanticPatcher:
         self._content = content
         return content
 
+
+# ---------------------------------------------------------------------------
+# Module-level compatibility function
+# (The executor service injects patcher.py into a sandbox script and calls
+# this function by name.  It delegates to SemanticPatcher so the legacy
+# <<<<<<< SEARCH / ======= / >>>>>>> REPLACE block format continues to work.)
+# ---------------------------------------------------------------------------
+
+def apply_semantic_patch(content: str, patch_text: str) -> str:
+    """Apply *patch_text* to *content* and return the modified content.
+
+    *patch_text* must contain one or more SEARCH/REPLACE blocks in the format::
+
+        <<<<<<< SEARCH
+        old text
+        =======
+        new text
+        >>>>>>> REPLACE
+
+    Raises :class:`PatchConflictError` if any search text is not found and
+    :class:`NoOpPatchError` if a block would make no change.
+
+    .. deprecated::
+        Prefer :func:`apply_semantic_patch_to_content` for new code.
+    """
+    return SemanticPatcher(content).apply_patches(patch_text)
+

@@ -185,6 +185,7 @@ def read_file_context(
     root: str,
     files: List[str],
     max_total_chars: int = 65536,
+    max_chars_per_file: Optional[int] = None,
 ) -> str:
     """Read *files* from *root* and return a formatted context string.
 
@@ -193,7 +194,8 @@ def read_file_context(
     followed by numbered lines (``   N | content``).
 
     Missing files render as ``## File: <path>\n(file not found)\n``.
-    Total output is capped at *max_total_chars*.
+    Per-file output is capped at *max_chars_per_file* (if given), and total
+    output is capped at *max_total_chars*.
     """
     parts: List[str] = []
     total = 0
@@ -215,6 +217,8 @@ def read_file_context(
                     numbered = "".join(
                         f"{i + 1:4d} | {line}" for i, line in enumerate(raw_lines)
                     )
+                    if max_chars_per_file is not None and len(numbered) > max_chars_per_file:
+                        numbered = numbered[:max_chars_per_file]
                     block = header + numbered
                 except OSError as exc:
                     block = header + f"(error reading file: {exc})\n"
