@@ -93,11 +93,34 @@ def execute_approved_step(
         """Execution callback for hard kernel."""
         cache = run_ctx.get("sim_cache")
         use_warm_step = not bool(run_ctx.get("force_cold_sandbox", False))
+        replay_mode = bool(run_ctx.get("replay_mode", False))
 
-        # Check replaying constraint
-        if not use_warm_step and str(s.get("type") or "") == "ensure_deps":
-            # Logic for replay mode network restriction would go here
-            pass
+        # REPLAY_POLICY: ensure_deps disabled in replay mode to enforce
+        # determinism and prevent network access during replay.
+        if replay_mode and str(s.get("type") or "") == "ensure_deps":
+            replay_network_disabled = True
+            print(
+                f"REPLAY_POLICY: ensure_deps disabled in replay mode "
+                f"(run_id={run_id})",
+                flush=True,
+            )
+            return Outcome(
+                success=False,
+                exit_code=1,
+                logs="REPLAY_POLICY: ensure_deps disabled in replay mode",
+            )
+
+        # If replay mode forces cold sandbox, disable warm path.
+        if replay_mode and use_warm_step:
+            use_warm_step = False
+            # Emit SANDBOX_WARM_DISABLED to make the policy decision auditable.
+            ledger.append(
+                {
+                    "type": "SANDBOX_WARM_DISABLED",
+                    "run_id": run_id,
+                    "reason": "replay_mode forces cold sandbox",
+                }
+            )
 
         cache_key = ""
         r: dict

@@ -76,6 +76,80 @@ def _repo_abs_path(repo_id: str) -> str:
     return os.path.join("/data/repos", repo_id)
 
 
+def _get_repo_head(repo_path: str) -> str:
+    """Return the current HEAD commit hash for a repo path.
+
+    Falls back to parsing .git/packed-refs if git binary is unavailable.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo_path, "rev-parse", "HEAD"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    # Fallback without git binary: read .git/HEAD and resolve ref.
+    git_dir = os.path.join(repo_path, ".git")
+    try:
+        with open(os.path.join(git_dir, "HEAD"), "r") as fh:
+            ref_line = fh.read().strip()
+        if ref_line.startswith("ref: "):
+            ref_path = ref_line[5:]  # e.g. refs/heads/main
+            full_ref_path = os.path.join(git_dir, ref_path)
+            if os.path.isfile(full_ref_path):
+                with open(full_ref_path) as fh:
+                    return fh.read().strip()
+            # Try packed-refs
+            packed = os.path.join(git_dir, "packed-refs")
+            if os.path.isfile(packed):
+                with open(packed) as fh:
+                    for line in fh:
+                        parts = line.split()
+                        if len(parts) == 2 and parts[1] == ref_path:
+                            return parts[0]
+        return ref_line  # detached HEAD — return SHA directly
+    except Exception:
+        return ""
+
+
+def _capture_repo_snapshot(repo_id: str, run_id: str, label: str) -> dict:
+    """Capture a lightweight repo snapshot record (path + head SHA)."""
+    repo_path = _repo_abs_path(repo_id)
+    head = _get_repo_head(repo_path)
+    return {
+        "label": label,
+        "repo_id": repo_id,
+        "head": head,
+        "timestamp": time.time(),
+    }
+
+
+def _capture_requirements_lock(repo_id: str, run_id: str) -> dict:
+    """Capture a hash of the requirements lockfile (if present)."""
+    repo_path = _repo_abs_path(repo_id)
+    for name in ("requirements.txt", "requirements-lock.txt", "Pipfile.lock", "poetry.lock"):
+        path = os.path.join(repo_path, name)
+        if os.path.isfile(path):
+            sha = _file_sha256(path)
+            return {"file": name, "sha256": sha, "timestamp": time.time()}
+    return {"file": None, "sha256": None, "timestamp": time.time()}
+
+
+def _capture_executor_env_manifest(repo_id: str, run_id: str) -> dict:
+    """Capture executor environment manifest path placeholder."""
+    bundle_dir = _replay_bundle_dir(repo_id, run_id)
+    executor_env_manifest_path = os.path.join(bundle_dir, "executor_env.json")
+    return {
+        "executor_env_manifest_path": executor_env_manifest_path,
+        "timestamp": time.time(),
+    }
+
+
 def capture_repo_snapshot(repo_id: str, run_id: str, label: str) -> tuple[str, str]:
     """Capture a tarball snapshot of the repo execution state."""
     bundle_dir = _replay_bundle_dir(repo_id, run_id)
@@ -110,6 +184,11 @@ def init_replay_manifest(
     env_snapshot: dict,
     sandbox_info: Optional[dict] = None,
 ) -> dict:
+    repo_snapshot_start = _capture_repo_snapshot(repo_id, run_id, "start")
+    requirements_lock = _capture_requirements_lock(repo_id, run_id)
+    executor_env = _capture_executor_env_manifest(repo_id, run_id)
+    executor_env_manifest_path = executor_env.get("executor_env_manifest_path", "")
+
     return {
         "run_id": run_id,
         "repo_id": repo_id,
@@ -120,7 +199,11 @@ def init_replay_manifest(
         "env_snapshot": env_snapshot,
         "sandbox_info": sandbox_info or {},
         "status": "running",
-        "events": [],  # This will be populated by execution log later
+        "events": [],
+        "repo_snapshot_start": repo_snapshot_start,
+        "repo_snapshot_end": None,  # populated by finalize_replay_manifest
+        "requirements_lock": requirements_lock,
+        "executor_env_manifest_path": executor_env_manifest_path,
     }
 
 
@@ -137,6 +220,7 @@ def finalize_replay_manifest(
     manifest["timestamp_end"] = time.time()
     manifest["reason"] = reason
     manifest["results_count"] = results_count
+    manifest["repo_snapshot_end"] = _capture_repo_snapshot(repo_id, run_id, "end")
 
     bundle_dir = _replay_bundle_dir(repo_id, run_id)
     manifest_path = os.path.join(bundle_dir, "manifest.json")

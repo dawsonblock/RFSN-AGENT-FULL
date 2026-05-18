@@ -31,15 +31,23 @@ class Outcome:
 
 
 class OutcomeMemory:
-    """SQLite-backed outcome store with retrieval for LLM prompting."""
+    """SQLite-backed outcome store with retrieval for LLM prompting.
+
+    Note: Previously this store used JSONL files.  It was migrated to SQLite
+    for better query performance.  The constructor still accepts ``.jsonl``
+    paths (converting them to ``.db``) so that existing call-sites are not
+    broken, but the underlying storage is always SQLite.
+    """
 
     def __init__(self, path: str) -> None:
-        # Change .jsonl extension to .db if present
+        # Accept legacy .jsonl paths and silently convert to .db.
         if path.endswith(".jsonl"):
             path = path[:-6] + ".db"
         self._path = path
         self._conn: Optional[sqlite3.Connection] = None
         self._ensure_table()
+        # Lazy-loaded outcome list (populated on first access via _outcomes).
+        self._outcomes_cache: Optional[list] = None
 
     def _ensure_table(self) -> None:
         os.makedirs(os.path.dirname(self._path) or ".", exist_ok=True)
@@ -103,6 +111,8 @@ class OutcomeMemory:
                     time.time(),
                 ),
             )
+        # Invalidate lazy cache after write.
+        self._outcomes_cache = None
 
     def _row_to_outcome(self, row: sqlite3.Row) -> Outcome:
         return Outcome(
@@ -117,6 +127,71 @@ class OutcomeMemory:
             dense_reward=row["dense_reward"],
             timestamp=row["timestamp"],
         )
+
+    # ------------------------------------------------------------------
+    # Convenience properties (mirrors the legacy JSONL-based interface)
+    # ------------------------------------------------------------------
+
+    @property
+    def _outcomes(self) -> list:
+        """Lazy-loaded list of all Outcome objects (for legacy test compatibility)."""
+        if self._outcomes_cache is None:
+            if not self._conn:
+                self._ensure_table()
+            cursor = self._conn.execute(
+                "SELECT * FROM outcomes ORDER BY timestamp ASC"
+            )
+            self._outcomes_cache = [self._row_to_outcome(r) for r in cursor]
+        return self._outcomes_cache
+
+    @property
+    def total_outcomes(self) -> int:
+        """Total number of recorded outcomes."""
+        if not self._conn:
+            self._ensure_table()
+        row = self._conn.execute("SELECT COUNT(*) FROM outcomes").fetchone()
+        return int(row[0])
+
+    @property
+    def pass_rate(self) -> float:
+        """Fraction of outcomes with status == 'PASS'.  Returns 0.0 if empty."""
+        total = self.total_outcomes
+        if total == 0:
+            return 0.0
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM outcomes WHERE status = 'PASS'"
+        ).fetchone()
+        return int(row[0]) / total
+
+    def get_similar_tasks(
+        self, query: str, *, max_results: int = 5
+    ) -> list[Outcome]:
+        """Return outcomes whose error_summary contains words from *query*.
+
+        Results are ordered by number of matching keywords (most matches first).
+        Simple keyword-overlap search — not semantic.  Returns an empty list
+        for blank queries.
+        """
+        query = (query or "").strip()
+        if not query:
+            return []
+        keywords = [w.lower() for w in query.split() if len(w) > 2]
+        if not keywords:
+            return []
+        if not self._conn:
+            self._ensure_table()
+        cursor = self._conn.execute(
+            "SELECT * FROM outcomes WHERE error_summary != '' ORDER BY timestamp DESC"
+        )
+        scored: list[tuple[int, Outcome]] = []
+        for row in cursor:
+            summary = (row["error_summary"] or "").lower()
+            match_count = sum(1 for kw in keywords if kw in summary)
+            if match_count > 0:
+                scored.append((match_count, self._row_to_outcome(row)))
+        # Sort by descending match count, then return top results.
+        scored.sort(key=lambda t: t[0], reverse=True)
+        return [outcome for _, outcome in scored[:max_results]]
 
     def get_repo_outcomes(self, repo: str, *, max_results: int = 5) -> list[Outcome]:
         if not self._conn:

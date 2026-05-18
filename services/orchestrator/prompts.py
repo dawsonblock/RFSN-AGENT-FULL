@@ -67,7 +67,12 @@ SYSTEM = (
     "use the `request_human_hint` tool to ping a senior developer.*\n"
 )
 
-# Placeholder templates (To be updated or removed if V2 handles structure differently)
+# Transcript template used to format step results in the repair loop.
+# Required fields: {step_num}, {step_json}, {status}, {output}
 USER_TEMPLATE = "{task_description}"
-TRANSCRIPT_TEMPLATE = "Step Result: {output}"
+TRANSCRIPT_TEMPLATE = (
+    "Step {step_num}: {step_json}\n"
+    "Status: {status}\n"
+    "Output: {output}"
+)
 DONE_PROMPT = "Task Done."

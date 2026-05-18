@@ -143,7 +143,7 @@ def run_logic(run_id: str, req: RunReq, kernel: HardKernel, ledger: LedgerSink) 
 
     # ── 4. Sandbox ─────────────────────────────────────────────────────────
     sandbox_info = sandbox_create(run_id, repo_id)
-    ledger.append({"type": "SANDBOX_INIT", "info": sandbox_info})
+    ledger.append({"type": "SANDBOX_CREATED", "info": sandbox_info})
 
     # ── 5. Main Loop ───────────────────────────────────────────────────────
     plan = list(req.manual_plan)
