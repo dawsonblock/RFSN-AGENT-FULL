@@ -278,9 +278,9 @@ def _handle_run_tests(args: Dict[str, Any], ctx: ExecutionContext) -> ToolResult
     # Support both canonical template_params form and legacy test_path form.
     template_params = args.get("template_params") or {}
     if isinstance(template_params, str):
-        import json as _json
+        import json
         try:
-            template_params = _json.loads(template_params)
+            template_params = json.loads(template_params)
         except Exception:
             template_params = {}
     test_path = (

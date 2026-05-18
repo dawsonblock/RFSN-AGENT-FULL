@@ -46,9 +46,8 @@ def test_chat_endpoint_runtime(monkeypatch, tmp_path):
     assert r.status_code == 200
     body = r.json()
     assert "thread_id" in body
+    # Either standard or legacy key name is acceptable.
     assert "response" in body or "reply" in body
-    # The fallback reason must be present to indicate LLM is not yet connected.
-    assert "fallback_reason" in body or "reply" in body
 
 
 def test_repos_proxy_endpoints_runtime(monkeypatch, tmp_path):

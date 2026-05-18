@@ -60,7 +60,7 @@ def test_run_step_calls_only_in_execution_helper():
     # run_step should only be called from within _exec_step or execute_approved_step.
     allowed = {"execute_approved_step", "_exec_step"}
     assert all(
-        bool(set(path) & allowed)
+        set(path) & allowed
         for path in caller_paths
     ), f"run_step called outside allowed helpers: {caller_paths}"
 

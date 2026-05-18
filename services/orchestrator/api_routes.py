@@ -13,7 +13,7 @@ from services.orchestrator.run_engine import RunReq, run_logic
 from services.orchestrator.session_state import get_run_context
 from services.orchestrator.executor_client import sandbox_create
 from services.orchestrator.kernel_bridge import LedgerSink
-from services.orchestrator.phase_tracker import PhaseTracker  # noqa: F401 – decoupled import
+from services.orchestrator.phase_tracker import PhaseTracker  # noqa: F401 – imported to verify decoupling from legacy kernel; tested by test_phase_tracker_decoupled_from_legacy_kernel_module
 from rfsn_kernel.kernel import HardKernel
 
 
@@ -224,8 +224,8 @@ def ledger_tail(n: int = 50):
     try:
         entries = kernel.ledger.tail(n)
         return {"entries": [e.__dict__ if hasattr(e, "__dict__") else e for e in entries]}
-    except Exception as exc:
-        return {"entries": [], "error": str(exc)}
+    except Exception:
+        return {"entries": [], "error": "ledger read failed"}
 
 
 @api_router.get("/ledger/run/{run_id}")
@@ -244,8 +244,8 @@ def ledger_run(run_id: str, n: int = 100):
             )
         ]
         return {"run_id": run_id, "entries": filtered[:n]}
-    except Exception as exc:
-        return {"entries": [], "error": str(exc)}
+    except Exception:
+        return {"entries": [], "error": "ledger read failed"}
 
 
 # ── Replay Manifest ───────────────────────────────────────────────────────────
