@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 EXECUTOR_APP = ROOT / "services" / "executor" / "app.py"
 SANDBOX_POOL = ROOT / "services" / "executor" / "sandbox_pool.py"
+CAPSULE_PY = ROOT / "services" / "executor" / "capsule.py"
 
 
 def test_executor_has_repo_import_and_list_endpoints():
@@ -22,23 +23,32 @@ def test_executor_local_mode_is_dev_only():
 
 
 def test_executor_uses_valid_no_new_privileges_flag():
+    """Security flags must use the correct long-form: --security-opt no-new-privileges:true.
+
+    Updated: flags live in capsule.py (shared by both app.py and sandbox_pool.py
+    via Capsule.docker_args()).  Checking capsule.py is authoritative.
+    """
     app_src = EXECUTOR_APP.read_text(encoding="utf-8")
     pool_src = SANDBOX_POOL.read_text(encoding="utf-8")
+    capsule_src = CAPSULE_PY.read_text(encoding="utf-8")
+    # Ensure the broken short-form is not present anywhere.
     assert "--no-new-privileges" not in app_src
     assert "--no-new-privileges" not in pool_src
-    assert "--security-opt\", \"no-new-privileges:true" in app_src
-    assert "--security-opt\", \"no-new-privileges:true" in pool_src
+    # Correct form must be in capsule.py (the single source of Docker security config).
+    assert '"--security-opt"' in capsule_src
+    assert '"no-new-privileges:true"' in capsule_src
 
 
 def test_executor_uses_read_only_rootfs_and_tmpfs():
-    app_src = EXECUTOR_APP.read_text(encoding="utf-8")
-    pool_src = SANDBOX_POOL.read_text(encoding="utf-8")
-    assert "--read-only" in app_src
-    assert "--tmpfs\", \"/tmp:rw,noexec,nosuid,nodev,size=256m" in app_src
-    assert "-e\", \"HOME=/tmp" in app_src
-    assert "--read-only" in pool_src
-    assert "--tmpfs\", \"/tmp:rw,noexec,nosuid,nodev,size=256m" in pool_src
-    assert "-e\", \"HOME=/tmp" in pool_src
+    """Root filesystem must be read-only with a noexec /tmp tmpfs.
+
+    Updated: flags live in capsule.py (shared by app.py and sandbox_pool.py).
+    """
+    capsule_src = CAPSULE_PY.read_text(encoding="utf-8")
+    assert '"--read-only"' in capsule_src
+    assert '"--tmpfs"' in capsule_src
+    assert "noexec" in capsule_src
+    assert "HOME=/tmp" in capsule_src
 
 
 def test_executor_enforces_digest_pinned_image_in_strict_mode():

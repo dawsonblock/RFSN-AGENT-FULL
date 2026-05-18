@@ -21,6 +21,9 @@ jobs:
           pip install -r requirements-ci.txt
           # Install project in editable mode if setup.py exists, else just deps
           if [ -f setup.py ]; then pip install -e .; fi
+      - name: CI Sanity Checks
+        run: |
+          bash scripts/ci_sanity.sh
       - name: Run Golden Subset Tests
         run: |
           # Phase 2 & 3: Code Quality & Cognitive Resilience

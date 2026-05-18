@@ -91,8 +91,8 @@ class Capsule:
         else:
             raise ValueError(f"Unknown work_type: {self.work_type}")
 
-        # 3. Tmp (System)
-        args.extend(["--tmpfs", "/tmp:rw,exec,nosuid,nodev,size=256m"])
+        # 3. Tmp (System) — noexec to prevent code execution from /tmp
+        args.extend(["--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=256m"])
 
         # 4. Artifacts/Venv (Passthrough for now, can be tightened later)
         # In a strict capsule, these should also handled carefully.

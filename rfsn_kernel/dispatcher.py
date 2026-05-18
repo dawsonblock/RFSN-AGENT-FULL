@@ -216,17 +216,99 @@ def _handle_list_files(args: Dict[str, Any], ctx: ExecutionContext) -> ToolResul
 
 
 def _handle_apply_patch(args: Dict[str, Any], ctx: ExecutionContext) -> ToolResult:
-    """Stub: real implementation is in the executor service (with patch gate)."""
+    """Apply a unified diff patch to the workspace.
+
+    In local/dev mode this calls the real patcher.  The patch must be a
+    standard unified diff (``--- a/... +++ b/...``).
+    """
     patch = args.get("patch", "")
     if not patch or not patch.strip():
         return ToolResult(
             success=False, tool="apply_patch", error="empty patch rejected"
         )
-    return ToolResult(
-        success=True,
-        tool="apply_patch",
-        output="[dispatcher stub] patch gate check passed",
+    if not ctx.workspace_root or not ctx.dev_mode:
+        # Stub path: gate check passed, but no real file system write without
+        # an explicit workspace root and dev_mode confirmation.
+        return ToolResult(
+            success=True,
+            tool="apply_patch",
+            output="[dispatcher stub] patch gate check passed",
+        )
+    # Real path: apply the unified diff to the workspace.
+    try:
+        from rfsn_swebench.patcher import apply_unified_diff
+        apply_unified_diff(patch, ctx.workspace_root, strict=False)
+        return ToolResult(
+            success=True,
+            tool="apply_patch",
+            output="patch applied",
+            files_changed=_extract_patched_files(patch),
+        )
+    except Exception as exc:
+        return ToolResult(success=False, tool="apply_patch", error=str(exc))
+
+
+def _extract_patched_files(patch: str) -> List[str]:
+    """Parse ``+++ b/<path>`` lines from a unified diff."""
+    files = []
+    for line in patch.splitlines():
+        if line.startswith("+++ "):
+            path = line[4:].strip()
+            if path.startswith("b/"):
+                path = path[2:]
+            if path and path != "/dev/null":
+                files.append(path)
+    return files
+
+
+def _handle_run_tests(args: Dict[str, Any], ctx: ExecutionContext) -> ToolResult:
+    """Run the test suite for the workspace.
+
+    In dev_mode with a valid workspace_root, this calls pytest directly.
+    Otherwise falls back to a stub.
+    """
+    if not ctx.workspace_root or not ctx.dev_mode:
+        return ToolResult(
+            success=True,
+            tool="run_tests",
+            output="[dispatcher stub] read-only tool acknowledged",
+        )
+    import subprocess as _sp
+
+    # Support both canonical template_params form and legacy test_path form.
+    template_params = args.get("template_params") or {}
+    if isinstance(template_params, str):
+        import json as _json
+        try:
+            template_params = _json.loads(template_params)
+        except Exception:
+            template_params = {}
+    test_path = (
+        template_params.get("path")
+        or args.get("test_path")
+        or args.get("path")
+        or "tests/"
     )
+    timeout_s = int(args.get("timeout_s") or 120)
+    try:
+        result = _sp.run(
+            ["python", "-m", "pytest", str(test_path), "-q", "--tb=short"],
+            cwd=ctx.workspace_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+        success = result.returncode == 0
+        return ToolResult(
+            success=success,
+            tool="run_tests",
+            exit_code=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            output=result.stdout + result.stderr,
+        )
+    except Exception as exc:
+        return ToolResult(success=False, tool="run_tests", error=str(exc))
 
 
 def _handle_noop_read(args: Dict[str, Any], ctx: ExecutionContext) -> ToolResult:
@@ -258,7 +340,7 @@ _HANDLERS = {
     "detect_workdirs": _handle_noop_read,
     "generate_repo_map": _handle_noop_read,
     "apply_patch": _handle_apply_patch,
-    "run_tests": _handle_noop_read,
+    "run_tests": _handle_run_tests,
     "run_cmd_template": _handle_noop_read,
     "format_fix": _handle_noop_read,
     "ensure_deps": _handle_noop_read,
